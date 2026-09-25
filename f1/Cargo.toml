@@ -24,6 +24,7 @@ embassy-time = { version = "0.5", features = ["generic-queue-8"] }
 smart-leds = "0.4"
 ws2812-esp32-rmt-driver = { version = "0.14.0", features = ["smart-leds-trait"] }
 f1-core = { path = "../f1-core" }
+anyhow = "1.0.104"
 
 [build-dependencies]
 embuild = "0.33.5"
