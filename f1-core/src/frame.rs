@@ -1,6 +1,6 @@
 use crate::color::Rgb;
 
-pub const NUM_LEDS: usize = 24;
+pub const NUM_LEDS: usize = 23;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Frame([Rgb; NUM_LEDS]);
