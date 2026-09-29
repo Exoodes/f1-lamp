@@ -1,9 +1,18 @@
+use std::{
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
+
 use esp_idf_svc::hal::peripherals::Peripherals;
-use f1_core::{color::Rgb, frame::Frame};
+use f1_core::{controller::Controller, frame::Frame, input::Input};
 use io::led::LedOutput;
 use ws2812_esp32_rmt_driver::Ws2812Esp32Rmt;
 
+mod fake;
 mod io;
+
+const FRAME_INTERVAL: Duration = Duration::from_millis(20);
 
 fn main() -> anyhow::Result<()> {
     // It is necessary to call this function once. Otherwise, some patches to the runtime
@@ -13,8 +22,6 @@ fn main() -> anyhow::Result<()> {
     // Bind the log crate to the ESP Logging facilities
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    log::info!("Hello, world!");
-
     let peripherals = Peripherals::take()?;
     #[allow(deprecated)] // ws2812-esp32-rmt-driver 0.14 only supports the legacy RMT API
     let driver = Ws2812Esp32Rmt::new(peripherals.rmt.channel0, peripherals.pins.gpio2)?;
@@ -22,12 +29,26 @@ fn main() -> anyhow::Result<()> {
     let mut leds = LedOutput::new(driver);
     leds.write(&Frame::new())?;
 
+    let (tx, rx) = mpsc::sync_channel::<Input>(32);
+    fake::spawn(tx)?;
+    log::info!("fake race started");
+
+    let mut controller = Controller::new(Instant::now());
     let mut frame = Frame::new();
-    frame.fill(Rgb::RED);
-    leds.write(&frame)?;
-    log::info!("LEDs written");
 
     loop {
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        let now = Instant::now();
+
+        while let Ok(input) = rx.try_recv() {
+            log::info!("input: {input:?}");
+            controller.apply(input, now);
+        }
+
+        controller.render(now, &mut frame);
+        if let Err(e) = leds.write(&frame) {
+            log::warn!("{e}");
+        }
+
+        thread::sleep(FRAME_INTERVAL);
     }
 }

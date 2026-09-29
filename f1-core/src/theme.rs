@@ -3,7 +3,6 @@ use crate::{color::Rgb, effect::Effect, input::TrackFlag};
 /// Shown when no flag has been received yet.
 pub const LAMP: Rgb = Rgb::new(255, 160, 60);
 
-
 pub fn flag_effect(flag: TrackFlag) -> Effect {
     match flag {
         TrackFlag::Green => Effect::Solid(Rgb::GREEN),
