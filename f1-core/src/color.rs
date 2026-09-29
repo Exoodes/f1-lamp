@@ -10,6 +10,24 @@ impl Rgb {
         Self { r, g, b }
     }
 
+    pub fn scale(self, factor: f32) -> Rgb {
+        let factor = factor.clamp(0.0, 1.0);
+        Rgb::new(
+            to_channel(f32::from(self.r) * factor),
+            to_channel(f32::from(self.g) * factor),
+            to_channel(f32::from(self.b) * factor),
+        )
+    }
+
+    pub fn lerp(a: Rgb, b: Rgb, t: f32) -> Rgb {
+        let t = t.clamp(0.0, 1.0);
+        Rgb::new(
+            lerp_channel(a.r, b.r, t),
+            lerp_channel(a.g, b.g, t),
+            lerp_channel(a.b, b.b, t),
+        )
+    }
+
     pub const OFF: Rgb = Rgb::new(0, 0, 0);
 
     pub const RED: Rgb = Rgb::new(255, 0, 0);
@@ -17,6 +35,15 @@ impl Rgb {
     pub const BLUE: Rgb = Rgb::new(0, 0, 255);
     pub const YELLOW: Rgb = Rgb::new(255, 255, 0);
     pub const WHITE: Rgb = Rgb::new(255, 255, 255);
+}
+
+fn lerp_channel(a: u8, b: u8, t: f32) -> u8 {
+    let (a, b) = (f32::from(a), f32::from(b));
+    to_channel(a + (b - a) * t)
+}
+
+fn to_channel(value: f32) -> u8 {
+    value.round().clamp(0.0, 255.0) as u8
 }
 
 #[cfg(test)]
@@ -60,5 +87,67 @@ mod tests {
         let c3 = c1.clone();
         assert_eq!(c1, c2);
         assert_eq!(c1, c3);
+    }
+
+    #[test]
+    fn scale_half_halves_each_channel_with_rounding() {
+        // 255 * 0.5 = 127.5 and 1 * 0.5 = 0.5 both round up.
+        let c = Rgb::new(200, 255, 1).scale(0.5);
+        assert_eq!(c, Rgb::new(100, 128, 1));
+    }
+
+    #[test]
+    fn scale_one_leaves_colour_unchanged() {
+        let c = Rgb::new(10, 128, 255);
+        assert_eq!(c.scale(1.0), c);
+    }
+
+    #[test]
+    fn scale_zero_is_off() {
+        assert_eq!(Rgb::WHITE.scale(0.0), Rgb::OFF);
+    }
+
+    #[test]
+    fn scale_above_one_leaves_colour_unchanged() {
+        let c = Rgb::new(255, 128, 0);
+        assert_eq!(c.scale(2.0), c);
+    }
+
+    #[test]
+    fn scale_below_zero_is_off() {
+        assert_eq!(Rgb::WHITE.scale(-1.0), Rgb::OFF);
+    }
+
+    #[test]
+    fn lerp_at_zero_returns_start() {
+        assert_eq!(Rgb::lerp(Rgb::RED, Rgb::BLUE, 0.0), Rgb::RED);
+    }
+
+    #[test]
+    fn lerp_at_one_returns_end() {
+        assert_eq!(Rgb::lerp(Rgb::RED, Rgb::BLUE, 1.0), Rgb::BLUE);
+    }
+
+    #[test]
+    fn lerp_at_half_is_midpoint() {
+        assert_eq!(
+            Rgb::lerp(Rgb::OFF, Rgb::WHITE, 0.5),
+            Rgb::new(128, 128, 128)
+        );
+    }
+
+    #[test]
+    fn lerp_towards_darker_colour_decreases_channels() {
+        // 255 + (0 - 255) * 0.25 = 191.25
+        assert_eq!(
+            Rgb::lerp(Rgb::WHITE, Rgb::OFF, 0.25),
+            Rgb::new(191, 191, 191)
+        );
+    }
+
+    #[test]
+    fn lerp_outside_zero_to_one_clamps_to_endpoints() {
+        assert_eq!(Rgb::lerp(Rgb::RED, Rgb::BLUE, -1.0), Rgb::RED);
+        assert_eq!(Rgb::lerp(Rgb::RED, Rgb::BLUE, 2.0), Rgb::BLUE);
     }
 }
