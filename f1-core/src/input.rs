@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use crate::{color::Rgb, effect::Effect};
+use crate::{color::Rgb, effect::Effect, settings::Settings};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrackFlag {
@@ -44,4 +44,5 @@ pub enum Input {
     Phase(SessionPhase),
     Net(NetStatus),
     Override(Option<Effect>),
+    Settings(Settings),
 }

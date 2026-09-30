@@ -5,10 +5,9 @@ use crate::{
     frame::Frame,
     input::{Input, NetStatus, RaceEvent, SessionPhase, TrackFlag},
     overlays::Overlays,
-    theme::{event_overlay, flag_effect, net_effect, winner_effect, LAMP},
+    settings::Settings,
+    theme::{event_overlay, flag_effect, net_effect, winner_effect},
 };
-
-const WINNER_DISPLAY: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Scene {
@@ -55,6 +54,7 @@ struct LayerState {
     net: Stamped<NetStatus>,
     phase: SessionPhase,
     ever_online: bool,
+    settings: Settings,
 }
 
 #[derive(Clone, Debug)]
@@ -85,6 +85,7 @@ impl Controller {
                 net: Stamped::new(NetStatus::Connecting, now),
                 phase: SessionPhase::Idle,
                 ever_online: false,
+                settings: Settings::default(),
             },
             overlays: Overlays::default(),
         }
@@ -100,6 +101,7 @@ impl Controller {
             }
             Input::Override(Some(effect)) => stamp(&mut self.layers.override_effect, effect, now),
             Input::Override(None) => self.layers.override_effect = None,
+            Input::Settings(settings) => self.layers.settings = settings,
         }
     }
 
@@ -135,7 +137,8 @@ impl Controller {
                         effect: winner_effect(team_color),
                         started: now,
                     },
-                    until: now + WINNER_DISPLAY,
+                    until: now
+                        + Duration::from_millis(u64::from(self.layers.settings.winner_display_ms)),
                 });
             }
             other => {
@@ -188,8 +191,9 @@ impl Controller {
     }
 
     fn lamp_scene(&self) -> Scene {
+        let settings = &self.layers.settings;
         Scene {
-            effect: Effect::Solid(LAMP),
+            effect: Effect::Solid(settings.lamp_color.scale(settings.lamp_brightness)),
             started: self.booted,
         }
     }
@@ -204,6 +208,15 @@ mod tests {
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
+    }
+
+    fn default_lamp() -> Effect {
+        let s = Settings::default();
+        Effect::Solid(s.lamp_color.scale(s.lamp_brightness))
+    }
+
+    fn default_winner_display() -> Duration {
+        Duration::from_millis(u64::from(Settings::default().winner_display_ms))
     }
 
     fn race(event: RaceEvent, at: Instant) -> Input {
@@ -265,7 +278,7 @@ mod tests {
         let t0 = Instant::now();
         let mut c = Controller::new(t0);
         c.apply(Input::Net(NetStatus::Online), t0);
-        assert_eq!(winner_at(&mut c, t0), ("lamp", Effect::Solid(LAMP)));
+        assert_eq!(winner_at(&mut c, t0), ("lamp", default_lamp()));
     }
 
     #[test]
@@ -358,8 +371,9 @@ mod tests {
         c.apply(winner(t0), t0);
 
         assert_eq!(winner_at(&mut c, t0), ("winner", winner_effect(TEAM)));
-        assert_eq!(winner_at(&mut c, t0 + WINNER_DISPLAY - ms(1)).0, "winner");
-        assert_eq!(winner_at(&mut c, t0 + WINNER_DISPLAY).0, "lamp");
+        let display = default_winner_display();
+        assert_eq!(winner_at(&mut c, t0 + display - ms(1)).0, "winner");
+        assert_eq!(winner_at(&mut c, t0 + display).0, "lamp");
     }
 
     #[test]
@@ -389,5 +403,51 @@ mod tests {
         let layer = c.render(t0, &mut frame);
         assert_eq!(layer, "overlay");
         assert!(frame.pixels().iter().all(|&p| p == PURPLE));
+    }
+
+    #[test]
+    fn lamp_uses_colour_and_brightness_from_settings() {
+        let t0 = Instant::now();
+        let mut c = Controller::new(t0);
+        c.apply(Input::Net(NetStatus::Online), t0);
+        let settings = Settings {
+            lamp_color: Rgb::BLUE,
+            lamp_brightness: 0.5,
+            ..Settings::default()
+        };
+        c.apply(Input::Settings(settings), t0);
+        assert_eq!(
+            winner_at(&mut c, t0),
+            ("lamp", Effect::Solid(Rgb::BLUE.scale(0.5)))
+        );
+    }
+
+    #[test]
+    fn winner_display_time_comes_from_settings() {
+        let t0 = Instant::now();
+        let mut c = Controller::new(t0);
+        c.apply(Input::Net(NetStatus::Online), t0);
+        let settings = Settings {
+            winner_display_ms: 5000,
+            ..Settings::default()
+        };
+        c.apply(Input::Settings(settings), t0);
+        c.apply(winner(t0), t0);
+        assert_eq!(winner_at(&mut c, t0 + ms(4999)).0, "winner");
+        assert_eq!(winner_at(&mut c, t0 + ms(5000)).0, "lamp");
+    }
+
+    #[test]
+    fn new_settings_only_affect_the_next_winner() {
+        let t0 = Instant::now();
+        let mut c = Controller::new(t0);
+        c.apply(Input::Net(NetStatus::Online), t0);
+        c.apply(winner(t0), t0);
+        let shorter = Settings {
+            winner_display_ms: 1000,
+            ..Settings::default()
+        };
+        c.apply(Input::Settings(shorter), t0 + ms(10));
+        assert_eq!(winner_at(&mut c, t0 + ms(2000)).0, "winner");
     }
 }
