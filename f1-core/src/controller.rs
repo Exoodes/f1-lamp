@@ -7,13 +7,13 @@ use crate::{
     theme::{flag_effect, LAMP},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Scene {
     pub effect: Effect,
     pub started: Instant,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Controller {
     pub current_flag: Option<TrackFlag>,
     pub current_scene: Scene,

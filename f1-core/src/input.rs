@@ -38,7 +38,7 @@ pub enum NetStatus {
     ApiError,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Input {
     Race { event: RaceEvent, received: Instant },
     Phase(SessionPhase),

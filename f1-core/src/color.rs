@@ -10,6 +10,7 @@ impl Rgb {
         Self { r, g, b }
     }
 
+    #[must_use]
     pub fn scale(self, factor: f32) -> Rgb {
         let factor = factor.clamp(0.0, 1.0);
         Rgb::new(
@@ -19,6 +20,7 @@ impl Rgb {
         )
     }
 
+    #[must_use]
     pub fn lerp(a: Rgb, b: Rgb, t: f32) -> Rgb {
         let t = t.clamp(0.0, 1.0);
         Rgb::new(

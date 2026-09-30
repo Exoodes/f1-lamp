@@ -1,11 +1,22 @@
 use std::time::Duration;
 
-use crate::{color::Rgb, frame::Frame};
+use crate::{
+    color::Rgb,
+    frame::{Frame, NUM_LEDS},
+};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Effect {
     Solid(Rgb),
-    Blink { color: Rgb, period_ms: u32 },
+    Blink {
+        color: Rgb,
+        period_ms: u32,
+    },
+    Chase {
+        color: Rgb,
+        leds_per_sec: f32,
+        tail: u8,
+    },
 }
 
 impl Effect {
@@ -15,6 +26,11 @@ impl Effect {
             Effect::Blink { color, period_ms } => {
                 handle_blink(frame, color, u128::from(*period_ms).max(1), elapsed)
             }
+            Effect::Chase {
+                color,
+                leds_per_sec,
+                tail,
+            } => handle_chase(frame, elapsed, *color, *leds_per_sec, *tail),
         }
     }
 }
@@ -29,6 +45,19 @@ fn handle_blink(frame: &mut Frame, color: &Rgb, period_ms: u128, elapsed: Durati
         frame.fill(*color);
     } else {
         frame.fill(Rgb::OFF);
+    }
+}
+
+fn handle_chase(frame: &mut Frame, elapsed: Duration, color: Rgb, leds_per_sec: f32, tail: u8) {
+    let head_position = (elapsed.as_secs_f32() * leds_per_sec) as usize % NUM_LEDS;
+    let tail = usize::from(tail).min(NUM_LEDS - 1);
+
+    frame.fill(Rgb::OFF);
+
+    for i in 0..=tail {
+        let position = (head_position + NUM_LEDS - i) % NUM_LEDS;
+        let factor = 1.0 - i as f32 / (tail as f32 + 1.0);
+        frame.set(position, color.scale(factor));
     }
 }
 
@@ -90,5 +119,84 @@ mod tests {
             period_ms: 0,
         };
         render_at(effect, 1234);
+    }
+
+    // 10 LEDs per second: one step every 100 ms, a full lap of 23 LEDs in 2300 ms.
+    const CHASE: Effect = Effect::Chase {
+        color: Rgb::RED,
+        leds_per_sec: 10.0,
+        tail: 3,
+    };
+
+    fn chase(leds_per_sec: f32, tail: u8) -> Effect {
+        Effect::Chase {
+            color: Rgb::RED,
+            leds_per_sec,
+            tail,
+        }
+    }
+
+    fn lit_count(frame: &Frame) -> usize {
+        frame.pixels().iter().filter(|&&c| c != Rgb::OFF).count()
+    }
+
+    #[test]
+    fn chase_head_is_at_zero_at_start() {
+        let frame = render_at(CHASE, 0);
+        assert_eq!(frame.pixels()[0], Rgb::RED);
+    }
+
+    #[test]
+    fn chase_head_moves_one_led_after_one_step() {
+        let frame = render_at(CHASE, 101);
+        assert_eq!(frame.pixels()[1], Rgb::RED);
+        assert_ne!(frame.pixels()[0], Rgb::RED);
+    }
+
+    #[test]
+    fn chase_head_wraps_to_zero_after_full_lap() {
+        let before_wrap = render_at(CHASE, 2201);
+        assert_eq!(before_wrap.pixels()[NUM_LEDS - 1], Rgb::RED);
+
+        let after_wrap = render_at(CHASE, 2301);
+        assert_eq!(after_wrap.pixels()[0], Rgb::RED);
+    }
+
+    #[test]
+    fn chase_tail_fades_behind_head_across_the_wrap() {
+        // Head at LED 0, so the tail sits at the far end of the strip.
+        let frame = render_at(CHASE, 0);
+        let p = frame.pixels();
+        assert_eq!(p[NUM_LEDS - 1], Rgb::RED.scale(0.75));
+        assert_eq!(p[NUM_LEDS - 2], Rgb::RED.scale(0.5));
+        assert_eq!(p[NUM_LEDS - 3], Rgb::RED.scale(0.25));
+        assert_eq!(p[NUM_LEDS - 4], Rgb::OFF);
+    }
+
+    #[test]
+    fn chase_lights_only_head_and_tail_and_clears_the_rest() {
+        let mut frame = Frame::new();
+        frame.fill(Rgb::WHITE);
+        CHASE.render(Duration::from_millis(1234), &mut frame);
+        assert_eq!(lit_count(&frame), 4);
+    }
+
+    #[test]
+    fn chase_with_zero_tail_lights_only_head() {
+        let frame = render_at(chase(10.0, 0), 0);
+        assert_eq!(lit_count(&frame), 1);
+        assert_eq!(frame.pixels()[0], Rgb::RED);
+    }
+
+    #[test]
+    fn chase_tail_longer_than_strip_never_overwrites_head() {
+        let frame = render_at(chase(10.0, 200), 0);
+        assert_eq!(frame.pixels()[0], Rgb::RED);
+    }
+
+    #[test]
+    fn chase_with_zero_speed_stays_at_zero() {
+        let frame = render_at(chase(0.0, 3), 5000);
+        assert_eq!(frame.pixels()[0], Rgb::RED);
     }
 }
