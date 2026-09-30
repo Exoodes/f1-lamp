@@ -35,6 +35,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut controller = Controller::new(Instant::now());
     let mut frame = Frame::new();
+    let mut last_layer = "";
 
     loop {
         let now = Instant::now();
@@ -44,7 +45,11 @@ fn main() -> anyhow::Result<()> {
             controller.apply(input, now);
         }
 
-        controller.render(now, &mut frame);
+        let layer = controller.render(now, &mut frame);
+        if layer != last_layer {
+            log::info!("layer: {layer}");
+            last_layer = layer;
+        }
         if let Err(e) = leds.write(&frame) {
             log::warn!("{e}");
         }

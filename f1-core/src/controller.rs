@@ -1,11 +1,14 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::{
     effect::Effect,
     frame::Frame,
-    input::{Input, RaceEvent, TrackFlag},
-    theme::{flag_effect, LAMP},
+    input::{Input, NetStatus, RaceEvent, SessionPhase, TrackFlag},
+    overlays::Overlays,
+    theme::{event_overlay, flag_effect, net_effect, winner_effect, LAMP},
 };
+
+const WINNER_DISPLAY: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Scene {
@@ -14,127 +17,377 @@ pub struct Scene {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Controller {
-    pub current_flag: Option<TrackFlag>,
-    pub current_scene: Scene,
+struct Stamped<T> {
+    value: T,
+    since: Instant,
 }
+
+impl<T: PartialEq> Stamped<T> {
+    fn new(value: T, now: Instant) -> Self {
+        Self { value, since: now }
+    }
+
+    fn update(&mut self, value: T, now: Instant) {
+        if self.value != value {
+            *self = Self::new(value, now);
+        }
+    }
+}
+
+fn stamp<T: PartialEq>(slot: &mut Option<Stamped<T>>, value: T, now: Instant) {
+    match slot {
+        Some(stamped) => stamped.update(value, now),
+        None => *slot = Some(Stamped::new(value, now)),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct WinnerScene {
+    scene: Scene,
+    until: Instant,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LayerState {
+    override_effect: Option<Stamped<Effect>>,
+    flag: Option<Stamped<TrackFlag>>,
+    winner: Option<WinnerScene>,
+    net: Stamped<NetStatus>,
+    phase: SessionPhase,
+    ever_online: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct Controller {
+    booted: Instant,
+    layers: LayerState,
+    overlays: Overlays,
+}
+
+type Layer = fn(&Controller) -> Option<Scene>;
+
+const LAYERS: [(&str, Layer); 5] = [
+    ("override", Controller::override_layer),
+    ("overlay", Controller::overlay_layer),
+    ("live track", Controller::live_track_layer),
+    ("winner", Controller::winner_layer),
+    ("status", Controller::status_layer),
+];
 
 impl Controller {
     pub fn new(now: Instant) -> Self {
         Self {
-            current_flag: None,
-            current_scene: Scene {
-                effect: Effect::Solid(LAMP),
-                started: now,
+            booted: now,
+            layers: LayerState {
+                override_effect: None,
+                flag: None,
+                winner: None,
+                net: Stamped::new(NetStatus::Connecting, now),
+                phase: SessionPhase::Idle,
+                ever_online: false,
             },
+            overlays: Overlays::default(),
         }
     }
 
     pub fn apply(&mut self, input: Input, now: Instant) {
         match input {
-            Input::Race {
-                event: RaceEvent::TrackFlag(flag),
-                ..
-            } => self.current_flag = Some(flag),
-            _ => {}
-        }
-
-        let wanted = self.wanted_effect();
-        if wanted != self.current_scene.effect {
-            self.current_scene = Scene {
-                effect: wanted,
-                started: now,
-            };
+            Input::Race { event, .. } => self.apply_race_event(event, now),
+            Input::Phase(phase) => self.layers.phase = phase,
+            Input::Net(status) => {
+                self.layers.net.update(status, now);
+                self.layers.ever_online |= status == NetStatus::Online;
+            }
+            Input::Override(Some(effect)) => stamp(&mut self.layers.override_effect, effect, now),
+            Input::Override(None) => self.layers.override_effect = None,
         }
     }
 
-    pub fn render(&mut self, now: Instant, frame: &mut Frame) {
-        let elapsed = now.duration_since(self.current_scene.started);
-        self.current_scene.effect.render(elapsed, frame);
+    pub fn tick(&mut self, now: Instant) {
+        self.overlays.tick(now);
+        if self.layers.winner.is_some_and(|w| now >= w.until) {
+            self.layers.winner = None;
+        }
     }
 
-    fn wanted_effect(&self) -> Effect {
-        match self.current_flag {
-            Some(flag) => flag_effect(flag),
-            None => Effect::Solid(LAMP),
+    pub fn arbitrate(&self) -> (&'static str, Scene) {
+        LAYERS
+            .iter()
+            .find_map(|&(name, layer)| layer(self).map(|scene| (name, scene)))
+            .unwrap_or(("lamp", self.lamp_scene()))
+    }
+
+    pub fn render(&mut self, now: Instant, frame: &mut Frame) -> &'static str {
+        self.tick(now);
+        let (layer, scene) = self.arbitrate();
+        scene
+            .effect
+            .render(now.duration_since(scene.started), frame);
+        layer
+    }
+
+    fn apply_race_event(&mut self, event: RaceEvent, now: Instant) {
+        match event {
+            RaceEvent::TrackFlag(flag) => stamp(&mut self.layers.flag, flag, now),
+            RaceEvent::Winner { team_color, .. } => {
+                self.layers.winner = Some(WinnerScene {
+                    scene: Scene {
+                        effect: winner_effect(team_color),
+                        started: now,
+                    },
+                    until: now + WINNER_DISPLAY,
+                });
+            }
+            other => {
+                if let Some(effect) = event_overlay(other) {
+                    self.overlays.push(effect);
+                }
+            }
+        }
+    }
+
+    fn override_layer(&self) -> Option<Scene> {
+        self.layers.override_effect.map(|o| Scene {
+            effect: o.value,
+            started: o.since,
+        })
+    }
+
+    fn overlay_layer(&self) -> Option<Scene> {
+        self.overlays
+            .active()
+            .map(|(effect, started)| Scene { effect, started })
+    }
+
+    fn live_track_layer(&self) -> Option<Scene> {
+        let layers = &self.layers;
+        if layers.phase != SessionPhase::Live || layers.net.value != NetStatus::Online {
+            return None;
+        }
+        layers.flag.map(|f| Scene {
+            effect: flag_effect(f.value),
+            started: f.since,
+        })
+    }
+
+    fn winner_layer(&self) -> Option<Scene> {
+        self.layers.winner.map(|w| w.scene)
+    }
+
+    fn status_layer(&self) -> Option<Scene> {
+        let layers = &self.layers;
+        let session_needs_network =
+            matches!(layers.phase, SessionPhase::PreSession | SessionPhase::Live);
+        if layers.ever_online && !session_needs_network {
+            return None;
+        }
+        net_effect(layers.net.value).map(|effect| Scene {
+            effect,
+            started: layers.net.since,
+        })
+    }
+
+    fn lamp_scene(&self) -> Scene {
+        Scene {
+            effect: Effect::Solid(LAMP),
+            started: self.booted,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use super::*;
-    use crate::color::Rgb;
+    use crate::{color::Rgb, theme::PURPLE};
 
-    fn flag(flag: TrackFlag, received: Instant) -> Input {
-        Input::Race {
-            event: RaceEvent::TrackFlag(flag),
-            received,
-        }
-    }
+    const TEAM: Rgb = Rgb::new(0, 210, 190);
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
     }
 
-    fn rendered(controller: &mut Controller, now: Instant) -> Frame {
+    fn race(event: RaceEvent, at: Instant) -> Input {
+        Input::Race {
+            event,
+            received: at,
+        }
+    }
+
+    fn flag(flag: TrackFlag, at: Instant) -> Input {
+        race(RaceEvent::TrackFlag(flag), at)
+    }
+
+    fn fastest_lap(at: Instant) -> Input {
+        race(
+            RaceEvent::FastestLap {
+                driver: 44,
+                team_color: TEAM,
+            },
+            at,
+        )
+    }
+
+    fn winner(at: Instant) -> Input {
+        race(
+            RaceEvent::Winner {
+                driver: 44,
+                team_color: TEAM,
+            },
+            at,
+        )
+    }
+
+    /// A controller that is online and in a live session.
+    fn live(t0: Instant) -> Controller {
+        let mut c = Controller::new(t0);
+        c.apply(Input::Net(NetStatus::Online), t0);
+        c.apply(Input::Phase(SessionPhase::Live), t0);
+        c
+    }
+
+    /// Ticks, then returns the winning layer and its effect.
+    fn winner_at(c: &mut Controller, now: Instant) -> (&'static str, Effect) {
+        c.tick(now);
+        let (layer, scene) = c.arbitrate();
+        (layer, scene.effect)
+    }
+
+    #[test]
+    fn boot_shows_connecting_status() {
+        let t0 = Instant::now();
+        let mut c = Controller::new(t0);
+        let expected = net_effect(NetStatus::Connecting).unwrap();
+        assert_eq!(winner_at(&mut c, t0), ("status", expected));
+    }
+
+    #[test]
+    fn online_and_idle_shows_lamp() {
+        let t0 = Instant::now();
+        let mut c = Controller::new(t0);
+        c.apply(Input::Net(NetStatus::Online), t0);
+        assert_eq!(winner_at(&mut c, t0), ("lamp", Effect::Solid(LAMP)));
+    }
+
+    #[test]
+    fn flag_is_ignored_until_session_is_live() {
+        let t0 = Instant::now();
+        let mut c = Controller::new(t0);
+        c.apply(Input::Net(NetStatus::Online), t0);
+        c.apply(flag(TrackFlag::Red, t0), t0);
+        assert_eq!(winner_at(&mut c, t0).0, "lamp");
+
+        c.apply(Input::Phase(SessionPhase::Live), t0);
+        assert_eq!(
+            winner_at(&mut c, t0),
+            ("live track", flag_effect(TrackFlag::Red))
+        );
+    }
+
+    #[test]
+    fn live_track_yields_to_status_when_network_drops() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(flag(TrackFlag::Red, t0), t0);
+        c.apply(Input::Net(NetStatus::ApiError), t0 + ms(10));
+        let expected = net_effect(NetStatus::ApiError).unwrap();
+        assert_eq!(winner_at(&mut c, t0 + ms(10)), ("status", expected));
+    }
+
+    #[test]
+    fn status_shows_before_a_session_when_offline() {
+        let t0 = Instant::now();
+        let mut c = Controller::new(t0);
+        c.apply(Input::Net(NetStatus::Online), t0);
+        c.apply(Input::Phase(SessionPhase::PreSession), t0);
+        c.apply(Input::Net(NetStatus::Connecting), t0);
+        assert_eq!(winner_at(&mut c, t0).0, "status");
+    }
+
+    #[test]
+    fn status_stays_hidden_when_no_session_needs_network() {
+        let t0 = Instant::now();
+        let mut c = Controller::new(t0);
+        c.apply(Input::Net(NetStatus::Online), t0);
+        c.apply(Input::Net(NetStatus::ApiError), t0);
+        assert_eq!(winner_at(&mut c, t0).0, "lamp");
+    }
+
+    #[test]
+    fn overlay_beats_track_flag_then_falls_back() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(flag(TrackFlag::Green, t0), t0);
+        c.apply(fastest_lap(t0), t0);
+
+        // Fastest lap: 3 flashes × 300 ms = 900 ms.
+        assert_eq!(winner_at(&mut c, t0).0, "overlay");
+        assert_eq!(winner_at(&mut c, t0 + ms(899)).0, "overlay");
+        assert_eq!(winner_at(&mut c, t0 + ms(900)).0, "live track");
+    }
+
+    #[test]
+    fn override_beats_everything() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(flag(TrackFlag::Red, t0), t0);
+        c.apply(fastest_lap(t0), t0);
+        c.apply(winner(t0), t0);
+        c.apply(Input::Override(Some(Effect::Solid(Rgb::WHITE))), t0);
+        assert_eq!(
+            winner_at(&mut c, t0),
+            ("override", Effect::Solid(Rgb::WHITE))
+        );
+    }
+
+    #[test]
+    fn clearing_override_falls_back() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(flag(TrackFlag::Red, t0), t0);
+        c.apply(Input::Override(Some(Effect::Solid(Rgb::WHITE))), t0);
+        c.apply(Input::Override(None), t0);
+        assert_eq!(winner_at(&mut c, t0).0, "live track");
+    }
+
+    #[test]
+    fn winner_shows_until_display_time_then_lamp() {
+        let t0 = Instant::now();
+        let mut c = Controller::new(t0);
+        c.apply(Input::Net(NetStatus::Online), t0);
+        c.apply(Input::Phase(SessionPhase::PostSession), t0);
+        c.apply(winner(t0), t0);
+
+        assert_eq!(winner_at(&mut c, t0), ("winner", winner_effect(TEAM)));
+        assert_eq!(winner_at(&mut c, t0 + WINNER_DISPLAY - ms(1)).0, "winner");
+        assert_eq!(winner_at(&mut c, t0 + WINNER_DISPLAY).0, "lamp");
+    }
+
+    #[test]
+    fn repeated_flag_keeps_its_start_time() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(flag(TrackFlag::DoubleYellow, t0), t0);
+        c.apply(flag(TrackFlag::DoubleYellow, t0 + ms(100)), t0 + ms(100));
+        assert_eq!(c.arbitrate().1.started, t0);
+    }
+
+    #[test]
+    fn changing_flag_restarts_its_clock() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(flag(TrackFlag::Green, t0), t0);
+        c.apply(flag(TrackFlag::Yellow, t0 + ms(400)), t0 + ms(400));
+        assert_eq!(c.arbitrate().1.started, t0 + ms(400));
+    }
+
+    #[test]
+    fn render_draws_the_winning_layer_and_names_it() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(fastest_lap(t0), t0);
         let mut frame = Frame::new();
-        controller.render(now, &mut frame);
-        frame
-    }
-
-    fn all_pixels_are(frame: &Frame, color: Rgb) -> bool {
-        frame.pixels().iter().all(|&c| c == color)
-    }
-
-    #[test]
-    fn with_no_input_frame_is_lamp_colour() {
-        let t0 = Instant::now();
-        let mut controller = Controller::new(t0);
-        let frame = rendered(&mut controller, t0 + ms(100));
-        assert!(all_pixels_are(&frame, LAMP));
-    }
-
-    #[test]
-    fn red_flag_renders_red() {
-        let t0 = Instant::now();
-        let mut controller = Controller::new(t0);
-        controller.apply(flag(TrackFlag::Red, t0), t0);
-        let frame = rendered(&mut controller, t0 + ms(100));
-        assert!(all_pixels_are(&frame, Rgb::RED));
-    }
-
-    #[test]
-    fn repeated_flag_keeps_blink_start_time() {
-        let t0 = Instant::now();
-        let mut controller = Controller::new(t0);
-        controller.apply(flag(TrackFlag::DoubleYellow, t0), t0);
-        controller.apply(flag(TrackFlag::DoubleYellow, t0 + ms(100)), t0 + ms(100));
-
-        assert_eq!(controller.current_scene.started, t0);
-        // 250 ms into a 400 ms blink is off; it would be on (150 ms in) if the start had reset.
-        let frame = rendered(&mut controller, t0 + ms(250));
-        assert!(all_pixels_are(&frame, Rgb::OFF));
-    }
-
-    #[test]
-    fn changing_flag_restarts_scene() {
-        let t0 = Instant::now();
-        let mut controller = Controller::new(t0);
-        controller.apply(flag(TrackFlag::Green, t0), t0);
-        controller.apply(flag(TrackFlag::Yellow, t0 + ms(400)), t0 + ms(400));
-        assert_eq!(controller.current_scene.started, t0 + ms(400));
-    }
-
-    #[test]
-    fn non_flag_input_leaves_scene_unchanged() {
-        let t0 = Instant::now();
-        let mut controller = Controller::new(t0);
-        controller.apply(flag(TrackFlag::Red, t0), t0);
-        let before = controller.current_scene;
-        controller.apply(Input::Net(crate::input::NetStatus::Online), t0 + ms(50));
-        assert_eq!(controller.current_scene, before);
+        let layer = c.render(t0, &mut frame);
+        assert_eq!(layer, "overlay");
+        assert!(frame.pixels().iter().all(|&p| p == PURPLE));
     }
 }
