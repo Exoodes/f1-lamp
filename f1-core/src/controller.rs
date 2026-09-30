@@ -110,12 +110,12 @@ mod tests {
     fn repeated_flag_keeps_blink_start_time() {
         let t0 = Instant::now();
         let mut controller = Controller::new(t0);
-        controller.apply(flag(TrackFlag::Yellow, t0), t0);
-        controller.apply(flag(TrackFlag::Yellow, t0 + ms(400)), t0 + ms(400));
+        controller.apply(flag(TrackFlag::DoubleYellow, t0), t0);
+        controller.apply(flag(TrackFlag::DoubleYellow, t0 + ms(100)), t0 + ms(100));
 
         assert_eq!(controller.current_scene.started, t0);
-        // 600 ms into a 1000 ms blink is off; it would be on if the start had reset to 400 ms.
-        let frame = rendered(&mut controller, t0 + ms(600));
+        // 250 ms into a 400 ms blink is off; it would be on (150 ms in) if the start had reset.
+        let frame = rendered(&mut controller, t0 + ms(250));
         assert!(all_pixels_are(&frame, Rgb::OFF));
     }
 
