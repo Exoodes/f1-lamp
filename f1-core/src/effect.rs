@@ -7,6 +7,11 @@ use crate::{
 };
 
 const BREATHE_FLOOR: f32 = 0.1;
+const FLASH_PERIOD_MS: u32 = 300;
+const CHEQUERED_SWAP_MS: u32 = 500;
+const START_LIGHTS: usize = 5;
+const START_LIGHT_INTERVAL_MS: u64 = 1000;
+const START_LIGHTS_DARK_MS: u64 = 1000;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Effect {
@@ -14,6 +19,7 @@ pub enum Effect {
     Blink {
         color: Rgb,
         period_ms: u32,
+        times: Option<u8>,
     },
     Chase {
         color: Rgb,
@@ -24,15 +30,29 @@ pub enum Effect {
         color: Rgb,
         period_ms: u32,
     },
+    Chequered {
+        duration_ms: u32,
+    },
+    StartLights {
+        hold_ms: u32,
+    },
 }
 
 impl Effect {
     pub fn render(&self, elapsed: Duration, frame: &mut Frame) {
         match self {
             Effect::Solid(color) => handle_solid(frame, *color),
-            Effect::Blink { color, period_ms } => {
-                handle_blink(frame, *color, u128::from(*period_ms).max(1), elapsed)
-            }
+            Effect::Blink {
+                color,
+                period_ms,
+                times,
+            } => handle_blink(
+                frame,
+                *color,
+                u128::from(*period_ms).max(1),
+                *times,
+                elapsed,
+            ),
             Effect::Chase {
                 color,
                 leds_per_sec,
@@ -41,6 +61,35 @@ impl Effect {
             Effect::Breathe { color, period_ms } => {
                 handle_breathe(frame, elapsed, *color, u128::from(*period_ms).max(1))
             }
+            Effect::Chequered { duration_ms } => {
+                handle_chequered(frame, u128::from(*duration_ms), elapsed)
+            }
+            Effect::StartLights { hold_ms } => handle_start_lights(frame, *hold_ms, elapsed),
+        }
+    }
+
+    pub fn duration(&self) -> Option<Duration> {
+        match self {
+            Effect::Solid(_) => None,
+            Effect::Blink {
+                period_ms, times, ..
+            } => times.map(|n| Duration::from_millis(u64::from(*period_ms).max(1) * u64::from(n))),
+            Effect::Chase { .. } => None,
+            Effect::Breathe { .. } => None,
+            Effect::Chequered { duration_ms } => {
+                Some(Duration::from_millis(u64::from(*duration_ms)))
+            }
+            Effect::StartLights { hold_ms } => Some(Duration::from_millis(
+                lights_out_ms(*hold_ms) + START_LIGHTS_DARK_MS,
+            )),
+        }
+    }
+
+    pub const fn flash(color: Rgb, times: u8) -> Effect {
+        Effect::Blink {
+            color,
+            period_ms: FLASH_PERIOD_MS,
+            times: Some(times),
         }
     }
 }
@@ -49,9 +98,16 @@ fn handle_solid(frame: &mut Frame, color: Rgb) {
     frame.fill(color)
 }
 
-fn handle_blink(frame: &mut Frame, color: Rgb, period_ms: u128, elapsed: Duration) {
+fn handle_blink(
+    frame: &mut Frame,
+    color: Rgb,
+    period_ms: u128,
+    times: Option<u8>,
+    elapsed: Duration,
+) {
+    let finished = times.is_some_and(|n| elapsed.as_millis() >= period_ms * u128::from(n));
     let phase = ms_into_period(elapsed, period_ms);
-    if phase < (period_ms / 2) {
+    if !finished && phase < (period_ms / 2) {
         frame.fill(color);
     } else {
         frame.fill(Rgb::OFF);
@@ -78,6 +134,49 @@ fn handle_breathe(frame: &mut Frame, elapsed: Duration, color: Rgb, period_ms: u
     frame.fill(color.scale(brightness));
 }
 
+fn handle_chequered(frame: &mut Frame, duration_ms: u128, elapsed: Duration) {
+    let elapsed_ms = elapsed.as_millis();
+    if elapsed_ms >= duration_ms {
+        frame.fill(Rgb::OFF);
+        return;
+    }
+
+    let swapped = (elapsed_ms / u128::from(CHEQUERED_SWAP_MS)) % 2 == 1;
+    for i in 0..NUM_LEDS {
+        let is_white = (i % 2 == 0) != swapped;
+        frame.set(i, if is_white { Rgb::WHITE } else { Rgb::OFF });
+    }
+}
+
+fn handle_start_lights(frame: &mut Frame, hold_ms: u32, elapsed: Duration) {
+    let lit = start_lights_lit(hold_ms, elapsed);
+    for i in 0..NUM_LEDS {
+        let color = if segment_of(i) < lit {
+            Rgb::RED
+        } else {
+            Rgb::OFF
+        };
+        frame.set(i, color);
+    }
+}
+
+fn start_lights_lit(hold_ms: u32, elapsed: Duration) -> usize {
+    let elapsed_ms = elapsed.as_millis();
+    if elapsed_ms >= u128::from(lights_out_ms(hold_ms)) {
+        return 0;
+    }
+    let lit = elapsed_ms / u128::from(START_LIGHT_INTERVAL_MS) + 1;
+    lit.min(START_LIGHTS as u128) as usize
+}
+
+fn lights_out_ms(hold_ms: u32) -> u64 {
+    (START_LIGHTS as u64 - 1) * START_LIGHT_INTERVAL_MS + u64::from(hold_ms)
+}
+
+fn segment_of(i: usize) -> usize {
+    i * START_LIGHTS / NUM_LEDS
+}
+
 fn ms_into_period(elapsed: Duration, period_ms: u128) -> u128 {
     elapsed.as_millis() % period_ms
 }
@@ -89,6 +188,7 @@ mod tests {
     const BLINK: Effect = Effect::Blink {
         color: Rgb::RED,
         period_ms: 1000,
+        times: None,
     };
 
     fn render_at(effect: Effect, ms: u64) -> Frame {
@@ -138,6 +238,7 @@ mod tests {
         let effect = Effect::Blink {
             color: Rgb::RED,
             period_ms: 0,
+            times: None,
         };
         render_at(effect, 1234);
     }
@@ -269,5 +370,195 @@ mod tests {
             period_ms: 0,
         };
         render_at(effect, 1234);
+    }
+
+    // 3 cycles of 300 ms: on 0–149, off 150–299, ... finished at 900 ms.
+    const FLASH: Effect = Effect::flash(Rgb::RED, 3);
+
+    #[test]
+    fn flash_is_on_at_start() {
+        assert!(all_pixels_are(&render_at(FLASH, 0), Rgb::RED));
+    }
+
+    #[test]
+    fn flash_is_off_in_second_half_of_a_cycle() {
+        assert!(all_pixels_are(&render_at(FLASH, 151), Rgb::OFF));
+    }
+
+    #[test]
+    fn flash_is_on_again_in_next_cycle() {
+        assert!(all_pixels_are(&render_at(FLASH, 301), Rgb::RED));
+    }
+
+    #[test]
+    fn flash_stays_off_after_last_cycle() {
+        // 1000 ms would be in an "on" half if the flash kept going.
+        assert!(all_pixels_are(&render_at(FLASH, 1000), Rgb::OFF));
+    }
+
+    #[test]
+    fn flash_lights_up_exactly_times_times() {
+        let mut flashes = 0;
+        let mut was_on = false;
+        for ms in (0..3000).step_by(10) {
+            let is_on = render_at(FLASH, ms).pixels()[0] == Rgb::RED;
+            if is_on && !was_on {
+                flashes += 1;
+            }
+            was_on = is_on;
+        }
+        assert_eq!(flashes, 3);
+    }
+
+    #[test]
+    fn flash_duration_is_times_cycles() {
+        assert_eq!(FLASH.duration(), Some(Duration::from_millis(900)));
+    }
+
+    #[test]
+    fn flash_with_zero_times_is_off_and_already_finished() {
+        let effect = Effect::flash(Rgb::RED, 0);
+        assert!(all_pixels_are(&render_at(effect, 0), Rgb::OFF));
+        assert_eq!(effect.duration(), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn endless_blink_keeps_blinking_long_after_start() {
+        assert!(all_pixels_are(&render_at(BLINK, 100_000), Rgb::RED));
+    }
+
+    #[test]
+    fn endless_effects_have_no_duration() {
+        assert_eq!(BLINK.duration(), None);
+        assert_eq!(Effect::Solid(Rgb::RED).duration(), None);
+        assert_eq!(CHASE.duration(), None);
+        assert_eq!(BREATHE.duration(), None);
+    }
+
+    // Swaps every 500 ms, finished after 3000 ms.
+    const CHEQUERED: Effect = Effect::Chequered { duration_ms: 3000 };
+
+    fn is_chequered(frame: &Frame, even: Rgb, odd: Rgb) -> bool {
+        frame
+            .pixels()
+            .iter()
+            .enumerate()
+            .all(|(i, &c)| c == if i % 2 == 0 { even } else { odd })
+    }
+
+    #[test]
+    fn chequered_starts_with_even_pixels_white() {
+        let frame = render_at(CHEQUERED, 0);
+        assert!(is_chequered(&frame, Rgb::WHITE, Rgb::OFF));
+    }
+
+    #[test]
+    fn chequered_swaps_after_half_a_second() {
+        let frame = render_at(CHEQUERED, 501);
+        assert!(is_chequered(&frame, Rgb::OFF, Rgb::WHITE));
+    }
+
+    #[test]
+    fn chequered_swaps_back_after_one_second() {
+        let frame = render_at(CHEQUERED, 1001);
+        assert!(is_chequered(&frame, Rgb::WHITE, Rgb::OFF));
+    }
+
+    #[test]
+    fn chequered_is_off_after_its_duration() {
+        let mut frame = Frame::new();
+        frame.fill(Rgb::WHITE);
+        CHEQUERED.render(Duration::from_millis(3001), &mut frame);
+        assert!(all_pixels_are(&frame, Rgb::OFF));
+    }
+
+    #[test]
+    fn chequered_neighbours_always_differ_while_running() {
+        for ms in (0..3000).step_by(50) {
+            let frame = render_at(CHEQUERED, ms);
+            let differ = frame.pixels().windows(2).all(|w| w[0] != w[1]);
+            assert!(differ, "neighbours match at {ms} ms");
+        }
+    }
+
+    #[test]
+    fn chequered_duration_is_the_configured_length() {
+        assert_eq!(CHEQUERED.duration(), Some(Duration::from_millis(3000)));
+    }
+
+    // Lights at 0, 1, 2, 3, 4 s; hold 2 s; lights out at 6 s; dark until 7 s.
+    const START: Effect = Effect::StartLights { hold_ms: 2000 };
+
+    /// How many segments are fully red, checking that lit segments come first.
+    fn lit_segments(frame: &Frame) -> usize {
+        let lit = (0..START_LIGHTS)
+            .take_while(|&s| {
+                (0..NUM_LEDS)
+                    .filter(|&i| segment_of(i) == s)
+                    .all(|i| frame.pixels()[i] == Rgb::RED)
+            })
+            .count();
+        let rest_off = (0..NUM_LEDS)
+            .filter(|&i| segment_of(i) >= lit)
+            .all(|i| frame.pixels()[i] == Rgb::OFF);
+        assert!(rest_off, "segments after the lit ones must be off");
+        lit
+    }
+
+    #[test]
+    fn every_led_belongs_to_one_of_five_segments() {
+        for i in 0..NUM_LEDS {
+            assert!(segment_of(i) < START_LIGHTS, "LED {i} has no segment");
+        }
+    }
+
+    #[test]
+    fn every_segment_has_at_least_one_led() {
+        for s in 0..START_LIGHTS {
+            assert!(
+                (0..NUM_LEDS).any(|i| segment_of(i) == s),
+                "segment {s} is empty"
+            );
+        }
+    }
+
+    #[test]
+    fn start_lights_first_segment_is_lit_at_start() {
+        assert_eq!(lit_segments(&render_at(START, 0)), 1);
+    }
+
+    #[test]
+    fn start_lights_add_one_segment_per_second() {
+        for (ms, expected) in [(999, 1), (1000, 2), (2000, 3), (3000, 4), (4000, 5)] {
+            assert_eq!(lit_segments(&render_at(START, ms)), expected, "at {ms} ms");
+        }
+    }
+
+    #[test]
+    fn start_lights_have_three_segments_at_two_and_a_half_seconds() {
+        assert_eq!(lit_segments(&render_at(START, 2500)), 3);
+    }
+
+    #[test]
+    fn start_lights_hold_all_five_until_lights_out() {
+        assert_eq!(lit_segments(&render_at(START, 5999)), 5);
+    }
+
+    #[test]
+    fn start_lights_are_fully_dark_after_hold() {
+        assert!(all_pixels_are(&render_at(START, 6000), Rgb::OFF));
+        assert!(all_pixels_are(&render_at(START, 6999), Rgb::OFF));
+    }
+
+    #[test]
+    fn start_lights_duration_covers_lights_hold_and_dark_tail() {
+        assert_eq!(START.duration(), Some(Duration::from_millis(7000)));
+    }
+
+    #[test]
+    fn start_lights_with_zero_hold_go_out_as_fifth_would_light() {
+        let effect = Effect::StartLights { hold_ms: 0 };
+        assert_eq!(lit_segments(&render_at(effect, 3999)), 4);
+        assert!(all_pixels_are(&render_at(effect, 4000), Rgb::OFF));
     }
 }
