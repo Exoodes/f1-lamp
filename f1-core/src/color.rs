@@ -46,7 +46,7 @@ fn lerp_channel(a: u8, b: u8, t: f32) -> u8 {
     to_channel(a + (b - a) * t)
 }
 
-fn to_channel(value: f32) -> u8 {
+pub(crate) fn to_channel(value: f32) -> u8 {
     value.round().clamp(0.0, 255.0) as u8
 }
 

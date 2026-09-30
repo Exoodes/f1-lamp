@@ -5,6 +5,7 @@ use crate::{
     frame::Frame,
     input::{Input, NetStatus, RaceEvent, SessionPhase, TrackFlag},
     overlays::Overlays,
+    post,
     settings::Settings,
     theme::{event_overlay, flag_effect, net_effect, winner_effect},
 };
@@ -55,6 +56,8 @@ struct LayerState {
     phase: SessionPhase,
     ever_online: bool,
     settings: Settings,
+    /// Local time in minutes after midnight; `None` until the first clock message.
+    minute_of_day: Option<u16>,
 }
 
 #[derive(Clone, Debug)]
@@ -86,6 +89,7 @@ impl Controller {
                 phase: SessionPhase::Idle,
                 ever_online: false,
                 settings: Settings::default(),
+                minute_of_day: None,
             },
             overlays: Overlays::default(),
         }
@@ -102,6 +106,7 @@ impl Controller {
             Input::Override(Some(effect)) => stamp(&mut self.layers.override_effect, effect, now),
             Input::Override(None) => self.layers.override_effect = None,
             Input::Settings(settings) => self.layers.settings = settings,
+            Input::Clock { minute_of_day } => self.layers.minute_of_day = Some(minute_of_day),
         }
     }
 
@@ -125,6 +130,10 @@ impl Controller {
         scene
             .effect
             .render(now.duration_since(scene.started), frame);
+
+        let layers = &self.layers;
+        let brightness = post::brightness(&layers.settings, layers.minute_of_day, layers.phase);
+        post::post_process(frame, brightness);
         layer
     }
 
@@ -202,7 +211,10 @@ impl Controller {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{color::Rgb, theme::PURPLE};
+    use crate::{
+        color::Rgb,
+        theme::{LAMP, PURPLE},
+    };
 
     const TEAM: Rgb = Rgb::new(0, 210, 190);
 
@@ -402,7 +414,8 @@ mod tests {
         let mut frame = Frame::new();
         let layer = c.render(t0, &mut frame);
         assert_eq!(layer, "overlay");
-        assert!(frame.pixels().iter().all(|&p| p == PURPLE));
+        let expected = post::correct(PURPLE, Settings::default().global_brightness);
+        assert!(frame.pixels().iter().all(|&p| p == expected));
     }
 
     #[test]
@@ -449,5 +462,82 @@ mod tests {
         };
         c.apply(Input::Settings(shorter), t0 + ms(10));
         assert_eq!(winner_at(&mut c, t0 + ms(2000)).0, "winner");
+    }
+
+    fn night_settings() -> Settings {
+        Settings {
+            night_start: Some(22 * 60),
+            night_end: Some(7 * 60),
+            global_brightness: 0.5,
+            night_brightness: 0.1,
+            ..Settings::default()
+        }
+    }
+
+    fn rendered_pixel(c: &mut Controller, now: Instant) -> Rgb {
+        let mut frame = Frame::new();
+        c.render(now, &mut frame);
+        frame.pixels()[0]
+    }
+
+    #[test]
+    fn lamp_dims_when_clock_enters_night_window() {
+        let t0 = Instant::now();
+        let mut c = Controller::new(t0);
+        c.apply(Input::Net(NetStatus::Online), t0);
+        c.apply(Input::Settings(night_settings()), t0);
+
+        c.apply(
+            Input::Clock {
+                minute_of_day: 12 * 60,
+            },
+            t0,
+        );
+        let day = rendered_pixel(&mut c, t0);
+        c.apply(
+            Input::Clock {
+                minute_of_day: 23 * 60,
+            },
+            t0,
+        );
+        let night = rendered_pixel(&mut c, t0);
+
+        assert!(night.r < day.r, "day {day:?}, night {night:?}");
+    }
+
+    #[test]
+    fn live_race_is_not_dimmed_at_night() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(Input::Settings(night_settings()), t0);
+        c.apply(flag(TrackFlag::Red, t0), t0);
+
+        c.apply(
+            Input::Clock {
+                minute_of_day: 12 * 60,
+            },
+            t0,
+        );
+        let day = rendered_pixel(&mut c, t0);
+        c.apply(
+            Input::Clock {
+                minute_of_day: 23 * 60,
+            },
+            t0,
+        );
+        let night = rendered_pixel(&mut c, t0);
+
+        assert_eq!(night, day);
+    }
+
+    #[test]
+    fn it_is_never_night_before_the_first_clock_message() {
+        let t0 = Instant::now();
+        let mut c = Controller::new(t0);
+        c.apply(Input::Net(NetStatus::Online), t0);
+        c.apply(Input::Settings(night_settings()), t0);
+        let lamp = rendered_pixel(&mut c, t0);
+        let expected = post::correct(LAMP.scale(Settings::default().lamp_brightness), 0.5);
+        assert_eq!(lamp, expected);
     }
 }

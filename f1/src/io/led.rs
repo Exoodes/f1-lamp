@@ -12,10 +12,7 @@ impl<'d> LedOutput<'d> {
     }
 
     pub fn write(&mut self, frame: &Frame) -> anyhow::Result<()> {
-        let pixels = frame
-            .pixels()
-            .iter()
-            .map(|c| RGB8::new(c.r / 3, c.g / 3, c.b / 3));
+        let pixels = frame.pixels().iter().map(|c| RGB8::new(c.r, c.g, c.b));
         self.driver
             .write(pixels)
             .map_err(|e| anyhow::anyhow!("LED write failed: {e:?}"))?;

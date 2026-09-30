@@ -23,6 +23,10 @@ impl Frame {
     pub fn pixels(&self) -> &[Rgb] {
         &self.0
     }
+
+    pub fn pixels_mut(&mut self) -> &mut [Rgb] {
+        &mut self.0
+    }
 }
 
 #[cfg(test)]

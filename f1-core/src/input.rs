@@ -45,4 +45,5 @@ pub enum Input {
     Net(NetStatus),
     Override(Option<Effect>),
     Settings(Settings),
+    Clock { minute_of_day: u16 },
 }
