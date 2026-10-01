@@ -5,6 +5,7 @@ use std::{
 };
 
 use esp_idf_svc::hal::peripherals::Peripherals;
+use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use f1_core::{controller::Controller, frame::Frame, input::Input};
 use io::led::LedOutput;
 use ws2812_esp32_rmt_driver::Ws2812Esp32Rmt;
@@ -36,8 +37,14 @@ fn main() -> anyhow::Result<()> {
     log::info!("SSID: {}", CONFIG.wifi_ssid);
 
     let peripherals = Peripherals::take()?;
+    let sys_loop = EspSystemEventLoop::take()?;
+    let nvs = EspDefaultNvsPartition::take()?;
+
     #[allow(deprecated)] // ws2812-esp32-rmt-driver 0.14 only supports the legacy RMT API
     let driver = Ws2812Esp32Rmt::new(peripherals.rmt.channel0, peripherals.pins.gpio2)?;
+
+    let modem = peripherals.modem;
+    let _net = (modem, sys_loop, nvs);
 
     let mut leds = LedOutput::new(driver);
     leds.write(&Frame::new())?;
