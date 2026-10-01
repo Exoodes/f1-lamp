@@ -35,7 +35,7 @@ const HEAP_LOG_EVERY: Duration = Duration::from_secs(60);
 /// Wait before the first reconnect attempt; doubles after each failure.
 const FIRST_RETRY_WAIT: Duration = Duration::from_secs(1);
 /// The reconnect wait never grows beyond this.
-const MAX_RETRY_WAIT: Duration = Duration::from_secs(60);
+const MAX_RETRY_WAIT: Duration = Duration::from_secs(30);
 
 /// When each of the thread's jobs is next due.
 struct Deadlines {
