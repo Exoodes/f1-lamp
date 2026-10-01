@@ -17,22 +17,18 @@ mod net;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(20);
 
-#[toml_cfg::toml_config]
-pub struct Config {
-    #[default("")]
-    wifi_ssid: &'static str,
-    #[default("")]
-    wifi_psk: &'static str,
-}
+// WiFi credentials from f1/cfg.toml, passed in by build.rs.
+const WIFI_SSID: &str = env!("WIFI_SSID");
+const WIFI_PSK: &str = env!("WIFI_PSK");
 
 fn main() -> anyhow::Result<()> {
     esp_idf_svc::sys::link_patches();
 
     esp_idf_svc::log::EspLogger::initialize_default();
-    if CONFIG.wifi_ssid.is_empty() {
-        log::warn!("WiFi SSID is empty: is f1/cfg.toml missing, or is its table not named [f1]?");
+    if WIFI_SSID.is_empty() {
+        log::warn!("WiFi SSID is empty: set wifi_ssid in f1/cfg.toml");
     }
-    log::info!("SSID: {}", CONFIG.wifi_ssid);
+    log::info!("SSID: {WIFI_SSID}");
 
     let peripherals = Peripherals::take()?;
     let sys_loop = EspSystemEventLoop::take()?;
