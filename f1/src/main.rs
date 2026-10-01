@@ -25,11 +25,8 @@ pub struct Config {
 }
 
 fn main() -> anyhow::Result<()> {
-    // It is necessary to call this function once. Otherwise, some patches to the runtime
-    // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
     esp_idf_svc::sys::link_patches();
 
-    // Bind the log crate to the ESP Logging facilities
     esp_idf_svc::log::EspLogger::initialize_default();
     if CONFIG.wifi_ssid.is_empty() {
         log::warn!("WiFi SSID is empty: is f1/cfg.toml missing, or is its table not named [f1]?");
@@ -40,14 +37,19 @@ fn main() -> anyhow::Result<()> {
     let sys_loop = EspSystemEventLoop::take()?;
     let nvs = EspDefaultNvsPartition::take()?;
 
-    #[allow(deprecated)] // ws2812-esp32-rmt-driver 0.14 only supports the legacy RMT API
+    #[allow(deprecated)]
     let driver = Ws2812Esp32Rmt::new(peripherals.rmt.channel0, peripherals.pins.gpio2)?;
-
-    let modem = peripherals.modem;
-    let _net = (modem, sys_loop, nvs);
 
     let mut leds = LedOutput::new(driver);
     leds.write(&Frame::new())?;
+
+    let _wifi = io::wifi::connect(
+        peripherals.modem,
+        sys_loop.clone(),
+        nvs.clone(),
+        CONFIG.wifi_ssid,
+        CONFIG.wifi_psk,
+    )?;
 
     let (tx, rx) = mpsc::sync_channel::<Input>(32);
     #[cfg(feature = "fake")]
@@ -55,6 +57,7 @@ fn main() -> anyhow::Result<()> {
         fake::spawn(tx.clone())?;
         log::info!("fake race started");
     }
+
     let _ = &tx;
 
     let mut controller = Controller::new(Instant::now());
