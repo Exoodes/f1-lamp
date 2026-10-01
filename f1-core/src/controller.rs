@@ -319,6 +319,27 @@ mod tests {
     }
 
     #[test]
+    fn status_layer_follows_network_through_connect_error_and_recovery() {
+        let t0 = Instant::now();
+        let mut c = Controller::new(t0);
+        c.apply(Input::Phase(SessionPhase::Live), t0);
+        c.apply(flag(TrackFlag::Green, t0), t0);
+
+        let connecting = net_effect(NetStatus::Connecting).unwrap();
+        assert_eq!(winner_at(&mut c, t0), ("status", connecting));
+
+        c.apply(Input::Net(NetStatus::Online), t0 + ms(10));
+        assert_eq!(winner_at(&mut c, t0 + ms(10)).0, "live track");
+
+        c.apply(Input::Net(NetStatus::ApiError), t0 + ms(20));
+        let error = net_effect(NetStatus::ApiError).unwrap();
+        assert_eq!(winner_at(&mut c, t0 + ms(20)), ("status", error));
+
+        c.apply(Input::Net(NetStatus::Online), t0 + ms(30));
+        assert_eq!(winner_at(&mut c, t0 + ms(30)).0, "live track");
+    }
+
+    #[test]
     fn status_shows_before_a_session_when_offline() {
         let t0 = Instant::now();
         let mut c = Controller::new(t0);
