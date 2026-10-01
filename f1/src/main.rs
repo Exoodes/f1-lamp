@@ -1,6 +1,6 @@
 use std::{
     sync::mpsc,
-    thread,
+    thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
@@ -16,6 +16,8 @@ mod io;
 mod net;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(20);
+/// How often the render loop checks that all threads are still running.
+const THREAD_CHECK_EVERY: Duration = Duration::from_secs(1);
 
 // WiFi credentials from f1/cfg.toml, passed in by build.rs.
 const WIFI_SSID: &str = env!("WIFI_SSID");
@@ -41,19 +43,30 @@ fn main() -> anyhow::Result<()> {
     leds.write(&Frame::new())?;
 
     let (tx, rx) = mpsc::sync_channel::<Input>(32);
-    net::spawn(peripherals.modem, sys_loop.clone(), nvs.clone(), tx.clone())?;
+    // Every spawned thread, watched by `check_threads`.
+    let threads = [
+        (
+            "net",
+            net::spawn(peripherals.modem, sys_loop.clone(), nvs.clone(), tx.clone())?,
+        ),
+        #[cfg(feature = "fake")]
+        ("fake", fake::spawn(tx.clone())?),
+    ];
     #[cfg(feature = "fake")]
-    {
-        fake::spawn(tx.clone())?;
-        log::info!("fake race started");
-    }
+    log::info!("fake race started");
 
     let mut controller = Controller::new(Instant::now());
     let mut frame = Frame::new();
     let mut last_layer = "";
+    let mut next_thread_check = Instant::now() + THREAD_CHECK_EVERY;
 
     loop {
         let now = Instant::now();
+
+        if now >= next_thread_check {
+            check_threads(&threads);
+            next_thread_check = now + THREAD_CHECK_EVERY;
+        }
 
         while let Ok(input) = rx.try_recv() {
             log::info!("input: {input:?}");
@@ -71,4 +84,20 @@ fn main() -> anyhow::Result<()> {
 
         thread::sleep(FRAME_INTERVAL);
     }
+}
+
+/// Restarts the chip if any thread has ended, for whatever reason: a panic,
+/// an error, or a normal return. The lamp can't work with a thread missing,
+/// and a fresh boot is the simplest way to get it back.
+fn check_threads(threads: &[(&str, JoinHandle<()>)]) {
+    if let Some((name, _)) = threads.iter().find(|(_, handle)| handle.is_finished()) {
+        log::error!("thread {name} stopped, restarting");
+        restart();
+    }
+}
+
+fn restart() -> ! {
+    // SAFETY: `esp_restart` takes no arguments and has no preconditions; it
+    // reboots the chip and never returns.
+    unsafe { esp_idf_svc::sys::esp_restart() }
 }
