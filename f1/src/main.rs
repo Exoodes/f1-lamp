@@ -15,6 +15,14 @@ mod io;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(20);
 
+#[toml_cfg::toml_config]
+pub struct Config {
+    #[default("")]
+    wifi_ssid: &'static str,
+    #[default("")]
+    wifi_psk: &'static str,
+}
+
 fn main() -> anyhow::Result<()> {
     // It is necessary to call this function once. Otherwise, some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
@@ -22,6 +30,10 @@ fn main() -> anyhow::Result<()> {
 
     // Bind the log crate to the ESP Logging facilities
     esp_idf_svc::log::EspLogger::initialize_default();
+    if CONFIG.wifi_ssid.is_empty() {
+        log::warn!("WiFi SSID is empty: is f1/cfg.toml missing, or is its table not named [f1]?");
+    }
+    log::info!("SSID: {}", CONFIG.wifi_ssid);
 
     let peripherals = Peripherals::take()?;
     #[allow(deprecated)] // ws2812-esp32-rmt-driver 0.14 only supports the legacy RMT API
