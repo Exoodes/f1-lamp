@@ -6,13 +6,19 @@ use esp_idf_svc::{
     wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi},
 };
 
-pub fn connect(
+/// The WiFi driver in station mode, with blocking connect calls.
+pub type Wifi = BlockingWifi<EspWifi<'static>>;
+
+/// Sets up and starts WiFi in station mode, without connecting yet.
+/// Call once: it takes the modem. The connection lives as long as the
+/// returned value, so drop it and WiFi stops.
+pub fn create(
     modem: Modem<'static>,
     sys_loop: EspSystemEventLoop,
     nvs: EspDefaultNvsPartition,
     ssid: &str,
     password: &str,
-) -> anyhow::Result<BlockingWifi<EspWifi<'static>>> {
+) -> anyhow::Result<Wifi> {
     let driver = EspWifi::new(modem, sys_loop.clone(), Some(nvs)).context("create wifi driver")?;
     let mut wifi = BlockingWifi::wrap(driver, sys_loop).context("wrap wifi driver")?;
 
@@ -29,7 +35,16 @@ pub fn connect(
     .context("configure wifi")?;
 
     wifi.start().context("start wifi")?;
-    log::info!("connecting to {ssid}");
+    log::info!("wifi started, SSID {ssid}");
+    Ok(wifi)
+}
+
+/// Connects and blocks until the router has given us an IP address.
+/// Safe to call again after a failure or a lost connection.
+pub fn connect(wifi: &mut Wifi) -> anyhow::Result<()> {
+    // A retry may find the driver half-connected; start from a clean state.
+    // Fails harmlessly when there is nothing to disconnect.
+    let _ = wifi.disconnect();
     wifi.connect().context("connect to wifi")?;
     wifi.wait_netif_up().context("wait for IP address")?;
 
@@ -40,5 +55,5 @@ pub fn connect(
         .context("read IP address")?;
     log::info!("wifi up, IP {}", ip_info.ip);
 
-    Ok(wifi)
+    Ok(())
 }

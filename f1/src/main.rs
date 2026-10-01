@@ -13,6 +13,7 @@ use ws2812_esp32_rmt_driver::Ws2812Esp32Rmt;
 #[cfg(feature = "fake")]
 mod fake;
 mod io;
+mod net;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(20);
 
@@ -43,22 +44,13 @@ fn main() -> anyhow::Result<()> {
     let mut leds = LedOutput::new(driver);
     leds.write(&Frame::new())?;
 
-    let _wifi = io::wifi::connect(
-        peripherals.modem,
-        sys_loop.clone(),
-        nvs.clone(),
-        CONFIG.wifi_ssid,
-        CONFIG.wifi_psk,
-    )?;
-
     let (tx, rx) = mpsc::sync_channel::<Input>(32);
+    net::spawn(peripherals.modem, sys_loop.clone(), nvs.clone(), tx.clone())?;
     #[cfg(feature = "fake")]
     {
         fake::spawn(tx.clone())?;
         log::info!("fake race started");
     }
-
-    let _ = &tx;
 
     let mut controller = Controller::new(Instant::now());
     let mut frame = Frame::new();
