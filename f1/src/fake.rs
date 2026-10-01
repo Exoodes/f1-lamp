@@ -6,7 +6,7 @@ use std::{
 
 use f1_core::{
     color::Rgb,
-    input::{Input, NetStatus, RaceEvent, SessionPhase, TrackFlag},
+    input::{Input, RaceEvent, SessionPhase, TrackFlag},
     settings::Settings,
 };
 
@@ -62,11 +62,7 @@ pub fn spawn(tx: SyncSender<Input>) -> anyhow::Result<JoinHandle<()>> {
     Ok(handle)
 }
 
-/// Loops forever: a live race in daytime, then an evening where the lamp dims.
-/// Only returns if the render loop has gone away.
 fn play(tx: &SyncSender<Input>) -> Result<(), SendError<Input>> {
-    // Without `Online` the status layer wins and the ring just breathes blue.
-    tx.send(Input::Net(NetStatus::Online))?;
     tx.send(Input::Settings(Settings {
         night_start: Some(22 * 60),
         night_end: Some(7 * 60),
@@ -75,9 +71,6 @@ fn play(tx: &SyncSender<Input>) -> Result<(), SendError<Input>> {
 
     loop {
         tx.send(Input::Phase(SessionPhase::Live))?;
-        tx.send(Input::Clock {
-            minute_of_day: 14 * 60,
-        })?;
         for (event, hold) in SCRIPT {
             tx.send(Input::Race {
                 event,
@@ -86,12 +79,7 @@ fn play(tx: &SyncSender<Input>) -> Result<(), SendError<Input>> {
             thread::sleep(hold);
         }
 
-        // After the race: the lamp at day brightness, then night falls.
         tx.send(Input::Phase(SessionPhase::PostSession))?;
-        thread::sleep(Duration::from_secs(4));
-        tx.send(Input::Clock {
-            minute_of_day: 23 * 60,
-        })?;
-        thread::sleep(Duration::from_secs(6));
+        thread::sleep(Duration::from_secs(10));
     }
 }

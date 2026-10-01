@@ -28,3 +28,6 @@ anyhow = "1.0.104"
 
 [build-dependencies]
 embuild = "0.33.5"
+
+[features]
+fake = []

@@ -9,6 +9,7 @@ use f1_core::{controller::Controller, frame::Frame, input::Input};
 use io::led::LedOutput;
 use ws2812_esp32_rmt_driver::Ws2812Esp32Rmt;
 
+#[cfg(feature = "fake")]
 mod fake;
 mod io;
 
@@ -30,8 +31,12 @@ fn main() -> anyhow::Result<()> {
     leds.write(&Frame::new())?;
 
     let (tx, rx) = mpsc::sync_channel::<Input>(32);
-    fake::spawn(tx)?;
-    log::info!("fake race started");
+    #[cfg(feature = "fake")]
+    {
+        fake::spawn(tx.clone())?;
+        log::info!("fake race started");
+    }
+    let _ = &tx;
 
     let mut controller = Controller::new(Instant::now());
     let mut frame = Frame::new();
