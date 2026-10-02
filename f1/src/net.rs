@@ -6,13 +6,14 @@ use std::{
 
 use anyhow::Context;
 use esp_idf_svc::{
-    eventloop::EspSystemEventLoop, hal::modem::Modem, nvs::EspDefaultNvsPartition, sntp::EspSntp,
+    eventloop::EspSystemEventLoop, hal::modem::Modem, http::server::EspHttpServer,
+    nvs::EspDefaultNvsPartition, sntp::EspSntp,
 };
 use f1_core::input::{Input, NetStatus};
 
 use crate::{
     io::{clock, wifi},
-    WIFI_PSK, WIFI_SSID,
+    web, WIFI_PSK, WIFI_SSID,
 };
 
 /// Spawns the network thread, which owns WiFi and reports its status.
@@ -72,6 +73,9 @@ fn run(
     clock::set_timezone();
     // Kept alive here: time only syncs while this exists. Started once WiFi is up.
     let mut sntp: Option<EspSntp<'static>> = None;
+    // Same here: dropping it stops the server. Started once WiFi is up, as the
+    // TCP/IP stack doesn't exist before WiFi is created.
+    let mut server: Option<EspHttpServer<'static>> = None;
 
     let mut retry_wait = FIRST_RETRY_WAIT;
     let now = Instant::now();
@@ -90,6 +94,9 @@ fn run(
         if sntp.is_none() && wifi.is_up().unwrap_or(false) {
             sntp = Some(EspSntp::new_default().context("start SNTP")?);
             log::info!("SNTP started");
+        }
+        if server.is_none() && wifi.is_up().unwrap_or(false) {
+            server = Some(web::start().context("start web server")?);
         }
         if now >= due.clock {
             due.clock = match clock::minute_of_day() {

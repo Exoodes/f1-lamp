@@ -16,6 +16,7 @@ use ws2812_esp32_rmt_driver::Ws2812Esp32Rmt;
 mod fake;
 mod io;
 mod net;
+mod web;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(20);
 /// How often the render loop checks that all threads are still running.
