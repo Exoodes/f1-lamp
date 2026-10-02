@@ -58,12 +58,24 @@ fn main() -> anyhow::Result<()> {
     let mut leds = LedOutput::new(driver);
     leds.write(&Frame::new())?;
 
+    let mut controller = Controller::new(Instant::now());
+    controller.apply(Input::Settings(storage.load()), Instant::now());
+    // Written by the render loop, read by the web server.
+    let snapshot = Arc::new(Mutex::new(controller.snapshot()));
+    let mut last_snapshot = controller.snapshot();
+
     let (tx, rx) = mpsc::sync_channel::<Input>(32);
     // Every spawned thread, watched by `check_threads`.
     let threads = [
         (
             "net",
-            net::spawn(peripherals.modem, sys_loop.clone(), nvs.clone(), tx.clone())?,
+            net::spawn(
+                peripherals.modem,
+                sys_loop.clone(),
+                nvs.clone(),
+                tx.clone(),
+                Arc::clone(&snapshot),
+            )?,
         ),
         #[cfg(feature = "fake")]
         ("fake", fake::spawn(tx.clone())?),
@@ -71,13 +83,8 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "fake")]
     log::info!("fake race started");
 
-    let mut controller = Controller::new(Instant::now());
     let mut frame = Frame::new();
     let mut next_thread_check = Instant::now() + THREAD_CHECK_EVERY;
-
-    controller.apply(Input::Settings(storage.load()), Instant::now());
-    let snapshot = Arc::new(Mutex::new(controller.snapshot()));
-    let mut last_snapshot = controller.snapshot();
 
     loop {
         let now = Instant::now();

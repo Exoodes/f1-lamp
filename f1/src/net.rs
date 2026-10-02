@@ -1,5 +1,5 @@
 use std::{
-    sync::mpsc::SyncSender,
+    sync::{mpsc::SyncSender, Arc, Mutex},
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -9,25 +9,30 @@ use esp_idf_svc::{
     eventloop::EspSystemEventLoop, hal::modem::Modem, http::server::EspHttpServer,
     nvs::EspDefaultNvsPartition, sntp::EspSntp,
 };
-use f1_core::input::{Input, NetStatus};
+use f1_core::{
+    input::{Input, NetStatus},
+    snapshot::Snapshot,
+};
 
 use crate::{
     io::{clock, wifi},
     web, WIFI_PSK, WIFI_SSID,
 };
 
-/// Spawns the network thread, which owns WiFi and reports its status.
+/// Spawns the network thread, which owns WiFi and the web server and reports
+/// the network status.
 pub fn spawn(
     modem: Modem<'static>,
     sys_loop: EspSystemEventLoop,
     nvs: EspDefaultNvsPartition,
     tx: SyncSender<Input>,
+    snapshot: Arc<Mutex<Snapshot>>,
 ) -> anyhow::Result<JoinHandle<()>> {
     let handle = thread::Builder::new()
         .name("net".into())
         .stack_size(16 * 1024)
         .spawn(move || {
-            if let Err(e) = run(modem, sys_loop, nvs, &tx) {
+            if let Err(e) = run(modem, sys_loop, nvs, &tx, snapshot) {
                 log::error!("network thread stopped: {e:#}");
             }
         })?;
@@ -66,6 +71,7 @@ fn run(
     sys_loop: EspSystemEventLoop,
     nvs: EspDefaultNvsPartition,
     tx: &SyncSender<Input>,
+    snapshot: Arc<Mutex<Snapshot>>,
 ) -> anyhow::Result<()> {
     let mut status = None;
     report(tx, &mut status, NetStatus::Connecting)?;
@@ -96,7 +102,8 @@ fn run(
             log::info!("SNTP started");
         }
         if server.is_none() && wifi.is_up().unwrap_or(false) {
-            server = Some(web::start().context("start web server")?);
+            server =
+                Some(web::start(Arc::clone(&snapshot), tx.clone()).context("start web server")?);
         }
         if now >= due.clock {
             due.clock = match clock::minute_of_day() {
