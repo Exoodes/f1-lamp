@@ -7,6 +7,7 @@ use crate::{
     overlays::Overlays,
     post,
     settings::Settings,
+    snapshot::Snapshot,
     theme::{event_overlay, flag_effect, net_effect, winner_effect},
 };
 
@@ -204,6 +205,18 @@ impl Controller {
         Scene {
             effect: Effect::Solid(settings.lamp_color.scale(settings.lamp_brightness)),
             started: self.booted,
+        }
+    }
+
+    /// What the web page shows. Call after `render`, which ticks, so expired
+    /// overlays and winners are not reported.
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            layer: self.arbitrate().0,
+            phase: self.layers.phase,
+            net: self.layers.net.value,
+            override_active: self.layers.override_effect.is_some(),
+            settings: self.layers.settings,
         }
     }
 }

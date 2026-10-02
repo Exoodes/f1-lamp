@@ -8,4 +8,5 @@ pub mod input;
 pub mod overlays;
 pub mod post;
 pub mod settings;
+pub mod snapshot;
 pub mod theme;

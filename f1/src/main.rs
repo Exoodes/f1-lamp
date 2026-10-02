@@ -1,5 +1,5 @@
 use std::{
-    sync::mpsc,
+    sync::{mpsc, Arc, Mutex},
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -72,10 +72,11 @@ fn main() -> anyhow::Result<()> {
 
     let mut controller = Controller::new(Instant::now());
     let mut frame = Frame::new();
-    let mut last_layer = "";
     let mut next_thread_check = Instant::now() + THREAD_CHECK_EVERY;
 
     controller.apply(Input::Settings(storage.load()), Instant::now());
+    let snapshot = Arc::new(Mutex::new(controller.snapshot()));
+    let mut last_snapshot = controller.snapshot();
 
     loop {
         let now = Instant::now();
@@ -93,13 +94,20 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        let layer = controller.render(now, &mut frame);
-        if layer != last_layer {
-            log::info!("layer: {layer}");
-            last_layer = layer;
-        }
+        controller.render(now, &mut frame);
         if let Err(e) = leds.write(&frame) {
             log::warn!("{e}");
+        }
+
+        // After render, which ticks, so expired overlays don't show.
+        let snap = controller.snapshot();
+        if snap != last_snapshot {
+            *snapshot.lock().unwrap() = snap;
+            match serde_json::to_string(&snap) {
+                Ok(json) => log::info!("snapshot: {json}"),
+                Err(e) => log::warn!("snapshot not serialisable: {e}"),
+            }
+            last_snapshot = snap;
         }
 
         storage.save_if_due(now);

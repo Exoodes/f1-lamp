@@ -1,5 +1,7 @@
 use std::time::Instant;
 
+use serde::Serialize;
+
 use crate::{color::Rgb, effect::Effect, settings::Settings};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,7 +25,8 @@ pub enum RaceEvent {
     Winner { driver: u8, team_color: Rgb },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SessionPhase {
     Idle,
     PreSession,
@@ -31,7 +34,8 @@ pub enum SessionPhase {
     PostSession,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum NetStatus {
     Connecting,
     Online,
