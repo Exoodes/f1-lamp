@@ -8,7 +8,7 @@ use f1_core::settings::Settings;
 const NAMESPACE: &str = "f1";
 const KEY: &str = "settings";
 /// Flash wears out with writes, so changes are saved at most this often.
-const SAVE_EVERY: Duration = Duration::from_secs(60);
+const SAVE_EVERY: Duration = Duration::from_secs(5);
 
 /// Keeps `Settings` in flash as JSON, so they survive a reboot.
 pub struct SettingsStore {

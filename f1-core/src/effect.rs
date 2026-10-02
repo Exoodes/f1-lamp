@@ -9,6 +9,8 @@ use crate::{
 const BREATHE_FLOOR: f32 = 0.1;
 const FLASH_PERIOD_MS: u32 = 300;
 const CHEQUERED_SWAP_MS: u32 = 500;
+/// Chequered pattern: one lit pixel, then three dark ones.
+const CHEQUERED_SPACING: usize = 4;
 const START_LIGHTS: usize = 5;
 const START_LIGHT_INTERVAL_MS: u64 = 1000;
 const START_LIGHTS_DARK_MS: u64 = 1000;
@@ -141,9 +143,12 @@ fn handle_chequered(frame: &mut Frame, duration_ms: u128, elapsed: Duration) {
         return;
     }
 
+    // Two patterns half a spacing apart, swapping every half second: each lit
+    // pixel of one sits in the middle of a gap of the other.
     let swapped = (elapsed_ms / u128::from(CHEQUERED_SWAP_MS)) % 2 == 1;
+    let offset = if swapped { CHEQUERED_SPACING / 2 } else { 0 };
     for i in 0..NUM_LEDS {
-        let is_white = (i % 2 == 0) != swapped;
+        let is_white = i % CHEQUERED_SPACING == offset;
         frame.set(i, if is_white { Rgb::WHITE } else { Rgb::OFF });
     }
 }
@@ -438,30 +443,31 @@ mod tests {
     // Swaps every 500 ms, finished after 3000 ms.
     const CHEQUERED: Effect = Effect::Chequered { duration_ms: 3000 };
 
-    fn is_chequered(frame: &Frame, even: Rgb, odd: Rgb) -> bool {
+    /// True if exactly every fourth pixel is white, starting at `first`, and the rest are off.
+    fn is_every_fourth_white_from(frame: &Frame, first: usize) -> bool {
         frame
             .pixels()
             .iter()
             .enumerate()
-            .all(|(i, &c)| c == if i % 2 == 0 { even } else { odd })
+            .all(|(i, &c)| c == if i % 4 == first { Rgb::WHITE } else { Rgb::OFF })
     }
 
     #[test]
-    fn chequered_starts_with_even_pixels_white() {
+    fn chequered_starts_with_every_fourth_pixel_white_from_the_first() {
         let frame = render_at(CHEQUERED, 0);
-        assert!(is_chequered(&frame, Rgb::WHITE, Rgb::OFF));
+        assert!(is_every_fourth_white_from(&frame, 0));
     }
 
     #[test]
-    fn chequered_swaps_after_half_a_second() {
+    fn chequered_shifts_by_two_pixels_after_half_a_second() {
         let frame = render_at(CHEQUERED, 501);
-        assert!(is_chequered(&frame, Rgb::OFF, Rgb::WHITE));
+        assert!(is_every_fourth_white_from(&frame, 2));
     }
 
     #[test]
-    fn chequered_swaps_back_after_one_second() {
+    fn chequered_shifts_back_after_one_second() {
         let frame = render_at(CHEQUERED, 1001);
-        assert!(is_chequered(&frame, Rgb::WHITE, Rgb::OFF));
+        assert!(is_every_fourth_white_from(&frame, 0));
     }
 
     #[test]
@@ -473,11 +479,14 @@ mod tests {
     }
 
     #[test]
-    fn chequered_neighbours_always_differ_while_running() {
+    fn chequered_lit_pixels_never_touch_while_running() {
         for ms in (0..3000).step_by(50) {
             let frame = render_at(CHEQUERED, ms);
-            let differ = frame.pixels().windows(2).all(|w| w[0] != w[1]);
-            assert!(differ, "neighbours match at {ms} ms");
+            let touch = frame
+                .pixels()
+                .windows(2)
+                .any(|w| w[0] == Rgb::WHITE && w[1] == Rgb::WHITE);
+            assert!(!touch, "lit pixels touch at {ms} ms");
         }
     }
 

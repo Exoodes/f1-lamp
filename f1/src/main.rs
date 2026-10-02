@@ -5,6 +5,8 @@ use std::{
 };
 
 use esp_idf_svc::hal::peripherals::Peripherals;
+#[allow(deprecated)]
+use esp_idf_svc::hal::rmt::{config::TransmitConfig, TxRmtDriver};
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use f1_core::{controller::Controller, frame::Frame, input::Input};
 use io::led::LedOutput;
@@ -38,8 +40,19 @@ fn main() -> anyhow::Result<()> {
 
     let mut storage = io::storage::SettingsStore::new(nvs.clone())?;
 
+    // ws2812-esp32-rmt-driver 0.14 only supports the legacy RMT API.
+    // One RMT memory block holds just 2 LEDs' worth of signal, so the driver
+    // refills it ~20 times per frame; WiFi can delay a refill, which breaks
+    // the frame and makes LEDs flicker. Channel 0 borrows the blocks of the
+    // unused channels 1-3, giving each refill 4x more time.
     #[allow(deprecated)]
-    let driver = Ws2812Esp32Rmt::new(peripherals.rmt.channel0, peripherals.pins.gpio2)?;
+    let driver = {
+        let config = TransmitConfig::new()
+            .clock_divider(1) // required by the ws2812 driver
+            .mem_block_num(4);
+        let tx = TxRmtDriver::new(peripherals.rmt.channel0, peripherals.pins.gpio2, &config)?;
+        Ws2812Esp32Rmt::new_with_rmt_driver(tx)?
+    };
 
     let mut leds = LedOutput::new(driver);
     leds.write(&Frame::new())?;
