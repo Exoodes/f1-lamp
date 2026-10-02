@@ -36,6 +36,8 @@ fn main() -> anyhow::Result<()> {
     let sys_loop = EspSystemEventLoop::take()?;
     let nvs = EspDefaultNvsPartition::take()?;
 
+    let mut storage = io::storage::SettingsStore::new(nvs.clone())?;
+
     #[allow(deprecated)]
     let driver = Ws2812Esp32Rmt::new(peripherals.rmt.channel0, peripherals.pins.gpio2)?;
 
@@ -60,6 +62,8 @@ fn main() -> anyhow::Result<()> {
     let mut last_layer = "";
     let mut next_thread_check = Instant::now() + THREAD_CHECK_EVERY;
 
+    controller.apply(Input::Settings(storage.load()), Instant::now());
+
     loop {
         let now = Instant::now();
 
@@ -71,6 +75,9 @@ fn main() -> anyhow::Result<()> {
         while let Ok(input) = rx.try_recv() {
             log::info!("input: {input:?}");
             controller.apply(input, now);
+            if let Input::Settings(s) = input {
+                storage.changed(s);
+            }
         }
 
         let layer = controller.render(now, &mut frame);
@@ -82,6 +89,7 @@ fn main() -> anyhow::Result<()> {
             log::warn!("{e}");
         }
 
+        storage.save_if_due(now);
         thread::sleep(FRAME_INTERVAL);
     }
 }
