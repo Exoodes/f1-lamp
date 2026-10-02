@@ -15,7 +15,7 @@ use f1_core::{
 };
 
 use crate::{
-    io::{clock, wifi},
+    io::{clock, mdns, wifi},
     web, WIFI_PSK, WIFI_SSID,
 };
 
@@ -76,6 +76,7 @@ fn run(
     let mut status = None;
     report(tx, &mut status, NetStatus::Connecting)?;
     let mut wifi = wifi::create(modem, sys_loop, nvs, WIFI_SSID, WIFI_PSK)?;
+    let _mdns = mdns::start().context("start mDNS")?;
     clock::set_timezone();
     // Kept alive here: time only syncs while this exists. Started once WiFi is up.
     let mut sntp: Option<EspSntp<'static>> = None;
