@@ -5,10 +5,15 @@ use std::{
 };
 
 use anyhow::Context;
-use esp_idf_svc::{eventloop::EspSystemEventLoop, hal::modem::Modem, nvs::EspDefaultNvsPartition};
+use esp_idf_svc::{
+    eventloop::EspSystemEventLoop, hal::modem::Modem, nvs::EspDefaultNvsPartition, sntp::EspSntp,
+};
 use f1_core::input::{Input, NetStatus};
 
-use crate::{io::wifi, WIFI_PSK, WIFI_SSID};
+use crate::{
+    io::{clock, wifi},
+    WIFI_PSK, WIFI_SSID,
+};
 
 /// Spawns the network thread, which owns WiFi and reports its status.
 pub fn spawn(
@@ -36,16 +41,21 @@ const HEAP_LOG_EVERY: Duration = Duration::from_secs(60);
 const FIRST_RETRY_WAIT: Duration = Duration::from_secs(1);
 /// The reconnect wait never grows beyond this.
 const MAX_RETRY_WAIT: Duration = Duration::from_secs(30);
+/// How often to send the time once it's known.
+const CLOCK_EVERY: Duration = Duration::from_secs(30);
+/// How often to look for the first valid time after boot.
+const CLOCK_WAITING_EVERY: Duration = Duration::from_secs(1);
 
 /// When each of the thread's jobs is next due.
 struct Deadlines {
     wifi_check: Instant,
     heap_log: Instant,
+    clock: Instant,
 }
 
 impl Deadlines {
     fn earliest(&self) -> Instant {
-        self.wifi_check.min(self.heap_log)
+        self.wifi_check.min(self.heap_log).min(self.clock)
     }
 }
 
@@ -59,12 +69,16 @@ fn run(
     let mut status = None;
     report(tx, &mut status, NetStatus::Connecting)?;
     let mut wifi = wifi::create(modem, sys_loop, nvs, WIFI_SSID, WIFI_PSK)?;
+    clock::set_timezone();
+    // Kept alive here: time only syncs while this exists. Started once WiFi is up.
+    let mut sntp: Option<EspSntp<'static>> = None;
 
     let mut retry_wait = FIRST_RETRY_WAIT;
     let now = Instant::now();
     let mut due = Deadlines {
         wifi_check: now,
         heap_log: now,
+        clock: now,
     };
 
     loop {
@@ -72,6 +86,22 @@ fn run(
 
         if now >= due.wifi_check {
             due.wifi_check = check_wifi(&mut wifi, tx, &mut status, &mut retry_wait)?;
+        }
+        if sntp.is_none() && wifi.is_up().unwrap_or(false) {
+            sntp = Some(EspSntp::new_default().context("start SNTP")?);
+            log::info!("SNTP started");
+        }
+        if now >= due.clock {
+            due.clock = match clock::minute_of_day() {
+                // Until the first sync nothing is sent, so the core keeps "not night".
+                None => now + CLOCK_WAITING_EVERY,
+                Some(minute_of_day) => {
+                    log::info!("clock: {:02}:{:02}", minute_of_day / 60, minute_of_day % 60);
+                    tx.send(Input::Clock { minute_of_day })
+                        .context("render loop is gone")?;
+                    now + CLOCK_EVERY
+                }
+            };
         }
         if now >= due.heap_log {
             let (free, min_free) = heap();
