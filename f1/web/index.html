@@ -1,42 +1,297 @@
 <!doctype html>
 <html lang="en">
 <head>
-	<meta charset="utf-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<title>F1 Lightbox</title>
-	<style>
-		body {
-			margin: 0;
-			min-height: 100vh;
-			display: grid;
-			place-items: center;
-			background: #15151e;
-			color: #f0f0f0;
-			font-family: system-ui, sans-serif;
-			text-align: center;
-		}
-		h1 {
-			margin: 0 0 0.5rem;
-			font-size: 2rem;
-			letter-spacing: 0.05em;
-		}
-		.stripe {
-			width: 4rem;
-			height: 0.3rem;
-			margin: 0 auto 1rem;
-			background: #e10600;
-		}
-		p {
-			margin: 0;
-			color: #9a9aa5;
-		}
-	</style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>F1 Lightbox</title>
+<!-- Inline icon, so the browser doesn't ask the server for /favicon.ico. -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%23e10600'/></svg>">
+<style>
+  /* Colours used everywhere, defined once. */
+  :root {
+    --bg: #15151e; --card: #1f1f2b; --line: #2e2e3d;
+    --text: #f0f0f0; --muted: #9a9aa5; --red: #e10600; --ok: #2ecc71;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; }
+  main { max-width: 480px; margin: 0 auto; padding: 16px; }
+
+  header { border-top: 4px solid var(--red); padding-top: 12px; margin-bottom: 16px; }
+  h1 { margin: 0; font-size: 1.6rem; }
+  .host { color: var(--muted); font-size: .85rem; }
+
+  /* Each block of the page is a "card". */
+  section { background: var(--card); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+  h2 { margin: 0 0 10px; font-size: .9rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+
+  /* One setting per row: name on the left, control on the right. */
+  label { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 0; }
+  .slider { display: flex; align-items: center; gap: 8px; flex: 1; max-width: 60%; }
+  .slider input { flex: 1; }
+  output { min-width: 3rem; text-align: right; color: var(--muted); }
+  input[type=number], input[type=time] {
+    width: 7.5rem; padding: 6px; font: inherit;
+    background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+  }
+  input[type=color] { width: 3.5rem; height: 2.2rem; border: none; background: none; padding: 0; }
+  .hint { color: var(--muted); font-size: .8rem; margin: 0 0 4px; }
+
+  /* Status: a two-column list of name / value. */
+  .status { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; margin: 0; }
+  .status dt { color: var(--muted); }
+  .status dd { margin: 0; font-weight: 600; }
+  .link { margin: 0 0 10px; }
+  .dot { display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; background: var(--muted); margin-right: 6px; }
+  .dot.on { background: var(--ok); }
+  .dot.off { background: var(--red); }
+
+  button { font: inherit; padding: 10px; border: none; border-radius: 8px; background: var(--line); color: var(--text); cursor: pointer; }
+  button:active { filter: brightness(1.3); }
+  button:disabled { opacity: .4; }
+  button.primary { background: var(--red); width: 100%; font-weight: 600; }
+  /* Flag buttons: two per row, each with a coloured stripe (--c is set per button). */
+  .flags { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .flags button { border-left: 6px solid var(--c); text-align: left; }
+  .row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+  .row button { flex: 1; }
+
+  .msg { min-height: 1.2em; margin: 8px 0 0; color: var(--muted); font-size: .9rem; }
+  .msg.err { color: #ff6b6b; }
+</style>
 </head>
 <body>
-	<main>
-		<div class="stripe"></div>
-		<h1>F1 Lightbox</h1>
-		<p>Pit wall online. Controls coming soon.</p>
-	</main>
+<main>
+  <header>
+    <h1>F1 Lightbox</h1>
+    <div class="host" id="host"></div>
+  </header>
+
+  <section>
+    <h2>Status</h2>
+    <p class="link"><span class="dot" id="dot"></span><span id="link">connecting…</span></p>
+    <dl class="status">
+      <dt>Showing</dt><dd id="s-layer">–</dd>
+      <dt>Session</dt><dd id="s-phase">–</dd>
+      <dt>Network</dt><dd id="s-net">–</dd>
+      <dt>Override</dt><dd id="s-override">–</dd>
+    </dl>
+  </section>
+
+  <section>
+    <h2>Lamp</h2>
+    <label>Colour <input type="color" id="lamp_color"></label>
+    <label>Brightness
+      <span class="slider"><input type="range" id="lamp_brightness" min="0" max="100"><output id="lamp_brightness_out"></output></span>
+    </label>
+  </section>
+
+  <section>
+    <h2>Display</h2>
+    <label>Overall brightness
+      <span class="slider"><input type="range" id="global_brightness" min="0" max="100"><output id="global_brightness_out"></output></span>
+    </label>
+    <label>Winner shown (min) <input type="number" id="winner_minutes" min="0" step="0.5"></label>
+    <label>TV delay (s) <input type="number" id="tv_delay" min="0" step="0.5"></label>
+    <label>Favourite driver no. <input type="number" id="favourite_driver" min="1" max="99" placeholder="none"></label>
+  </section>
+
+  <section>
+    <h2>Night mode</h2>
+    <p class="hint">Leave both times empty to turn night mode off.</p>
+    <label>Starts <input type="time" id="night_start"></label>
+    <label>Ends <input type="time" id="night_end"></label>
+    <label>Brightness
+      <span class="slider"><input type="range" id="night_brightness" min="0" max="100"><output id="night_brightness_out"></output></span>
+    </label>
+  </section>
+
+  <section>
+    <button class="primary" id="save">Save settings</button>
+    <p class="msg" id="save-msg"></p>
+  </section>
+
+  <section>
+    <h2>Force a flag</h2>
+    <div class="flags">
+      <button data-flag="green" style="--c:#00c853">Green</button>
+      <button data-flag="yellow" style="--c:#ffd600">Yellow</button>
+      <button data-flag="double_yellow" style="--c:#ffd600">Double yellow</button>
+      <button data-flag="safety_car" style="--c:#ff9100">Safety car</button>
+      <button data-flag="virtual_safety_car" style="--c:#ffab40">Virtual SC</button>
+      <button data-flag="red" style="--c:#e10600">Red</button>
+    </div>
+    <div class="row">
+      <input type="color" id="override_color" value="#ffffff">
+      <button id="force-color">Force colour</button>
+    </div>
+    <div class="row">
+      <button id="release">Release override</button>
+    </div>
+    <p class="msg" id="override-msg"></p>
+  </section>
+</main>
+
+<script>
+// Shortcut: $("save") instead of document.getElementById("save").
+const $ = (id) => document.getElementById(id);
+
+const SLIDERS = ["lamp_brightness", "global_brightness", "night_brightness"];
+
+// ---- Converting between what the page shows and what the device stores ----
+
+// "22:30" -> 1350 minutes after midnight; "" -> null (no night mode).
+function toMinutes(hhmm) {
+  if (!hhmm) return null;
+  const [h, m] = hhmm.split(":").map(Number);
+  return h * 60 + m;
+}
+
+// 1350 -> "22:30"; null -> "".
+function fromMinutes(min) {
+  if (min === null) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return pad(Math.floor(min / 60)) + ":" + pad(min % 60);
+}
+
+// "" -> null, "44" -> 44.
+function numOrNull(text) {
+  return text === "" ? null : Number(text);
+}
+
+// Shows "40 %" next to a slider. Only updates the page, never the device.
+function showPercent(id) {
+  $(id + "_out").textContent = $(id).value + " %";
+}
+
+// Device settings (JSON from /api/state) -> form fields.
+function fillForm(s) {
+  $("lamp_color").value = s.lamp_color;
+  for (const id of SLIDERS) {
+    $(id).value = Math.round(s[id] * 100);
+    showPercent(id);
+  }
+  $("winner_minutes").value = s.winner_display_ms / 60000;
+  $("tv_delay").value = s.tv_delay_ms / 1000;
+  $("favourite_driver").value = s.favourite_driver ?? "";
+  $("night_start").value = fromMinutes(s.night_start);
+  $("night_end").value = fromMinutes(s.night_end);
+}
+
+// Form fields -> the full settings object the device expects.
+function readForm() {
+  const s = {
+    lamp_color: $("lamp_color").value,
+    winner_display_ms: Math.round(Number($("winner_minutes").value) * 60000),
+    tv_delay_ms: Math.round(Number($("tv_delay").value) * 1000),
+    favourite_driver: numOrNull($("favourite_driver").value),
+    night_start: toMinutes($("night_start").value),
+    night_end: toMinutes($("night_end").value),
+  };
+  for (const id of SLIDERS) s[id] = Number($(id).value) / 100;
+  return s;
+}
+
+// ---- Talking to the device ----
+
+async function getState() {
+  const r = await fetch("/api/state");
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+
+// POSTs JSON. Success is 204 (no body); on error, throws the server's message.
+async function post(url, body) {
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await r.text()) || "HTTP " + r.status);
+}
+
+function message(id, text, isError) {
+  $(id).textContent = text;
+  $(id).className = isError ? "msg err" : "msg";
+}
+
+// "pre_session" -> "pre session"
+const words = (s) => s.replaceAll("_", " ");
+
+function showStatus(state) {
+  $("dot").className = "dot on";
+  $("link").textContent = "connected";
+  $("s-layer").textContent = state.layer;
+  $("s-phase").textContent = words(state.phase);
+  $("s-net").textContent = words(state.net);
+  $("s-override").textContent = state.override_active ? "active" : "none";
+  $("release").disabled = !state.override_active;
+}
+
+// Runs every 2 s. Updates the status only: refilling the form here would
+// undo whatever the user is in the middle of changing.
+async function refreshStatus() {
+  try {
+    showStatus(await getState());
+  } catch {
+    $("dot").className = "dot off";
+    $("link").textContent = "can't reach the lamp";
+  }
+}
+
+async function save() {
+  try {
+    await post("/api/settings", readForm());
+    message("save-msg", "Saved ✓");
+  } catch (e) {
+    message("save-msg", "Not saved: " + e.message, true);
+  }
+}
+
+async function override(body, label) {
+  try {
+    await post("/api/override", body);
+    message("override-msg", label);
+    // The device picks it up on its next frame; give it a moment.
+    setTimeout(refreshStatus, 300);
+  } catch (e) {
+    message("override-msg", "Failed: " + e.message, true);
+  }
+}
+
+// ---- Start-up ----
+
+async function start() {
+  $("host").textContent = location.host;
+
+  for (const id of SLIDERS) {
+    $(id).addEventListener("input", () => showPercent(id));
+  }
+  $("save").addEventListener("click", save);
+  for (const b of document.querySelectorAll("[data-flag]")) {
+    b.addEventListener("click", () =>
+      override({ kind: "flag", flag: b.dataset.flag }, b.textContent + " forced"));
+  }
+  $("force-color").addEventListener("click", () =>
+    override({ kind: "color", color: $("override_color").value }, "Colour forced"));
+  $("release").addEventListener("click", () =>
+    override({ kind: "release" }, "Released"));
+
+  // Fill the form once. If that fails, block Save: an empty form would
+  // overwrite the real settings.
+  $("save").disabled = true;
+  try {
+    const state = await getState();
+    fillForm(state.settings);
+    showStatus(state);
+    $("save").disabled = false;
+  } catch {
+    message("save-msg", "Couldn't load the settings. Reload the page to try again.", true);
+  }
+
+  setInterval(refreshStatus, 2000);
+}
+
+start();
+</script>
 </body>
 </html>
