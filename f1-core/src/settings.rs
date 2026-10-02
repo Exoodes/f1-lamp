@@ -82,12 +82,9 @@ mod tests {
     }
 
     #[test]
-    fn lamp_colour_is_stored_as_named_channels() {
+    fn lamp_colour_is_stored_as_hex_string() {
         let json = serde_json::to_string(&Settings::default()).unwrap();
-        assert!(
-            json.contains(r#""lamp_color":{"r":255,"g":160,"b":60}"#),
-            "{json}"
-        );
+        assert!(json.contains(r##""lamp_color":"#ffa03c""##), "{json}");
     }
 
     #[test]
