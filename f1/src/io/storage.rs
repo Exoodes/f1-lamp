@@ -2,7 +2,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
-use f1_core::{schedule::Session, settings::Settings};
+use f1_core::{
+    schedule::Session,
+    settings::{self, Settings},
+};
 
 /// NVS namespace and keys; NVS limits each to 15 characters.
 const NAMESPACE: &str = "f1";
@@ -30,7 +33,7 @@ impl SettingsStore {
 
     /// The saved settings, or the defaults when none are saved or they can't be read.
     pub fn load(&self) -> Settings {
-        let mut buf = [0u8; 512];
+        let mut buf = [0u8; settings::MAX_JSON];
         match self.nvs.get_str(KEY, &mut buf) {
             Ok(Some(json)) => serde_json::from_str(json)
                 .inspect(|settings| log::info!("settings loaded: {settings:?}"))

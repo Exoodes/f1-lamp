@@ -2,6 +2,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::{color::Rgb, theme::LAMP};
 
+/// The most bytes the settings JSON may take. The firmware reads saved
+/// settings into a buffer this big; a longer entry can't be read and the lamp
+/// falls back to defaults. A test below checks the worst case fits.
+pub const MAX_JSON: usize = 1024;
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -93,5 +98,24 @@ mod tests {
         let settings: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(settings.night_start, None);
         assert_eq!(settings.favourite_driver, None);
+    }
+
+    #[test]
+    fn worst_case_settings_fit_the_nvs_buffer() {
+        // Every field at its longest JSON form: floats with many digits,
+        // the largest numbers, every option set.
+        let settings = Settings {
+            lamp_color: Rgb::new(255, 255, 255),
+            lamp_brightness: 1.0 / 3.0,
+            global_brightness: 2.0 / 3.0,
+            night_start: Some(u16::MAX),
+            night_end: Some(u16::MAX),
+            night_brightness: 1.0 / 7.0,
+            tv_delay_ms: u32::MAX,
+            favourite_driver: Some(u8::MAX),
+            winner_display_ms: u32::MAX,
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(json.len() < MAX_JSON, "{} bytes: {json}", json.len());
     }
 }
