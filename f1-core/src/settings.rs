@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{color::Rgb, drivers::DriverSet, theme::LAMP};
+use crate::{color::Rgb, drivers::DriverSet, input::RaceEvent, theme::LAMP};
 
 /// The most bytes the settings JSON may take. The firmware reads saved
 /// settings into a buffer this big; a longer entry can't be read and the lamp
@@ -49,6 +49,28 @@ impl Default for EffectToggles {
             pit_stop: true,
             overtake: true,
             winner: true,
+        }
+    }
+}
+
+impl Settings {
+    /// Whether the lamp shows `event`: its switch is on and, for pit stops and
+    /// overtakes, the driver is followed (none are by default).
+    pub fn shows(&self, event: RaceEvent) -> bool {
+        let e = &self.effects;
+        // No `_` arm: a new kind of event must get a decision here.
+        match event {
+            RaceEvent::TrackFlag(_) => true,
+            RaceEvent::StartLights => e.start_lights,
+            RaceEvent::ChequeredFlag => e.chequered_flag,
+            RaceEvent::FastestLap { .. } => e.fastest_lap,
+            RaceEvent::PitStop { driver, .. } => {
+                e.pit_stop && self.followed_drivers.contains(driver)
+            }
+            RaceEvent::Overtake { driver, .. } => {
+                e.overtake && self.followed_drivers.contains(driver)
+            }
+            RaceEvent::Winner { .. } => e.winner,
         }
     }
 }
@@ -250,5 +272,123 @@ mod tests {
     fn a_toggle_that_is_not_a_bool_is_rejected() {
         let json = r#"{"effects":{"winner":"no"}}"#;
         assert!(serde_json::from_str::<Settings>(json).is_err());
+    }
+
+    // ---- Which events the lamp shows ----
+
+    use crate::input::TrackFlag;
+
+    const TEAM: Rgb = Rgb::new(0, 210, 190);
+
+    fn pit(driver: u8) -> RaceEvent {
+        RaceEvent::PitStop {
+            driver,
+            team_color: TEAM,
+        }
+    }
+
+    fn overtake(driver: u8) -> RaceEvent {
+        RaceEvent::Overtake {
+            driver,
+            team_color: TEAM,
+        }
+    }
+
+    fn following(drivers: &[u8]) -> Settings {
+        Settings {
+            followed_drivers: DriverSet::try_from(drivers.to_vec()).unwrap(),
+            ..Settings::default()
+        }
+    }
+
+    fn with_effects(effects: EffectToggles) -> Settings {
+        Settings {
+            effects,
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn defaults_show_every_event_except_driver_events() {
+        let s = Settings::default();
+        assert!(s.shows(RaceEvent::TrackFlag(TrackFlag::Yellow)));
+        assert!(s.shows(RaceEvent::StartLights));
+        assert!(s.shows(RaceEvent::ChequeredFlag));
+        assert!(s.shows(RaceEvent::FastestLap {
+            driver: 44,
+            team_color: TEAM
+        }));
+        assert!(s.shows(RaceEvent::Winner {
+            driver: 44,
+            team_color: TEAM
+        }));
+        // Nobody is followed yet.
+        assert!(!s.shows(pit(44)));
+        assert!(!s.shows(overtake(44)));
+    }
+
+    #[test]
+    fn pit_stops_and_overtakes_show_only_for_followed_drivers() {
+        let s = following(&[1, 44]);
+        assert!(s.shows(pit(44)));
+        assert!(s.shows(overtake(1)));
+        assert!(!s.shows(pit(63)));
+        assert!(!s.shows(overtake(63)));
+    }
+
+    #[test]
+    fn a_switched_off_event_is_not_shown() {
+        let off = EffectToggles {
+            start_lights: false,
+            chequered_flag: false,
+            fastest_lap: false,
+            winner: false,
+            ..EffectToggles::default()
+        };
+        let s = with_effects(off);
+        assert!(!s.shows(RaceEvent::StartLights));
+        assert!(!s.shows(RaceEvent::ChequeredFlag));
+        assert!(!s.shows(RaceEvent::FastestLap {
+            driver: 44,
+            team_color: TEAM
+        }));
+        assert!(!s.shows(RaceEvent::Winner {
+            driver: 44,
+            team_color: TEAM
+        }));
+    }
+
+    #[test]
+    fn switching_off_pit_stops_hides_them_even_for_followed_drivers() {
+        let s = Settings {
+            effects: EffectToggles {
+                pit_stop: false,
+                ..EffectToggles::default()
+            },
+            ..following(&[44])
+        };
+        assert!(!s.shows(pit(44)));
+        assert!(s.shows(overtake(44)));
+    }
+
+    #[test]
+    fn fastest_lap_shows_for_any_driver() {
+        assert!(following(&[44]).shows(RaceEvent::FastestLap {
+            driver: 63,
+            team_color: TEAM
+        }));
+    }
+
+    #[test]
+    fn track_flags_cannot_be_switched_off() {
+        let all_off = EffectToggles {
+            start_lights: false,
+            chequered_flag: false,
+            fastest_lap: false,
+            pit_stop: false,
+            overtake: false,
+            winner: false,
+        };
+        assert!(with_effects(all_off).shows(RaceEvent::TrackFlag(TrackFlag::Red)));
     }
 }

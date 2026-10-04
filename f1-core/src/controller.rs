@@ -139,6 +139,10 @@ impl Controller {
     }
 
     fn apply_race_event(&mut self, event: RaceEvent, now: Instant) {
+        // Switched off, or a driver nobody follows: as if it never arrived.
+        if !self.layers.settings.shows(event) {
+            return;
+        }
         match event {
             RaceEvent::TrackFlag(flag) => stamp(&mut self.layers.flag, flag, now),
             RaceEvent::Winner { team_color, .. } => {
@@ -226,6 +230,8 @@ mod tests {
     use super::*;
     use crate::{
         color::Rgb,
+        drivers::DriverSet,
+        settings::EffectToggles,
         theme::{LAMP, PURPLE},
     };
 
@@ -573,5 +579,87 @@ mod tests {
         let lamp = rendered_pixel(&mut c, t0);
         let expected = post::correct(LAMP.scale(Settings::default().lamp_brightness), 0.5);
         assert_eq!(lamp, expected);
+    }
+
+    // ---- Switched-off events and followed drivers ----
+
+    fn pit_stop(driver: u8, at: Instant) -> Input {
+        race(
+            RaceEvent::PitStop {
+                driver,
+                team_color: TEAM,
+            },
+            at,
+        )
+    }
+
+    fn settings_with(effects: EffectToggles, followed: &[u8]) -> Input {
+        Input::Settings(Settings {
+            effects,
+            followed_drivers: DriverSet::try_from(followed.to_vec()).unwrap(),
+            ..Settings::default()
+        })
+    }
+
+    #[test]
+    fn switched_off_fastest_lap_leaves_the_track_flag_showing() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        let off = EffectToggles {
+            fastest_lap: false,
+            ..EffectToggles::default()
+        };
+        c.apply(settings_with(off, &[]), t0);
+        c.apply(flag(TrackFlag::Green, t0), t0);
+        c.apply(fastest_lap(t0), t0);
+        assert_eq!(winner_at(&mut c, t0).0, "live track");
+    }
+
+    #[test]
+    fn followed_drivers_pit_stop_flashes() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(settings_with(EffectToggles::default(), &[44]), t0);
+        c.apply(pit_stop(44, t0), t0);
+        assert_eq!(winner_at(&mut c, t0).0, "overlay");
+    }
+
+    #[test]
+    fn pit_stop_of_a_driver_nobody_follows_is_ignored() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(settings_with(EffectToggles::default(), &[1]), t0);
+        c.apply(flag(TrackFlag::Green, t0), t0);
+        c.apply(pit_stop(44, t0), t0);
+        assert_eq!(winner_at(&mut c, t0).0, "live track");
+    }
+
+    #[test]
+    fn switched_off_winner_is_not_shown() {
+        let t0 = Instant::now();
+        let mut c = Controller::new(t0);
+        c.apply(Input::Net(NetStatus::Online), t0);
+        let off = EffectToggles {
+            winner: false,
+            ..EffectToggles::default()
+        };
+        c.apply(settings_with(off, &[]), t0);
+        c.apply(winner(t0), t0);
+        assert_eq!(winner_at(&mut c, t0).0, "lamp");
+    }
+
+    #[test]
+    fn switching_an_effect_off_lets_a_running_one_finish() {
+        // The switch decides when an event arrives; an overlay already
+        // playing is short and simply ends.
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(fastest_lap(t0), t0);
+        let off = EffectToggles {
+            fastest_lap: false,
+            ..EffectToggles::default()
+        };
+        c.apply(settings_with(off, &[]), t0);
+        assert_eq!(winner_at(&mut c, t0).0, "overlay");
     }
 }
