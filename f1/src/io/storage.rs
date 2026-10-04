@@ -2,11 +2,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
-use f1_core::settings::Settings;
+use f1_core::{schedule::Session, settings::Settings};
 
-/// NVS namespace and key; NVS limits both to 15 characters.
+/// NVS namespace and keys; NVS limits each to 15 characters.
 const NAMESPACE: &str = "f1";
 const KEY: &str = "settings";
+const SCHEDULE_KEY: &str = "schedule";
 /// Flash wears out with writes, so changes are saved at most this often.
 const SAVE_EVERY: Duration = Duration::from_secs(5);
 
@@ -75,5 +76,52 @@ impl SettingsStore {
                 self.pending = Some(settings);
             }
         }
+    }
+}
+
+/// Keeps the session schedule in flash, so a reboot during a session (when
+/// OpenF1 refuses free requests) still knows what's on.
+pub struct ScheduleStore {
+    nvs: EspNvs<NvsDefault>,
+}
+
+impl ScheduleStore {
+    pub fn new(partition: EspDefaultNvsPartition) -> anyhow::Result<Self> {
+        Ok(Self {
+            nvs: EspNvs::new(partition, NAMESPACE, true).context("open NVS namespace")?,
+        })
+    }
+
+    /// The saved sessions; empty if none are saved or they can't be read.
+    pub fn load(&self) -> Vec<Session> {
+        let mut buf = [0u8; 2048];
+        match self.nvs.get_str(SCHEDULE_KEY, &mut buf) {
+            Ok(Some(json)) => serde_json::from_str(json)
+                .inspect(|sessions: &Vec<Session>| {
+                    log::info!("schedule loaded: {} sessions", sessions.len())
+                })
+                .unwrap_or_else(|e| {
+                    log::warn!("saved schedule is broken ({e}), starting empty");
+                    Vec::new()
+                }),
+            Ok(None) => {
+                log::info!("no saved schedule");
+                Vec::new()
+            }
+            Err(e) => {
+                log::warn!("can't read saved schedule ({e}), starting empty");
+                Vec::new()
+            }
+        }
+    }
+
+    /// Saves `sessions`, replacing what was saved before. Not throttled: the
+    /// caller saves only when the schedule changed.
+    pub fn save(&mut self, sessions: &[Session]) -> anyhow::Result<()> {
+        let json = serde_json::to_string(sessions).context("serialize schedule")?;
+        self.nvs
+            .set_str(SCHEDULE_KEY, &json)
+            .context("write schedule")?;
+        Ok(())
     }
 }

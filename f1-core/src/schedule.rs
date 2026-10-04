@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use crate::input::SessionPhase;
 
 /// Pre-session starts this long before the scheduled start.
@@ -6,8 +8,10 @@ pub const PRE_SESSION: i64 = 30 * 60;
 pub const LIVE_GRACE: i64 = 30 * 60;
 /// Post-session (the winner window) lasts this long after live ends.
 pub const POST_SESSION: i64 = 60 * 60;
+/// How many sessions the cache keeps; NVS entries have size limits.
+pub const CACHED_SESSIONS: usize = 12;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionKind {
     Practice,
     Qualifying,
@@ -16,7 +20,7 @@ pub enum SessionKind {
     Race,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     pub key: u32,
     pub kind: SessionKind,
@@ -100,6 +104,18 @@ pub fn next_session(sessions: &[Session], now: i64) -> Option<&Session> {
     sessions
         .iter()
         .find(|s| s.kind.is_tracked() && s.start > now)
+}
+
+/// The sessions that can still affect the lamp at `now` (not fully over,
+/// including their post-session window): the soonest `max`, in start order.
+/// `sessions` must be sorted by start.
+pub fn still_relevant(sessions: &[Session], now: i64, max: usize) -> Vec<Session> {
+    sessions
+        .iter()
+        .filter(|s| s.end + LIVE_GRACE + POST_SESSION > now)
+        .take(max)
+        .copied()
+        .collect()
 }
 
 #[cfg(test)]
@@ -339,5 +355,78 @@ mod tests {
     #[test]
     fn no_next_session_after_the_last_one() {
         assert_eq!(next_session(&[race()], START), None);
+    }
+
+    // ---- Cache ----
+
+    /// When the race's post-session window is over: 13:30.
+    const RACE_OVER: i64 = END + LIVE_GRACE + POST_SESSION;
+
+    #[test]
+    fn finished_sessions_are_dropped() {
+        assert!(still_relevant(&[race()], RACE_OVER, 10).is_empty());
+    }
+
+    #[test]
+    fn a_race_in_its_post_session_window_is_kept() {
+        assert_eq!(still_relevant(&[race()], RACE_OVER - 1, 10), [race()]);
+    }
+
+    #[test]
+    fn qualifying_is_kept_until_the_same_time_as_a_race() {
+        // Simpler than per-kind rules; a stale qualifying entry costs nothing.
+        let quali = session(1, SessionKind::Qualifying, START, END);
+        assert_eq!(still_relevant(&[quali], RACE_OVER - 1, 10), [quali]);
+    }
+
+    #[test]
+    fn upcoming_sessions_are_kept() {
+        let later = session(2, SessionKind::Race, START + 24 * HOUR, END + 24 * HOUR);
+        assert_eq!(still_relevant(&[race(), later], RACE_OVER, 10), [later]);
+    }
+
+    #[test]
+    fn at_most_max_sessions_are_kept_the_soonest_first() {
+        let sessions = [
+            session(1, SessionKind::Qualifying, START, END),
+            session(2, SessionKind::Race, START + 24 * HOUR, END + 24 * HOUR),
+            session(3, SessionKind::Race, START + 48 * HOUR, END + 48 * HOUR),
+        ];
+        let keys: Vec<u32> = still_relevant(&sessions, 0, 2)
+            .iter()
+            .map(|s| s.key)
+            .collect();
+        assert_eq!(keys, [1, 2]);
+    }
+
+    #[test]
+    fn empty_list_stays_empty() {
+        assert!(still_relevant(&[], START, 10).is_empty());
+    }
+
+    #[test]
+    fn cached_sessions_survive_a_json_round_trip() {
+        let sessions = vec![
+            race(),
+            session(2, SessionKind::SprintQualifying, START + HOUR, END + HOUR),
+        ];
+        let json = serde_json::to_string(&sessions).unwrap();
+        let back: Vec<Session> = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, sessions);
+    }
+
+    #[test]
+    fn a_full_cache_fits_comfortably_in_nvs() {
+        // Realistic keys and times; the firmware reads it into a 2 KB buffer.
+        let sessions: Vec<Session> = (0..CACHED_SESSIONS as u32)
+            .map(|i| Session {
+                key: 11_379 + i,
+                kind: SessionKind::SprintQualifying,
+                start: 1_789_221_600 + i64::from(i) * 86_400,
+                end: 1_789_225_200 + i64::from(i) * 86_400,
+            })
+            .collect();
+        let json = serde_json::to_string(&sessions).unwrap();
+        assert!(json.len() < 1500, "{} bytes", json.len());
     }
 }

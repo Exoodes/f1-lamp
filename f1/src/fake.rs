@@ -6,8 +6,7 @@ use std::{
 
 use f1_core::{
     color::Rgb,
-    input::{Input, RaceEvent, SessionPhase, TrackFlag},
-    settings::Settings,
+    input::{Input, RaceEvent, TrackFlag},
 };
 
 const TEAM: Rgb = Rgb::new(0, 210, 190);
@@ -62,15 +61,10 @@ pub fn spawn(tx: SyncSender<Input>) -> anyhow::Result<JoinHandle<()>> {
     Ok(handle)
 }
 
+/// Sends only race events: settings are saved to flash, so sending them here
+/// would overwrite the user's; the phase comes from the scheduler's fake race.
 fn play(tx: &SyncSender<Input>) -> Result<(), SendError<Input>> {
-    tx.send(Input::Settings(Settings {
-        night_start: Some(22 * 60),
-        night_end: Some(7 * 60),
-        ..Settings::default()
-    }))?;
-
     loop {
-        tx.send(Input::Phase(SessionPhase::Live))?;
         for (event, hold) in SCRIPT {
             tx.send(Input::Race {
                 event,
@@ -79,7 +73,6 @@ fn play(tx: &SyncSender<Input>) -> Result<(), SendError<Input>> {
             thread::sleep(hold);
         }
 
-        tx.send(Input::Phase(SessionPhase::PostSession))?;
         thread::sleep(Duration::from_secs(10));
     }
 }

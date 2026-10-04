@@ -9,15 +9,17 @@ use esp_idf_svc::{
     eventloop::EspSystemEventLoop, hal::modem::Modem, http::server::EspHttpServer,
     nvs::EspDefaultNvsPartition, sntp::EspSntp,
 };
+#[cfg(feature = "fake")]
+use f1_core::schedule::SessionKind;
 use f1_core::{
-    input::{Input, NetStatus},
+    input::{Input, NetStatus, SessionPhase},
     openf1::{self, SessionDto, CALENDAR_DAYS},
-    schedule::{self, Session},
+    schedule::{self, Session, CACHED_SESSIONS},
     snapshot::Snapshot,
 };
 
 use crate::{
-    io::{clock, http, mdns, wifi},
+    io::{clock, http, mdns, storage::ScheduleStore, wifi},
     web, WIFI_PSK, WIFI_SSID,
 };
 
@@ -63,6 +65,13 @@ const FIRST_CALENDAR_RETRY: Duration = Duration::from_secs(60);
 const MAX_CALENDAR_RETRY: Duration = Duration::from_secs(30 * 60);
 /// How often to check whether WiFi and the clock are ready for a download.
 const CALENDAR_WAITING_EVERY: Duration = Duration::from_secs(5);
+/// How often to work out the phase. Phase windows are minutes long, so 30 s is precise enough.
+const PHASE_EVERY: Duration = Duration::from_secs(30);
+/// How often to check for a valid clock before the first phase.
+const PHASE_WAITING_EVERY: Duration = Duration::from_secs(1);
+/// With `fake`, a race starts this long after the clock is first valid.
+#[cfg(feature = "fake")]
+const FAKE_LEAD: i64 = 2 * 60;
 
 /// When each of the thread's jobs is next due.
 struct Deadlines {
@@ -70,6 +79,7 @@ struct Deadlines {
     heap_log: Instant,
     clock: Instant,
     calendar: Instant,
+    phase: Instant,
 }
 
 impl Deadlines {
@@ -78,6 +88,59 @@ impl Deadlines {
             .min(self.heap_log)
             .min(self.clock)
             .min(self.calendar)
+            .min(self.phase)
+    }
+}
+
+/// What the scheduler knows: the sessions and the phase it last sent.
+struct Schedule {
+    sessions: Vec<Session>,
+    sent_phase: Option<SessionPhase>,
+    /// With `fake`: the made-up race, put back after every download.
+    #[cfg(feature = "fake")]
+    fake: Option<Session>,
+}
+
+impl Schedule {
+    /// Swaps in a freshly downloaded list. The caller saves to NVS before
+    /// this, so the fake race (added here) never reaches flash.
+    fn replace(&mut self, sessions: Vec<Session>) {
+        self.sessions = sessions;
+        #[cfg(feature = "fake")]
+        if let Some(fake) = self.fake {
+            self.sessions.push(fake);
+            self.sessions.sort_by_key(|s| s.start);
+        }
+    }
+
+    /// With `fake`: adds the fake race, once per boot.
+    #[cfg(feature = "fake")]
+    fn add_fake(&mut self, now_unix: i64) {
+        if self.fake.is_some() {
+            return;
+        }
+        let fake = fake_session(now_unix);
+        log::info!(
+            "fake: race (session {}) starts in {}",
+            fake.key,
+            in_words(fake.start - now_unix)
+        );
+        self.fake = Some(fake);
+        self.sessions.push(fake);
+        self.sessions.sort_by_key(|s| s.start);
+    }
+
+    /// Works out the phase at `now_unix` and sends it, but only when it changed.
+    fn update_phase(&mut self, now_unix: i64, tx: &SyncSender<Input>) -> anyhow::Result<()> {
+        let phase = schedule::phase_at(&self.sessions, now_unix);
+        if self.sent_phase == Some(phase) {
+            return Ok(());
+        }
+        tx.send(Input::Phase(phase))
+            .context("render loop is gone")?;
+        self.sent_phase = Some(phase);
+        log_phase(&self.sessions, now_unix);
+        Ok(())
     }
 }
 
@@ -91,6 +154,14 @@ fn run(
 ) -> anyhow::Result<()> {
     let mut status = None;
     report(tx, &mut status, NetStatus::Connecting)?;
+    let mut schedule_store = ScheduleStore::new(nvs.clone())?;
+    let mut schedule = Schedule {
+        sessions: schedule_store.load(),
+        sent_phase: None,
+        #[cfg(feature = "fake")]
+        fake: None,
+    };
+    let mut saved = schedule.sessions.clone();
     let mut wifi = wifi::create(modem, sys_loop, nvs, WIFI_SSID, WIFI_PSK)?;
     let _mdns = mdns::start().context("start mDNS")?;
     clock::set_timezone();
@@ -108,6 +179,7 @@ fn run(
         heap_log: now,
         clock: now,
         calendar: now,
+        phase: now,
     };
 
     loop {
@@ -140,7 +212,21 @@ fn run(
             due.calendar = match (clock::unix_now(), wifi.is_up().unwrap_or(false)) {
                 (Some(unix), true) => match fetch_calendar(unix) {
                     Ok(sessions) => {
+                        let relevant = schedule::still_relevant(&sessions, unix, CACHED_SESSIONS);
+                        if relevant != saved {
+                            match schedule_store.save(&relevant) {
+                                Ok(()) => {
+                                    log::info!("schedule saved: {} sessions", relevant.len());
+                                    saved = relevant;
+                                }
+                                // Not fatal: the next download tries again.
+                                Err(e) => log::warn!("{e:#}"),
+                            }
+                        }
                         log_calendar(&sessions, unix);
+                        schedule.replace(sessions);
+                        // Work out the phase straight away with the new list.
+                        due.phase = now;
                         calendar_retry = FIRST_CALENDAR_RETRY;
                         now + CALENDAR_EVERY
                     }
@@ -156,6 +242,18 @@ fn run(
                     }
                 },
                 _ => now + CALENDAR_WAITING_EVERY,
+            };
+        }
+        if now >= due.phase {
+            due.phase = match clock::unix_now() {
+                Some(unix) => {
+                    #[cfg(feature = "fake")]
+                    schedule.add_fake(unix);
+                    schedule.update_phase(unix, tx)?;
+                    now + PHASE_EVERY
+                }
+                // No valid time yet: the schedule can't be read without it.
+                None => now + PHASE_WAITING_EVERY,
             };
         }
         if now >= due.heap_log {
@@ -212,14 +310,28 @@ fn log_calendar(sessions: &[Session], now_unix: i64) {
         "calendar: {} sessions in the next {CALENDAR_DAYS} days",
         sessions.len()
     );
+    log_next(sessions, now_unix);
+}
+
+/// `phase: Live (Race, session 11731)`, then the next session.
+fn log_phase(sessions: &[Session], now_unix: i64) {
+    match schedule::current_session(sessions, now_unix) {
+        Some((phase, s)) => log::info!("phase: {phase:?} ({:?}, session {})", s.kind, s.key),
+        None => log::info!("phase: Idle"),
+    }
+    log_next(sessions, now_unix);
+}
+
+/// The next tracked session and a countdown to it.
+fn log_next(sessions: &[Session], now_unix: i64) {
     match schedule::next_session(sessions, now_unix) {
         Some(next) => log::info!(
-            "calendar: next is {:?} (session {}) in {}",
+            "next: {:?} (session {}) in {}",
             next.kind,
             next.key,
             in_words(next.start - now_unix)
         ),
-        None => log::info!("calendar: no tracked session coming up"),
+        None => log::info!("next: no tracked session coming up"),
     }
 }
 
@@ -257,5 +369,17 @@ fn heap() -> (u32, u32) {
             esp_idf_svc::sys::esp_get_free_heap_size(),
             esp_idf_svc::sys::esp_get_minimum_free_heap_size(),
         )
+    }
+}
+
+/// The fake race: key 0 so it stands out in the log, 10 minutes long.
+#[cfg(feature = "fake")]
+fn fake_session(now_unix: i64) -> Session {
+    let start = now_unix + FAKE_LEAD;
+    Session {
+        key: 0,
+        kind: SessionKind::Race,
+        start,
+        end: start + 10 * 60,
     }
 }
