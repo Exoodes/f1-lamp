@@ -25,6 +25,31 @@ pub enum Stream {
 }
 
 impl Stream {
+    pub const ALL: [Stream; 6] = [
+        Stream::SessionInfo,
+        Stream::TrackStatus,
+        Stream::SessionStatus,
+        Stream::RaceControl,
+        Stream::DriverList,
+        Stream::TopThree,
+    ];
+
+    /// The name F1 uses, in the archive file names and the live feed.
+    pub fn name(self) -> &'static str {
+        match self {
+            Stream::SessionInfo => "SessionInfo",
+            Stream::TrackStatus => "TrackStatus",
+            Stream::SessionStatus => "SessionStatus",
+            Stream::RaceControl => "RaceControlMessages",
+            Stream::DriverList => "DriverList",
+            Stream::TopThree => "TopThree",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Stream> {
+        Stream::ALL.into_iter().find(|s| s.name() == name)
+    }
+
     /// Whether a line can carry anything the lamp uses, checked without
     /// parsing. Most TopThree lines only update gaps and lap times, and most
     /// DriverList lines only the running order; on the ESP32, parsing them

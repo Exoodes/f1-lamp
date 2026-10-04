@@ -1,0 +1,332 @@
+//! Talks to F1's live timing feed from the PC: negotiate, WebSocket, SignalR
+//! handshake, subscribe. Prints every message and saves it, in the archive's
+//! `.jsonStream` format, under `captures/<date>_<time>/`, so a capture can
+//! become a test fixture or a replay as it is.
+//!
+//! ```text
+//! cargo run                 until Ctrl+C
+//! cargo run -- 30           for 30 minutes
+//! cargo run -- --raw        also print every SignalR frame
+//! ```
+
+use std::{
+    collections::HashMap,
+    fs::{self, File},
+    io::{ErrorKind, Write},
+    net::TcpStream,
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
+
+use anyhow::{bail, Context};
+use f1_core::{
+    feed::SessionState,
+    signalr::{self, Message, Splitter, HANDSHAKE, PING},
+    timeline::Stream,
+    track_state::FeedMessage,
+};
+use serde::Deserialize;
+use tungstenite::{client::IntoClientRequest, http::HeaderValue, WebSocket};
+
+const NEGOTIATE: &str = "https://livetiming.formula1.com/signalrcore/negotiate";
+const HUB: &str = "wss://livetiming.formula1.com/signalrcore";
+const HOST: &str = "livetiming.formula1.com";
+
+/// Our six streams, plus Heartbeat to see the connection is alive.
+const EXTRA_STREAMS: [&str; 1] = ["Heartbeat"];
+/// The server drops clients that stay quiet for about 30 s.
+const PING_EVERY: Duration = Duration::from_secs(15);
+/// How long one read waits, so pings go out on time.
+const READ_TIMEOUT: Duration = Duration::from_secs(1);
+/// One SignalR frame. The Subscribe answer late in a race can be large.
+const MAX_FRAME: usize = 4 * 1024 * 1024;
+
+fn main() -> anyhow::Result<()> {
+    let mut minutes = None;
+    let mut raw = false;
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--raw" => raw = true,
+            n => {
+                minutes = Some(
+                    n.parse::<u64>()
+                        .context("usage: f1-probe [minutes] [--raw]")?,
+                )
+            }
+        }
+    }
+    let stop_at = minutes.map(|m| Instant::now() + Duration::from_secs(m * 60));
+
+    let token = negotiate()?;
+    let mut ws = connect(&token)?;
+    let mut capture = Capture::create()?;
+    println!("saving to {}", capture.dir.display());
+
+    let mut streams: Vec<&str> = Stream::ALL.iter().map(|s| s.name()).collect();
+    streams.extend(EXTRA_STREAMS);
+    send(&mut ws, HANDSHAKE)?;
+    send(&mut ws, &signalr::subscribe(1, &streams))?;
+    println!("subscribed to {}", streams.join(", "));
+
+    let mut splitter = Splitter::new(MAX_FRAME);
+    let mut next_ping = Instant::now() + PING_EVERY;
+    loop {
+        if stop_at.is_some_and(|t| Instant::now() >= t) {
+            println!("time is up");
+            break;
+        }
+        if Instant::now() >= next_ping {
+            send(&mut ws, PING)?;
+            next_ping = Instant::now() + PING_EVERY;
+        }
+
+        let bytes = match ws.read() {
+            Ok(tungstenite::Message::Text(text)) => text.as_bytes().to_vec(),
+            Ok(tungstenite::Message::Binary(bytes)) => bytes.to_vec(),
+            Ok(tungstenite::Message::Close(frame)) => {
+                println!("server closed the WebSocket: {frame:?}");
+                break;
+            }
+            Ok(_) => continue, // WebSocket-level ping/pong: tungstenite answers itself
+            Err(tungstenite::Error::Io(e))
+                if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
+            {
+                continue
+            }
+            Err(e) => return Err(e).context("reading from the feed"),
+        };
+
+        for frame in splitter.push(&bytes) {
+            let frame = match frame {
+                Ok(frame) => frame,
+                Err(e) => {
+                    println!("!! {e}");
+                    continue;
+                }
+            };
+            if raw {
+                println!("<< {frame}");
+            }
+            if !handle(&frame, &mut capture)? {
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Negotiation {
+    connection_token: String,
+}
+
+/// Gets the load balancer's cookie, then a connection token. Returns the
+/// cookie and token as one `Cookie` header value plus token.
+fn negotiate() -> anyhow::Result<(String, String)> {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .into();
+
+    // The OPTIONS answer is 405, but it sets the AWSALBCORS cookie that keeps
+    // the WebSocket on the same server as the negotiate.
+    let options = agent
+        .options(NEGOTIATE)
+        .call()
+        .context("negotiate (OPTIONS)")?;
+    let cookie = options
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .filter_map(|c| c.split(';').next())
+        .filter(|c| c.starts_with("AWSALB"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    if cookie.is_empty() {
+        println!("!! no AWSALB cookie in the OPTIONS answer; trying without");
+    }
+
+    let mut response = agent
+        .post(&format!("{NEGOTIATE}?negotiateVersion=1"))
+        .header("Cookie", &cookie)
+        .send_empty()
+        .context("negotiate (POST)")?;
+    let status = response.status();
+    let body = response.body_mut().read_to_string()?;
+    if !status.is_success() {
+        bail!("negotiate answered {status}: {body}");
+    }
+    let negotiation: Negotiation =
+        serde_json::from_str(&body).with_context(|| format!("negotiate answer: {body}"))?;
+    println!("negotiated ({status})");
+    Ok((cookie, negotiation.connection_token))
+}
+
+type Socket = WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
+
+fn connect((cookie, token): &(String, String)) -> anyhow::Result<Socket> {
+    let mut request = format!("{HUB}?id={token}").into_client_request()?;
+    if !cookie.is_empty() {
+        request
+            .headers_mut()
+            .insert("Cookie", HeaderValue::from_str(cookie)?);
+    }
+    // Our own TCP stream, so reads can time out and pings go out on time.
+    let tcp = TcpStream::connect((HOST, 443)).context("TCP connect")?;
+    tcp.set_read_timeout(Some(READ_TIMEOUT))?;
+    let (ws, response) = tungstenite::client_tls(request, tcp).context("WebSocket upgrade")?;
+    println!("WebSocket open ({})", response.status());
+    Ok(ws)
+}
+
+fn send(ws: &mut Socket, frame: &str) -> anyhow::Result<()> {
+    ws.send(tungstenite::Message::text(frame))
+        .context("sending to the feed")
+}
+
+/// Prints and saves one frame. Returns false when the server closes.
+fn handle(frame: &str, capture: &mut Capture) -> anyhow::Result<bool> {
+    let msg = match signalr::parse(frame) {
+        Ok(msg) => msg,
+        Err(e) => {
+            println!("!! not a SignalR message ({e}): {frame}");
+            return Ok(true);
+        }
+    };
+    match &msg {
+        Message::Handshake { error: None } => println!("handshake ok"),
+        Message::Handshake { error: Some(e) } => bail!("handshake refused: {e}"),
+        Message::Completion { error: Some(e), .. } => bail!("Subscribe refused: {e}"),
+        Message::Completion {
+            result: Some(result),
+            ..
+        } => {
+            let state = signalr::initial_state(result)?;
+            println!("initial state of {} streams:", state.len());
+            for (stream, data) in state {
+                report(capture, &stream, data.get())?;
+            }
+        }
+        Message::Completion { result: None, .. } => println!("Subscribe answered with no state"),
+        Message::Invocation { .. } => match msg.feed_update() {
+            Some(update) => report(capture, &update.stream, update.data.get())?,
+            None => println!("?? {frame}"),
+        },
+        Message::Ping => {}
+        Message::Close { error } => {
+            println!("server closed the connection: {error:?}");
+            return Ok(false);
+        }
+        Message::Other(kind) => println!("?? message type {kind}: {frame}"),
+    }
+    Ok(true)
+}
+
+/// Saves one stream message and prints a line about it. Our streams are also
+/// run through the typed parsers, so a format change shows up here first.
+fn report(capture: &mut Capture, stream: &str, json: &str) -> anyhow::Result<()> {
+    let offset = capture.write(stream, json)?;
+    let summary = match Stream::from_name(stream) {
+        None => format!("{} bytes", json.len()),
+        Some(s) => match s.parse(json) {
+            Ok(messages) => messages
+                .iter()
+                .map(describe)
+                .collect::<Vec<_>>()
+                .join(" | "),
+            Err(e) => format!("!! doesn't parse: {e}\n   {json}"),
+        },
+    };
+    println!("{offset} {stream:<20} {summary}");
+    Ok(())
+}
+
+fn describe(msg: &FeedMessage) -> String {
+    match msg {
+        FeedMessage::SessionInfo(i) => format!(
+            "{} / {}",
+            i.kind.as_deref().unwrap_or("?"),
+            i.name.as_deref().unwrap_or("?")
+        ),
+        FeedMessage::Track(t) => format!(
+            "{} {}",
+            t.status.as_deref().unwrap_or("?"),
+            t.code().map_or(String::new(), |c| format!("{c:?}"))
+        ),
+        FeedMessage::Session(s) => match s.status {
+            Some(SessionState::Unknown) => "unknown state".to_owned(),
+            Some(state) => format!("{state:?}"),
+            None => "(no status)".to_owned(),
+        },
+        FeedMessage::RaceControl(m) => format!(
+            "[{}] {}",
+            m.category.as_deref().unwrap_or("?"),
+            m.message.as_deref().unwrap_or("")
+        ),
+        FeedMessage::DriverList(d) => {
+            let colours = d.values().filter(|p| p.team_colour.is_some()).count();
+            format!("{} drivers, {colours} with colour", d.len())
+        }
+        FeedMessage::TopThree(t) => {
+            let leader = t
+                .lines
+                .as_ref()
+                .and_then(|l| l.indexed().into_iter().find(|(i, _)| *i == 0))
+                .and_then(|(_, line)| line.racing_number.clone());
+            match leader {
+                Some(n) => format!("leader #{n}"),
+                None => "update".to_owned(),
+            }
+        }
+    }
+}
+
+/// One `.jsonStream` file per stream, offsets counted from the probe's start.
+struct Capture {
+    dir: PathBuf,
+    started: Instant,
+    files: HashMap<String, File>,
+}
+
+impl Capture {
+    fn create() -> anyhow::Result<Self> {
+        let name = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("captures")
+            .join(name);
+        fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+        Ok(Capture {
+            dir,
+            started: Instant::now(),
+            files: HashMap::new(),
+        })
+    }
+
+    /// Appends `offset + json` to the stream's file; returns the offset.
+    fn write(&mut self, stream: &str, json: &str) -> anyhow::Result<String> {
+        let offset = offset(self.started.elapsed());
+        if !self.files.contains_key(stream) {
+            let path = self.dir.join(format!("{stream}.jsonStream"));
+            let file = File::create(&path).with_context(|| format!("create {}", path.display()))?;
+            self.files.insert(stream.to_owned(), file);
+        }
+        let file = self.files.get_mut(stream).expect("inserted above");
+        writeln!(file, "{offset}{json}")?;
+        Ok(offset)
+    }
+}
+
+/// `HH:MM:SS.mmm`, as in the archive.
+fn offset(d: Duration) -> String {
+    let ms = d.as_millis();
+    let s = ms / 1000;
+    format!(
+        "{:02}:{:02}:{:02}.{:03}",
+        s / 3600,
+        s / 60 % 60,
+        s % 60,
+        ms % 1000
+    )
+}

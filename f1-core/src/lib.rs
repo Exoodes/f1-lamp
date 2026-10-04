@@ -15,6 +15,7 @@ pub mod post;
 pub mod replay;
 pub mod schedule;
 pub mod settings;
+pub mod signalr;
 pub mod snapshot;
 pub mod stream;
 pub mod theme;

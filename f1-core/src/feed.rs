@@ -1,6 +1,65 @@
 use crate::color::Rgb;
-use serde::Deserialize;
-use std::collections::HashMap;
+use serde::{
+    de::{IgnoredAny, MapAccess, Visitor},
+    Deserialize, Deserializer,
+};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt,
+    marker::PhantomData,
+    ops::Deref,
+    str::FromStr,
+};
+
+#[derive(Debug)]
+pub struct Numbered<K, V>(pub BTreeMap<K, V>);
+
+impl<K, V> Deref for Numbered<K, V> {
+    type Target = BTreeMap<K, V>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'de, K, V> Deserialize<'de> for Numbered<K, V>
+where
+    K: FromStr + Ord,
+    V: Deserialize<'de>,
+{
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct NumberedVisitor<K, V>(PhantomData<(K, V)>);
+
+        impl<'de, K, V> Visitor<'de> for NumberedVisitor<K, V>
+        where
+            K: FromStr + Ord,
+            V: Deserialize<'de>,
+        {
+            type Value = Numbered<K, V>;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("an object keyed by numbers")
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut entries = BTreeMap::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.parse() {
+                        Ok(number) => {
+                            entries.insert(number, map.next_value()?);
+                        }
+                        Err(_) => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(Numbered(entries))
+            }
+        }
+
+        deserializer.deserialize_map(NumberedVisitor(PhantomData))
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 pub enum SessionState {
@@ -59,11 +118,10 @@ pub struct DriverPatch {
     pub tla: Option<String>,
 }
 
-// TODO(probe): the live feed may add `"_kf": true`, which a u8 key rejects.
-pub type DriverList = HashMap<u8, DriverPatch>;
+pub type DriverList = Numbered<u8, DriverPatch>;
 
 pub fn update_team_colours(colours: &mut HashMap<u8, Rgb>, patch: &DriverList) {
-    for (number, driver) in patch {
+    for (number, driver) in patch.iter() {
         if let Some(rgb) = driver.team_colour.as_deref().and_then(|c| c.parse().ok()) {
             colours.insert(*number, rgb);
         }
@@ -80,21 +138,14 @@ pub struct RaceControl {
 #[serde(untagged)]
 pub enum Messages {
     List(Vec<RcMessage>),
-    Map(HashMap<String, RcMessage>),
+    Map(Numbered<u32, RcMessage>),
 }
 
 impl Messages {
     pub fn into_vec(self) -> Vec<RcMessage> {
         match self {
             Messages::List(v) => v,
-            Messages::Map(m) => {
-                let mut indexed: Vec<(u32, RcMessage)> = m
-                    .into_iter()
-                    .map(|(key, msg)| (key.parse().unwrap_or(u32::MAX), msg))
-                    .collect();
-                indexed.sort_by_key(|(index, _)| *index);
-                indexed.into_iter().map(|(_, msg)| msg).collect()
-            }
+            Messages::Map(m) => m.0.into_values().collect(),
         }
     }
 }
@@ -138,17 +189,14 @@ pub struct TopThree {
 #[serde(untagged)]
 pub enum TopLines {
     List(Vec<TopLine>),
-    Map(HashMap<String, TopLine>),
+    Map(Numbered<usize, TopLine>),
 }
 
 impl TopLines {
     pub fn indexed(&self) -> Vec<(usize, &TopLine)> {
         match self {
             TopLines::List(v) => v.iter().enumerate().collect(),
-            TopLines::Map(m) => m
-                .iter()
-                .filter_map(|(key, line)| Some((key.parse().ok()?, line)))
-                .collect(),
+            TopLines::Map(m) => m.iter().map(|(i, line)| (*i, line)).collect(),
         }
     }
 }
@@ -379,5 +427,31 @@ mod tests {
         );
         assert!(!colours.contains_key(&1));
         assert_eq!(colours[&2], Rgb::RED);
+    }
+
+    #[test]
+    fn driver_list_skips_the_live_feeds_kf_marker() {
+        let d = drivers(r#"{"12":{"TeamColour":"00D7B6"},"_kf":true}"#);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[&12].team_colour.as_deref(), Some("00D7B6"));
+    }
+
+    #[test]
+    fn race_control_object_skips_non_numeric_keys() {
+        let m = messages(r#"{"Messages":{"_deleted":[3],"4":{"Lap":4}},"_kf":true}"#);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].lap, Some(4));
+    }
+
+    #[test]
+    fn top_three_object_skips_non_numeric_keys() {
+        let t: TopThree =
+            serde_json::from_str(r#"{"Lines":{"0":{"RacingNumber":"12"},"_kf":true}}"#).unwrap();
+        assert_eq!(t.lines.unwrap().indexed().len(), 1);
+    }
+
+    #[test]
+    fn numbered_map_rejects_something_that_is_not_an_object() {
+        assert!(serde_json::from_str::<DriverList>("[1,2]").is_err());
     }
 }
