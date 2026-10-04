@@ -71,8 +71,58 @@ pub fn start(
         }
     })?;
 
+    #[cfg(feature = "player")]
+    replay_routes(&mut server)?;
+
     log::info!("web server started");
     Ok(server)
+}
+
+/// `GET /api/replay` (status) and `POST /api/replay` (a command). Without a
+/// replay these don't exist, so the page sees a 404 and hides its panel.
+#[cfg(feature = "player")]
+fn replay_routes(server: &mut EspHttpServer<'static>) -> anyhow::Result<()> {
+    use f1_core::replay::ReplayCommand;
+
+    server.fn_handler::<anyhow::Error, _>("/api/replay", Method::Get, |req| {
+        let Some(replay) = crate::replay::handle() else {
+            return reply(req, 404, TEXT, b"no replay");
+        };
+        // Not 404: the page keeps asking until the session has been read.
+        let Some(status) = replay.status() else {
+            return reply(req, 503, TEXT, b"reading the session");
+        };
+        let body = serde_json::json!({
+            "name": replay.name(),
+            "status": status,
+        });
+        reply(req, 200, JSON, &serde_json::to_vec(&body)?)
+    })?;
+
+    server.fn_handler::<anyhow::Error, _>("/api/replay", Method::Post, |mut req| {
+        let Some(replay) = crate::replay::handle() else {
+            return reply(req, 404, TEXT, b"no replay");
+        };
+        let Some(body) = read_body(&mut req)? else {
+            return reply(req, 413, TEXT, b"body too large");
+        };
+        match serde_json::from_slice::<ReplayCommand>(&body) {
+            Ok(command) => {
+                replay.send(command)?;
+                reply(req, 204, TEXT, b"")
+            }
+            Err(e) => {
+                log::warn!("rejected replay command: {e}");
+                reply(
+                    req,
+                    400,
+                    TEXT,
+                    format!("bad replay command: {e}").as_bytes(),
+                )
+            }
+        }
+    })?;
+    Ok(())
 }
 
 /// Sends a complete response with the given status, content type and body.

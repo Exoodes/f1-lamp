@@ -67,6 +67,13 @@
   }
   .toast.show { opacity: 1; }
   .toast.err { color: #ff6b6b; }
+
+  /* Replay: only shown when the firmware was built with a replay. */
+  #replay[hidden] { display: none; }
+  .replay-name { margin: 0 0 8px; font-weight: 600; word-break: break-all; }
+  .replay-time { display: flex; justify-content: space-between; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #r-seek { width: 100%; accent-color: var(--red); }
+  select { padding: 6px; font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; }
 </style>
 </head>
 <body>
@@ -85,6 +92,30 @@
       <dt>Network</dt><dd id="s-net">–</dd>
       <dt>Override</dt><dd id="s-override">–</dd>
     </dl>
+  </section>
+
+  <section id="replay" hidden>
+    <h2>Replay</h2>
+    <p class="replay-name" id="r-name"></p>
+    <input type="range" id="r-seek" min="0" max="1" value="0" aria-label="Position">
+    <div class="replay-time"><span id="r-pos">–</span><span id="r-state">–</span><span id="r-end">–</span></div>
+    <div class="row">
+      <button id="r-play">Play</button>
+      <button id="r-lights-out">Lights out −10 s</button>
+    </div>
+    <label>Speed
+      <select id="r-speed">
+        <option value="1">1× (real time)</option>
+        <option value="5">5×</option>
+        <option value="10">10×</option>
+        <option value="30">30×</option>
+        <option value="60">60×</option>
+        <option value="120">120×</option>
+        <option value="200">200×</option>
+      </select>
+    </label>
+    <p class="hint">To watch a recording with the lamp: 1×, Lights out −10 s, then Play when your video is 10 s before lights out.</p>
+    <p class="msg" id="replay-msg"></p>
   </section>
 
   <section class="settings">
@@ -329,6 +360,74 @@ async function override(body, label) {
   }
 }
 
+// ---- Replay (only with a replay build) ----
+
+// 4_000_000 -> "1:06:40"
+function clock(ms) {
+  const s = Math.floor(ms / 1000);
+  const pad = (n) => String(n).padStart(2, "0");
+  return Math.floor(s / 3600) + ":" + pad(Math.floor(s / 60) % 60) + ":" + pad(s % 60);
+}
+
+let replayPlaying = false;
+let seeking = false;  // the user is dragging the position slider
+
+function showReplay(r) {
+  const st = r.status;
+  $("replay").hidden = false;
+  // ".../f1-data/2026-italy/race" -> "2026-italy / race"
+  $("r-name").textContent = r.name.split("/").slice(-2).join(" / ");
+  $("r-seek").max = st.end_ms;
+  if (!seeking) $("r-seek").value = st.position_ms;
+  $("r-pos").textContent = clock(st.position_ms);
+  $("r-end").textContent = clock(st.end_ms);
+  $("r-state").textContent = st.finished ? "finished" : st.playing ? "playing" : "paused";
+  $("r-play").textContent = st.playing ? "Pause" : "Play";
+  replayPlaying = st.playing;
+  // Don't fight the user while the list is open.
+  if (document.activeElement !== $("r-speed")) $("r-speed").value = String(st.speed);
+}
+
+// Returns false when there's no replay (404), so the caller stops polling.
+async function refreshReplay() {
+  try {
+    const r = await fetch("/api/replay");
+    if (r.status === 404) return false;
+    if (r.ok) showReplay(await r.json());
+  } catch {
+    // The status card already says the lamp can't be reached.
+  }
+  return true;
+}
+
+async function replayCommand(body) {
+  try {
+    await post("/api/replay", body);
+    message("replay-msg", "");
+    setTimeout(refreshReplay, 150);
+  } catch (e) {
+    message("replay-msg", "Failed: " + e.message, true);
+  }
+}
+
+async function startReplay() {
+  if (!(await refreshReplay())) return;
+  $("r-play").addEventListener("click", () =>
+    replayCommand({ action: replayPlaying ? "pause" : "play" }));
+  $("r-lights-out").addEventListener("click", () => replayCommand({ action: "lights_out" }));
+  $("r-speed").addEventListener("change", () =>
+    replayCommand({ action: "speed", speed: Number($("r-speed").value) }));
+  $("r-seek").addEventListener("input", () => {
+    seeking = true;
+    $("r-pos").textContent = clock(Number($("r-seek").value));
+  });
+  $("r-seek").addEventListener("change", async () => {
+    await replayCommand({ action: "seek", position_ms: Number($("r-seek").value) });
+    seeking = false;
+  });
+  setInterval(refreshReplay, 1000);
+}
+
 // ---- Start-up ----
 
 async function start() {
@@ -363,6 +462,7 @@ async function start() {
   }
 
   setInterval(refreshStatus, 2000);
+  startReplay();
 }
 
 start();

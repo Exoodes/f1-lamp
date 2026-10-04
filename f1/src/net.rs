@@ -9,8 +9,6 @@ use esp_idf_svc::{
     eventloop::EspSystemEventLoop, hal::modem::Modem, http::server::EspHttpServer,
     nvs::EspDefaultNvsPartition, sntp::EspSntp,
 };
-#[cfg(feature = "fake")]
-use f1_core::schedule::{SessionKind, LIVE_GRACE};
 use f1_core::{
     color::Rgb,
     input::{Input, NetStatus, RaceEvent, SessionPhase},
@@ -73,13 +71,6 @@ const PHASE_WAITING_EVERY: Duration = Duration::from_secs(1);
 /// How often to look for a race's winner while it's due; results can take a
 /// while to appear after the flag.
 const WINNER_EVERY: Duration = Duration::from_secs(60);
-/// With `fake`, a race starts this long after the clock is first valid.
-#[cfg(feature = "fake")]
-const FAKE_LEAD: i64 = 2 * 60;
-/// With `fake`: the 2026 Italian GP race, whose winner (#12, Mercedes teal)
-/// is known from the fixtures.
-#[cfg(feature = "fake")]
-const FAKE_FINISHED_RACE: u32 = 11361;
 
 /// When each of the thread's jobs is next due.
 struct Deadlines {
@@ -106,48 +97,20 @@ impl Deadlines {
 struct Schedule {
     sessions: Vec<Session>,
     sent_phase: Option<SessionPhase>,
-    /// With `fake`: the made-up races, put back after every download.
-    #[cfg(feature = "fake")]
-    fakes: Vec<Session>,
 }
 
 impl Schedule {
-    /// Swaps in a freshly downloaded list. The caller saves to NVS before
-    /// this, so the fake races (added here) never reach flash.
+    /// Swaps in a freshly downloaded list.
     fn replace(&mut self, sessions: Vec<Session>) {
         self.sessions = sessions;
-        #[cfg(feature = "fake")]
-        {
-            self.sessions.extend_from_slice(&self.fakes);
-            self.sessions.sort_by_key(|s| s.start);
-        }
-    }
-
-    /// With `fake`: adds the fake races, once per boot: one starting soon
-    /// (phases) and a real past race already in its winner window (winner).
-    #[cfg(feature = "fake")]
-    fn add_fakes(&mut self, now_unix: i64) {
-        if !self.fakes.is_empty() {
-            return;
-        }
-        let race = fake_session(now_unix);
-        log::info!(
-            "fake: race (session {}) starts in {}",
-            race.key,
-            in_words(race.start - now_unix)
-        );
-        let finished = fake_finished_race(now_unix);
-        log::info!(
-            "fake: race (session {}) is in its winner window",
-            finished.key
-        );
-        self.fakes = vec![race, finished];
-        self.sessions.extend_from_slice(&self.fakes);
-        self.sessions.sort_by_key(|s| s.start);
     }
 
     /// Works out the phase at `now_unix` and sends it, but only when it changed.
     fn update_phase(&mut self, now_unix: i64, tx: &SyncSender<Input>) -> anyhow::Result<()> {
+        // A replay owns the phase; two producers would fight over it.
+        if cfg!(feature = "player") {
+            return Ok(());
+        }
         let phase = schedule::phase_at(&self.sessions, now_unix);
         if self.sent_phase == Some(phase) {
             return Ok(());
@@ -174,8 +137,6 @@ fn run(
     let mut schedule = Schedule {
         sessions: schedule_store.load(),
         sent_phase: None,
-        #[cfg(feature = "fake")]
-        fakes: Vec::new(),
     };
     let mut saved = schedule.sessions.clone();
     let mut wifi = wifi::create(modem, sys_loop, nvs, WIFI_SSID, WIFI_PSK)?;
@@ -266,8 +227,6 @@ fn run(
         if now >= due.phase {
             due.phase = match clock::unix_now() {
                 Some(unix) => {
-                    #[cfg(feature = "fake")]
-                    schedule.add_fakes(unix);
                     schedule.update_phase(unix, tx)?;
                     now + PHASE_EVERY
                 }
@@ -446,30 +405,5 @@ fn heap() -> (u32, u32) {
             esp_idf_svc::sys::esp_get_free_heap_size(),
             esp_idf_svc::sys::esp_get_minimum_free_heap_size(),
         )
-    }
-}
-
-/// The fake race: key 0 so it stands out in the log, 10 minutes long.
-#[cfg(feature = "fake")]
-fn fake_session(now_unix: i64) -> Session {
-    let start = now_unix + FAKE_LEAD;
-    Session {
-        key: 0,
-        kind: SessionKind::Race,
-        start,
-        end: start + 10 * 60,
-    }
-}
-
-/// The 2026 Italian GP (a real OpenF1 session), moved in time so its winner
-/// window opened a minute ago: the winner lookup runs against real data.
-#[cfg(feature = "fake")]
-fn fake_finished_race(now_unix: i64) -> Session {
-    let end = now_unix - LIVE_GRACE - 60;
-    Session {
-        key: FAKE_FINISHED_RACE,
-        kind: SessionKind::Race,
-        start: end - 2 * 60 * 60,
-        end,
     }
 }

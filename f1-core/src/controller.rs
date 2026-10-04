@@ -73,8 +73,9 @@ type Layer = fn(&Controller) -> Option<Scene>;
 const LAYERS: [(&str, Layer); 5] = [
     ("override", Controller::override_layer),
     ("overlay", Controller::overlay_layer),
-    ("live track", Controller::live_track_layer),
+    // A winner only arrives after the finish, when the last flag is stale.
     ("winner", Controller::winner_layer),
+    ("live track", Controller::live_track_layer),
     ("status", Controller::status_layer),
 ];
 
@@ -412,6 +413,17 @@ mod tests {
         c.apply(Input::Override(Some(Effect::Solid(Rgb::WHITE))), t0);
         c.apply(Input::Override(None), t0);
         assert_eq!(winner_at(&mut c, t0).0, "live track");
+    }
+
+    #[test]
+    fn winner_shows_above_the_last_flag_then_the_flag_returns() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(flag(TrackFlag::Green, t0), t0);
+        c.apply(winner(t0), t0);
+        assert_eq!(winner_at(&mut c, t0), ("winner", winner_effect(TEAM)));
+        let display = default_winner_display();
+        assert_eq!(winner_at(&mut c, t0 + display).0, "live track");
     }
 
     #[test]

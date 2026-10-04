@@ -4,50 +4,27 @@
 use std::time::Duration;
 
 use f1_core::{
-    feed::{RaceControl, SessionStatus, TrackStatus},
     input::{RaceEvent, TrackFlag},
-    stream::parse_line,
-    track_state::{FeedMessage, TrackState},
+    timeline::{Stream, Timeline},
+    track_state::TrackState,
 };
-use serde::de::DeserializeOwned;
 
 const TRACK_STATUS: &str = include_str!("data/2026-italy/race/TrackStatus.jsonStream");
 const SESSION_STATUS: &str = include_str!("data/2026-italy/race/SessionStatus.jsonStream");
 const RACE_CONTROL: &str = include_str!("data/2026-italy/race/RaceControlMessages.jsonStream");
 
-fn parse_all<T: DeserializeOwned>(file: &str) -> Vec<(Duration, T)> {
-    file.lines()
-        .map(|raw| {
-            let line = parse_line(raw).unwrap();
-            (line.offset, serde_json::from_str(line.json).unwrap())
-        })
-        .collect()
-}
-
-/// All three streams as one list, ordered by offset. The sort is stable, so
-/// messages with the same offset keep their order within a file.
-fn merged() -> Vec<(Duration, FeedMessage)> {
-    let mut all: Vec<(Duration, FeedMessage)> = Vec::new();
-    for (t, msg) in parse_all::<TrackStatus>(TRACK_STATUS) {
-        all.push((t, FeedMessage::Track(msg)));
-    }
-    for (t, msg) in parse_all::<SessionStatus>(SESSION_STATUS) {
-        all.push((t, FeedMessage::Session(msg)));
-    }
-    for (t, rc) in parse_all::<RaceControl>(RACE_CONTROL) {
-        for msg in rc.messages.unwrap().into_vec() {
-            all.push((t, FeedMessage::RaceControl(msg)));
-        }
-    }
-    all.sort_by_key(|(t, _)| *t);
-    all
-}
-
-/// Every event the race produces, with its offset.
+/// Every event the race produces, with its offset. The merge is the same
+/// `Timeline` the replay on the lamp uses.
 fn race_events() -> Vec<(Duration, RaceEvent)> {
+    let files = [
+        (Stream::TrackStatus, TRACK_STATUS),
+        (Stream::SessionStatus, SESSION_STATUS),
+        (Stream::RaceControl, RACE_CONTROL),
+    ];
     let mut state = TrackState::default();
     let mut events = Vec::new();
-    for (t, msg) in merged() {
+    for item in Timeline::new(&files) {
+        let (t, msg) = item.unwrap();
         for event in state.apply(msg) {
             events.push((t, event));
         }

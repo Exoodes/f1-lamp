@@ -12,10 +12,10 @@ use f1_core::{controller::Controller, frame::Frame, input::Input};
 use io::led::LedOutput;
 use ws2812_esp32_rmt_driver::Ws2812Esp32Rmt;
 
-#[cfg(feature = "fake")]
-mod fake;
 mod io;
 mod net;
+#[cfg(feature = "player")]
+mod replay;
 mod web;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(20);
@@ -77,11 +77,9 @@ fn main() -> anyhow::Result<()> {
                 Arc::clone(&snapshot),
             )?,
         ),
-        #[cfg(feature = "fake")]
-        ("fake", fake::spawn(tx.clone())?),
+        #[cfg(feature = "player")]
+        ("replay", replay::spawn(tx.clone())?),
     ];
-    #[cfg(feature = "fake")]
-    log::info!("fake race started");
 
     let mut frame = Frame::new();
     let mut next_thread_check = Instant::now() + THREAD_CHECK_EVERY;

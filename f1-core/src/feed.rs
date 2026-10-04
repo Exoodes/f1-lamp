@@ -114,9 +114,95 @@ pub struct RcMessage {
     pub message: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SessionInfo {
+    #[serde(rename = "Type")]
+    pub kind: Option<String>,
+    #[serde(rename = "Name")]
+    pub name: Option<String>,
+}
+
+impl SessionInfo {
+    pub fn is_race(&self) -> Option<bool> {
+        self.kind.as_deref().map(|k| k == "Race")
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct TopThree {
+    pub lines: Option<TopLines>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum TopLines {
+    List(Vec<TopLine>),
+    Map(HashMap<String, TopLine>),
+}
+
+impl TopLines {
+    pub fn indexed(&self) -> Vec<(usize, &TopLine)> {
+        match self {
+            TopLines::List(v) => v.iter().enumerate().collect(),
+            TopLines::Map(m) => m
+                .iter()
+                .filter_map(|(key, line)| Some((key.parse().ok()?, line)))
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct TopLine {
+    pub racing_number: Option<String>,
+    pub team_colour: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_info_type_race_is_a_race() {
+        let info: SessionInfo =
+            serde_json::from_str(r#"{"Type":"Race","Name":"Sprint","Key":1}"#).unwrap();
+        assert_eq!(info.is_race(), Some(true));
+        assert_eq!(info.name.as_deref(), Some("Sprint"));
+    }
+
+    #[test]
+    fn session_info_qualifying_is_not_a_race() {
+        let info: SessionInfo = serde_json::from_str(r#"{"Type":"Qualifying"}"#).unwrap();
+        assert_eq!(info.is_race(), Some(false));
+    }
+
+    #[test]
+    fn top_three_reads_lines_as_list() {
+        let t: TopThree = serde_json::from_str(
+            r#"{"Withheld":false,"Lines":[{"RacingNumber":"10","TeamColour":"00A1E8"},{"RacingNumber":"63"}]}"#,
+        )
+        .unwrap();
+        let lines = t.lines.unwrap();
+        let lines = lines.indexed();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].0, 0);
+        assert_eq!(lines[0].1.racing_number.as_deref(), Some("10"));
+        assert_eq!(lines[1].1.team_colour, None);
+    }
+
+    #[test]
+    fn top_three_reads_lines_as_indexed_object() {
+        let t: TopThree =
+            serde_json::from_str(r#"{"Lines":{"0":{"RacingNumber":"12"},"1":{"LapTime":"1:25"}}}"#)
+                .unwrap();
+        let lines = t.lines.unwrap();
+        let mut lines = lines.indexed();
+        lines.sort_by_key(|(i, _)| *i);
+        assert_eq!(lines[0].1.racing_number.as_deref(), Some("12"));
+        assert_eq!(lines[1].1.racing_number, None);
+    }
 
     fn session(json: &str) -> Option<SessionState> {
         serde_json::from_str::<SessionStatus>(json).unwrap().status
