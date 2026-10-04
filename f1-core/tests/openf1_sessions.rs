@@ -2,8 +2,11 @@
 //! (`/v1/sessions?year=2026`, downloaded 2026-10-02).
 
 use f1_core::{
+    input::SessionPhase,
     openf1::{usable_sessions, SessionDto},
-    schedule::{Session, SessionKind},
+    schedule::{
+        current_session, next_session, phase_at, Session, SessionKind, LIVE_GRACE, POST_SESSION,
+    },
 };
 
 const SESSIONS: &str = include_str!("data/sessions.json");
@@ -71,4 +74,35 @@ fn every_session_ends_after_it_starts() {
     for s in usable_sessions(dtos()) {
         assert!(s.end > s.start, "session {}", s.key);
     }
+}
+
+#[test]
+fn monza_race_day_goes_through_every_phase() {
+    let sessions = usable_sessions(dtos());
+    let race = *sessions.iter().find(|s| s.key == MONZA_RACE).unwrap();
+    let at = |now| phase_at(&sessions, now);
+
+    assert_eq!(at(race.start - 60), SessionPhase::PreSession);
+    assert_eq!(at(race.start + 60), SessionPhase::Live);
+    assert_eq!(at(race.end + LIVE_GRACE + 60), SessionPhase::PostSession);
+    assert_eq!(
+        at(race.end + LIVE_GRACE + POST_SESSION + 60),
+        SessionPhase::Idle
+    );
+}
+
+#[test]
+fn monza_race_is_the_current_session_while_live() {
+    let sessions = usable_sessions(dtos());
+    let (_, current) = current_session(&sessions, 1_788_699_600 + 60).unwrap();
+    assert_eq!(current.key, MONZA_RACE);
+}
+
+#[test]
+fn after_monza_the_next_session_is_madrid_qualifying() {
+    let sessions = usable_sessions(dtos());
+    let next = next_session(&sessions, 1_788_706_800).unwrap();
+    assert_eq!(next.key, 11365);
+    assert_eq!(next.kind, SessionKind::Qualifying);
+    assert_eq!(next.start, 1_789_221_600); // 2026-09-12 14:00 UTC
 }
