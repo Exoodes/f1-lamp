@@ -16,3 +16,4 @@ pub mod settings;
 pub mod snapshot;
 pub mod stream;
 pub mod theme;
+pub mod track_state;
