@@ -10,10 +10,11 @@ use esp_idf_svc::{
     nvs::EspDefaultNvsPartition, sntp::EspSntp,
 };
 #[cfg(feature = "fake")]
-use f1_core::schedule::SessionKind;
+use f1_core::schedule::{SessionKind, LIVE_GRACE};
 use f1_core::{
-    input::{Input, NetStatus, SessionPhase},
-    openf1::{self, SessionDto, CALENDAR_DAYS},
+    color::Rgb,
+    input::{Input, NetStatus, RaceEvent, SessionPhase},
+    openf1::{self, DriverDto, ResultDto, SessionDto, CALENDAR_DAYS},
     schedule::{self, Session, CACHED_SESSIONS},
     snapshot::Snapshot,
 };
@@ -69,9 +70,16 @@ const CALENDAR_WAITING_EVERY: Duration = Duration::from_secs(5);
 const PHASE_EVERY: Duration = Duration::from_secs(30);
 /// How often to check for a valid clock before the first phase.
 const PHASE_WAITING_EVERY: Duration = Duration::from_secs(1);
+/// How often to look for a race's winner while it's due; results can take a
+/// while to appear after the flag.
+const WINNER_EVERY: Duration = Duration::from_secs(60);
 /// With `fake`, a race starts this long after the clock is first valid.
 #[cfg(feature = "fake")]
 const FAKE_LEAD: i64 = 2 * 60;
+/// With `fake`: the 2026 Italian GP race, whose winner (#12, Mercedes teal)
+/// is known from the fixtures.
+#[cfg(feature = "fake")]
+const FAKE_FINISHED_RACE: u32 = 11361;
 
 /// When each of the thread's jobs is next due.
 struct Deadlines {
@@ -80,6 +88,7 @@ struct Deadlines {
     clock: Instant,
     calendar: Instant,
     phase: Instant,
+    winner: Instant,
 }
 
 impl Deadlines {
@@ -89,6 +98,7 @@ impl Deadlines {
             .min(self.clock)
             .min(self.calendar)
             .min(self.phase)
+            .min(self.winner)
     }
 }
 
@@ -96,37 +106,43 @@ impl Deadlines {
 struct Schedule {
     sessions: Vec<Session>,
     sent_phase: Option<SessionPhase>,
-    /// With `fake`: the made-up race, put back after every download.
+    /// With `fake`: the made-up races, put back after every download.
     #[cfg(feature = "fake")]
-    fake: Option<Session>,
+    fakes: Vec<Session>,
 }
 
 impl Schedule {
     /// Swaps in a freshly downloaded list. The caller saves to NVS before
-    /// this, so the fake race (added here) never reaches flash.
+    /// this, so the fake races (added here) never reach flash.
     fn replace(&mut self, sessions: Vec<Session>) {
         self.sessions = sessions;
         #[cfg(feature = "fake")]
-        if let Some(fake) = self.fake {
-            self.sessions.push(fake);
+        {
+            self.sessions.extend_from_slice(&self.fakes);
             self.sessions.sort_by_key(|s| s.start);
         }
     }
 
-    /// With `fake`: adds the fake race, once per boot.
+    /// With `fake`: adds the fake races, once per boot: one starting soon
+    /// (phases) and a real past race already in its winner window (winner).
     #[cfg(feature = "fake")]
-    fn add_fake(&mut self, now_unix: i64) {
-        if self.fake.is_some() {
+    fn add_fakes(&mut self, now_unix: i64) {
+        if !self.fakes.is_empty() {
             return;
         }
-        let fake = fake_session(now_unix);
+        let race = fake_session(now_unix);
         log::info!(
             "fake: race (session {}) starts in {}",
-            fake.key,
-            in_words(fake.start - now_unix)
+            race.key,
+            in_words(race.start - now_unix)
         );
-        self.fake = Some(fake);
-        self.sessions.push(fake);
+        let finished = fake_finished_race(now_unix);
+        log::info!(
+            "fake: race (session {}) is in its winner window",
+            finished.key
+        );
+        self.fakes = vec![race, finished];
+        self.sessions.extend_from_slice(&self.fakes);
         self.sessions.sort_by_key(|s| s.start);
     }
 
@@ -159,7 +175,7 @@ fn run(
         sessions: schedule_store.load(),
         sent_phase: None,
         #[cfg(feature = "fake")]
-        fake: None,
+        fakes: Vec::new(),
     };
     let mut saved = schedule.sessions.clone();
     let mut wifi = wifi::create(modem, sys_loop, nvs, WIFI_SSID, WIFI_PSK)?;
@@ -173,6 +189,8 @@ fn run(
 
     let mut retry_wait = FIRST_RETRY_WAIT;
     let mut calendar_retry = FIRST_CALENDAR_RETRY;
+    // The session whose winner was sent, so each race is shown once.
+    let mut winner_sent: Option<u32> = None;
     let now = Instant::now();
     let mut due = Deadlines {
         wifi_check: now,
@@ -180,6 +198,7 @@ fn run(
         clock: now,
         calendar: now,
         phase: now,
+        winner: now,
     };
 
     loop {
@@ -248,13 +267,19 @@ fn run(
             due.phase = match clock::unix_now() {
                 Some(unix) => {
                     #[cfg(feature = "fake")]
-                    schedule.add_fake(unix);
+                    schedule.add_fakes(unix);
                     schedule.update_phase(unix, tx)?;
                     now + PHASE_EVERY
                 }
                 // No valid time yet: the schedule can't be read without it.
                 None => now + PHASE_WAITING_EVERY,
             };
+        }
+        if now >= due.winner {
+            if let (Some(unix), true) = (clock::unix_now(), wifi.is_up().unwrap_or(false)) {
+                check_winner(&schedule.sessions, unix, &mut winner_sent, tx)?;
+            }
+            due.winner = now + WINNER_EVERY;
         }
         if now >= due.heap_log {
             let (free, min_free) = heap();
@@ -294,6 +319,58 @@ fn check_wifi(
             Ok(next)
         }
     }
+}
+
+/// If a race is in its winner window and its winner hasn't been sent yet,
+/// looks it up and sends `RaceEvent::Winner`. Failures only log: the caller
+/// tries again a minute later.
+fn check_winner(
+    sessions: &[Session],
+    now_unix: i64,
+    sent: &mut Option<u32>,
+    tx: &SyncSender<Input>,
+) -> anyhow::Result<()> {
+    let Some(race) = schedule::awaiting_winner(sessions, now_unix) else {
+        return Ok(());
+    };
+    if *sent == Some(race.key) {
+        return Ok(());
+    }
+
+    match fetch_winner(race.key) {
+        Ok(Some((driver, team_color))) => {
+            log::info!("winner: #{driver} ({team_color}), session {}", race.key);
+            tx.send(Input::Race {
+                event: RaceEvent::Winner { driver, team_color },
+                received: Instant::now(),
+            })
+            .context("render loop is gone")?;
+            *sent = Some(race.key);
+        }
+        Ok(None) => log::info!(
+            "winner: session {} not published yet; retrying in {} s",
+            race.key,
+            WINNER_EVERY.as_secs()
+        ),
+        Err(e) => log::warn!("winner: {e:#}; retrying in {} s", WINNER_EVERY.as_secs()),
+    }
+    Ok(())
+}
+
+/// The winner of `session_key` and their team colour; `None` until OpenF1 has
+/// published the result (it answers 404 until then).
+fn fetch_winner(session_key: u32) -> anyhow::Result<Option<(u8, Rgb)>> {
+    let results =
+        http::get_json::<Vec<ResultDto>>(&openf1::results_url(session_key))?.unwrap_or_default();
+    let Some(driver) = openf1::winner(&results) else {
+        return Ok(None);
+    };
+    let drivers =
+        http::get_json::<Vec<DriverDto>>(&openf1::drivers_url(session_key))?.unwrap_or_default();
+    // Without a colour, try again later rather than guess one.
+    Ok(openf1::team_colours(drivers)
+        .get(&driver)
+        .map(|&colour| (driver, colour)))
 }
 
 /// Downloads the sessions of the next `CALENDAR_DAYS` days, ready to use.
@@ -381,5 +458,18 @@ fn fake_session(now_unix: i64) -> Session {
         kind: SessionKind::Race,
         start,
         end: start + 10 * 60,
+    }
+}
+
+/// The 2026 Italian GP (a real OpenF1 session), moved in time so its winner
+/// window opened a minute ago: the winner lookup runs against real data.
+#[cfg(feature = "fake")]
+fn fake_finished_race(now_unix: i64) -> Session {
+    let end = now_unix - LIVE_GRACE - 60;
+    Session {
+        key: FAKE_FINISHED_RACE,
+        kind: SessionKind::Race,
+        start: end - 2 * 60 * 60,
+        end,
     }
 }

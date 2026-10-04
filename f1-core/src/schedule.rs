@@ -118,6 +118,15 @@ pub fn still_relevant(sessions: &[Session], now: i64, max: usize) -> Vec<Session
         .collect()
 }
 
+/// A race or sprint whose post-session (winner) window contains `now`. Unlike
+/// `phase_at`, another session's pre-session window doesn't hide it.
+pub fn awaiting_winner(sessions: &[Session], now: i64) -> Option<&Session> {
+    sessions.iter().find(|s| {
+        let post_start = s.end + LIVE_GRACE;
+        s.kind.has_winner() && post_start <= now && now < post_start + POST_SESSION
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,5 +437,64 @@ mod tests {
             .collect();
         let json = serde_json::to_string(&sessions).unwrap();
         assert!(json.len() < 1500, "{} bytes", json.len());
+    }
+
+    // ---- Winner window ----
+
+    /// When the race's winner window opens: 12:30.
+    const POST_START: i64 = END + LIVE_GRACE;
+
+    fn awaiting_key(sessions: &[Session], now: i64) -> Option<u32> {
+        awaiting_winner(sessions, now).map(|s| s.key)
+    }
+
+    #[test]
+    fn race_in_post_session_awaits_a_winner() {
+        assert_eq!(awaiting_key(&[race()], POST_START), Some(1));
+    }
+
+    #[test]
+    fn live_race_does_not_await_a_winner_yet() {
+        assert_eq!(awaiting_key(&[race()], POST_START - 1), None);
+        assert_eq!(awaiting_key(&[race()], START), None);
+    }
+
+    #[test]
+    fn winner_window_closes_after_post_session() {
+        assert_eq!(awaiting_key(&[race()], RACE_OVER - 1), Some(1));
+        assert_eq!(awaiting_key(&[race()], RACE_OVER), None);
+    }
+
+    #[test]
+    fn sprint_awaits_a_winner() {
+        let sprint = session(1, SessionKind::Sprint, START, END);
+        assert_eq!(awaiting_key(&[sprint], POST_START), Some(1));
+    }
+
+    #[test]
+    fn qualifying_never_awaits_a_winner() {
+        for kind in [SessionKind::Qualifying, SessionKind::SprintQualifying] {
+            let quali = session(1, kind, START, END);
+            assert_eq!(awaiting_key(&[quali], POST_START), None, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn awaiting_winner_ignores_a_later_sessions_pre_session() {
+        // At 12:45 the race (key 1) is in its winner window, while qualifying
+        // at 13:00 is in pre-session. The phase says PreSession, but the
+        // winner is still wanted.
+        let sessions = [
+            race(),
+            session(2, SessionKind::Qualifying, 13 * HOUR, 14 * HOUR),
+        ];
+        let now = 12 * HOUR + 45 * MINUTE;
+        assert_eq!(phase_at(&sessions, now), SessionPhase::PreSession);
+        assert_eq!(awaiting_key(&sessions, now), Some(1));
+    }
+
+    #[test]
+    fn empty_list_awaits_no_winner() {
+        assert_eq!(awaiting_key(&[], POST_START), None);
     }
 }

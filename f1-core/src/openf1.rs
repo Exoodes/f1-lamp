@@ -1,9 +1,16 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, Datelike, Utc};
 use serde::Deserialize;
 
-use crate::schedule::{Session, SessionKind};
+use crate::{
+    color::Rgb,
+    schedule::{Session, SessionKind},
+};
 
 const SESSIONS_URL: &str = "https://api.openf1.org/v1/sessions";
+const RESULTS_URL: &str = "https://api.openf1.org/v1/session_result";
+const DRIVERS_URL: &str = "https://api.openf1.org/v1/drivers";
 /// How far ahead the calendar looks: long enough to always include the next
 /// race weekend, short enough to keep the response small (about 7 KB at most,
 /// where a whole season is about 48 KB).
@@ -27,6 +34,16 @@ pub fn sessions_url(now: i64) -> String {
     }
 }
 
+/// The winner of a session: only position 1, so the response stays tiny.
+pub fn results_url(session_key: u32) -> String {
+    format!("{RESULTS_URL}?session_key={session_key}&position=1")
+}
+
+/// Every driver in a session, with their team colour (about 8 KB).
+pub fn drivers_url(session_key: u32) -> String {
+    format!("{DRIVERS_URL}?session_key={session_key}")
+}
+
 /// `2026-10-04`. Built by hand: chrono's `format` needs its `alloc` feature.
 fn date(t: DateTime<Utc>) -> String {
     format!("{:04}-{:02}-{:02}", t.year(), t.month(), t.day())
@@ -47,6 +64,40 @@ pub struct SessionDto {
 pub enum SessionError {
     BadTime(String),
     UnknownKind(String),
+}
+
+/// One line of `/v1/session_result`.
+#[derive(Debug, Deserialize)]
+pub struct ResultDto {
+    /// `null` for drivers who weren't classified (retired early).
+    pub position: Option<u8>,
+    pub driver_number: u8,
+}
+
+/// One line of `/v1/drivers`.
+#[derive(Debug, Deserialize)]
+pub struct DriverDto {
+    pub driver_number: u8,
+    /// Hex without `#`, e.g. `"00D7B6"`.
+    pub team_colour: Option<String>,
+}
+
+/// The driver number of whoever finished first.
+pub fn winner(results: &[ResultDto]) -> Option<u8> {
+    results
+        .iter()
+        .find(|r| r.position == Some(1))
+        .map(|r| r.driver_number)
+}
+
+/// Driver number → team colour. Drivers with a missing or unreadable colour
+/// are skipped.
+pub fn team_colours(drivers: Vec<DriverDto>) -> HashMap<u8, Rgb> {
+    drivers
+        .into_iter()
+        // `?` inside the closure: a `None` anywhere skips this driver.
+        .filter_map(|d| Some((d.driver_number, d.team_colour?.parse().ok()?)))
+        .collect()
 }
 
 impl TryFrom<SessionDto> for Session {
@@ -278,5 +329,84 @@ mod tests {
     #[test]
     fn sessions_url_falls_back_to_no_filter_for_impossible_times() {
         assert_eq!(sessions_url(i64::MAX / 2), SESSIONS_URL);
+    }
+
+    // ---- Results and drivers ----
+
+    fn result(position: Option<u8>, driver_number: u8) -> ResultDto {
+        ResultDto {
+            position,
+            driver_number,
+        }
+    }
+
+    fn driver(driver_number: u8, team_colour: Option<&str>) -> DriverDto {
+        DriverDto {
+            driver_number,
+            team_colour: team_colour.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn results_url_asks_only_for_the_winner() {
+        assert_eq!(
+            results_url(11361),
+            "https://api.openf1.org/v1/session_result?session_key=11361&position=1"
+        );
+    }
+
+    #[test]
+    fn drivers_url_asks_for_one_session() {
+        assert_eq!(
+            drivers_url(11361),
+            "https://api.openf1.org/v1/drivers?session_key=11361"
+        );
+    }
+
+    #[test]
+    fn winner_is_the_driver_in_position_one() {
+        let results = [result(Some(2), 4), result(Some(1), 12), result(Some(3), 63)];
+        assert_eq!(winner(&results), Some(12));
+    }
+
+    #[test]
+    fn no_winner_without_position_one() {
+        assert_eq!(winner(&[result(Some(2), 4)]), None);
+        assert_eq!(winner(&[]), None);
+    }
+
+    #[test]
+    fn unclassified_drivers_are_not_winners() {
+        assert_eq!(winner(&[result(None, 18)]), None);
+    }
+
+    #[test]
+    fn null_position_parses() {
+        let r: ResultDto = serde_json::from_str(r#"{"position":null,"driver_number":18}"#).unwrap();
+        assert_eq!(r.position, None);
+    }
+
+    #[test]
+    fn team_colour_without_hash_parses() {
+        let colours = team_colours(vec![driver(12, Some("00D7B6"))]);
+        assert_eq!(colours.get(&12), Some(&Rgb::new(0x00, 0xD7, 0xB6)));
+    }
+
+    #[test]
+    fn drivers_with_bad_or_missing_colour_are_skipped() {
+        let colours = team_colours(vec![
+            driver(1, Some("F47600")),
+            driver(2, None),
+            driver(3, Some("not a colour")),
+        ]);
+        assert_eq!(colours.len(), 1);
+        assert!(colours.contains_key(&1));
+    }
+
+    #[test]
+    fn a_repeated_driver_keeps_one_colour() {
+        // OpenF1 has been seen to return the same driver twice.
+        let colours = team_colours(vec![driver(1, Some("F47600")), driver(1, Some("F47600"))]);
+        assert_eq!(colours.len(), 1);
     }
 }
