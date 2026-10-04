@@ -3,6 +3,7 @@
 pub mod color;
 pub mod command;
 pub mod controller;
+pub mod drivers;
 pub mod effect;
 pub mod frame;
 pub mod input;

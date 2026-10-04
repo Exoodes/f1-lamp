@@ -29,7 +29,7 @@
   .slider { display: flex; align-items: center; gap: 8px; flex: 1; max-width: 60%; }
   .slider input { flex: 1; }
   output { min-width: 3rem; text-align: right; color: var(--muted); }
-  input[type=number], input[type=time] {
+  input[type=number], input[type=time], input[type=text] {
     width: 7.5rem; padding: 6px; font: inherit;
     background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
   }
@@ -92,7 +92,7 @@
     </label>
     <label>Winner shown (min) <input type="number" id="winner_minutes" min="0" step="0.5"></label>
     <label>TV delay (s) <input type="number" id="tv_delay" min="0" step="0.5"></label>
-    <label>Favourite driver no. <input type="number" id="favourite_driver" min="1" max="99" placeholder="none"></label>
+    <label>Followed drivers <input type="text" id="followed_drivers" inputmode="numeric" placeholder="e.g. 1, 44, 63"></label>
   </section>
 
   <section>
@@ -153,9 +153,17 @@ function fromMinutes(min) {
   return pad(Math.floor(min / 60)) + ":" + pad(min % 60);
 }
 
-// "" -> null, "44" -> 44.
-function numOrNull(text) {
-  return text === "" ? null : Number(text);
+// "1, 44 63" -> [1, 44, 63]; "" -> []. Throws on anything that isn't a whole
+// number, so Save can say what's wrong instead of sending it.
+function parseDrivers(text) {
+  return text
+    .split(/[\s,]+/)
+    .filter((part) => part !== "")
+    .map((part) => {
+      const n = Number(part);
+      if (!Number.isInteger(n)) throw new Error(`"${part}" is not a driver number`);
+      return n;
+    });
 }
 
 // Shows "40 %" next to a slider. Only updates the page, never the device.
@@ -172,7 +180,7 @@ function fillForm(s) {
   }
   $("winner_minutes").value = s.winner_display_ms / 60000;
   $("tv_delay").value = s.tv_delay_ms / 1000;
-  $("favourite_driver").value = s.favourite_driver ?? "";
+  $("followed_drivers").value = s.followed_drivers.join(", ");
   $("night_start").value = fromMinutes(s.night_start);
   $("night_end").value = fromMinutes(s.night_end);
 }
@@ -183,7 +191,7 @@ function readForm() {
     lamp_color: $("lamp_color").value,
     winner_display_ms: Math.round(Number($("winner_minutes").value) * 60000),
     tv_delay_ms: Math.round(Number($("tv_delay").value) * 1000),
-    favourite_driver: numOrNull($("favourite_driver").value),
+    followed_drivers: parseDrivers($("followed_drivers").value),
     night_start: toMinutes($("night_start").value),
     night_end: toMinutes($("night_end").value),
   };

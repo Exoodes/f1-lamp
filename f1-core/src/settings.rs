@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{color::Rgb, theme::LAMP};
+use crate::{color::Rgb, drivers::DriverSet, theme::LAMP};
 
 /// The most bytes the settings JSON may take. The firmware reads saved
 /// settings into a buffer this big; a longer entry can't be read and the lamp
@@ -17,8 +17,40 @@ pub struct Settings {
     pub night_end: Option<u16>,
     pub night_brightness: f32,
     pub tv_delay_ms: u32,
-    pub favourite_driver: Option<u8>,
+    /// Drivers whose pit stops and overtakes the lamp shows. Replaces the
+    /// old single `favourite_driver`, which saved settings may still contain;
+    /// it's ignored, so the list starts empty.
+    pub followed_drivers: DriverSet,
     pub winner_display_ms: u32,
+    /// Which race events the lamp shows.
+    pub effects: EffectToggles,
+}
+
+/// One switch per kind of race event, all on by default. Track flags aren't
+/// here: they are the lamp's main job.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+// A missing switch (older saved settings, or a partial JSON) means "on".
+#[serde(default)]
+pub struct EffectToggles {
+    pub start_lights: bool,
+    pub chequered_flag: bool,
+    pub fastest_lap: bool,
+    pub pit_stop: bool,
+    pub overtake: bool,
+    pub winner: bool,
+}
+
+impl Default for EffectToggles {
+    fn default() -> Self {
+        Self {
+            start_lights: true,
+            chequered_flag: true,
+            fastest_lap: true,
+            pit_stop: true,
+            overtake: true,
+            winner: true,
+        }
+    }
 }
 
 impl Default for Settings {
@@ -31,8 +63,9 @@ impl Default for Settings {
             night_end: None,
             night_brightness: 0.3,
             tv_delay_ms: 0,
-            favourite_driver: None,
+            followed_drivers: DriverSet::new(),
             winner_display_ms: 60000,
+            effects: EffectToggles::default(),
         }
     }
 }
@@ -40,6 +73,7 @@ impl Default for Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::drivers::MAX_DRIVER;
 
     #[test]
     fn default_lamp_is_the_theme_lamp_colour() {
@@ -56,8 +90,13 @@ mod tests {
             night_end: Some(7 * 60),
             night_brightness: 0.1,
             tv_delay_ms: 1500,
-            favourite_driver: Some(44),
+            followed_drivers: DriverSet::try_from(vec![1, 44]).unwrap(),
             winner_display_ms: 90_000,
+            effects: EffectToggles {
+                fastest_lap: false,
+                overtake: false,
+                ..EffectToggles::default()
+            },
         };
         let json = serde_json::to_string(&settings).unwrap();
         let back: Settings = serde_json::from_str(&json).unwrap();
@@ -94,10 +133,42 @@ mod tests {
 
     #[test]
     fn optional_fields_can_be_null() {
-        let json = r#"{"night_start": null, "favourite_driver": null}"#;
+        let json = r#"{"night_start": null, "night_end": null}"#;
         let settings: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(settings.night_start, None);
-        assert_eq!(settings.favourite_driver, None);
+        assert_eq!(settings.night_end, None);
+    }
+
+    #[test]
+    fn followed_drivers_are_stored_as_a_list() {
+        let settings = Settings {
+            followed_drivers: DriverSet::try_from(vec![44, 1]).unwrap(),
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(json.contains(r#""followed_drivers":[1,44]"#), "{json}");
+    }
+
+    #[test]
+    fn no_followed_drivers_by_default() {
+        assert!(Settings::default().followed_drivers.is_empty());
+    }
+
+    #[test]
+    fn settings_saved_with_the_old_favourite_driver_still_load() {
+        // Saved before `followed_drivers` existed: the old field is ignored,
+        // everything else is kept.
+        let json = r##"{"lamp_color":"#ffffff","tv_delay_ms":500,"favourite_driver":44}"##;
+        let settings: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.lamp_color, Rgb::new(255, 255, 255));
+        assert_eq!(settings.tv_delay_ms, 500);
+        assert!(settings.followed_drivers.is_empty());
+    }
+
+    #[test]
+    fn an_impossible_followed_driver_is_rejected() {
+        let json = r#"{"followed_drivers":[44, 0]}"#;
+        assert!(serde_json::from_str::<Settings>(json).is_err());
     }
 
     #[test]
@@ -112,10 +183,72 @@ mod tests {
             night_end: Some(u16::MAX),
             night_brightness: 1.0 / 7.0,
             tv_delay_ms: u32::MAX,
-            favourite_driver: Some(u8::MAX),
+            followed_drivers: DriverSet::try_from((1..=MAX_DRIVER).collect::<Vec<_>>()).unwrap(),
             winner_display_ms: u32::MAX,
+            // "false" is one character longer than "true".
+            effects: EffectToggles {
+                start_lights: false,
+                chequered_flag: false,
+                fastest_lap: false,
+                pit_stop: false,
+                overtake: false,
+                winner: false,
+            },
         };
         let json = serde_json::to_string(&settings).unwrap();
         assert!(json.len() < MAX_JSON, "{} bytes: {json}", json.len());
+    }
+
+    // ---- Effect toggles ----
+
+    #[test]
+    fn every_effect_is_on_by_default() {
+        let e = Settings::default().effects;
+        assert!(
+            e.start_lights
+                && e.chequered_flag
+                && e.fastest_lap
+                && e.pit_stop
+                && e.overtake
+                && e.winner
+        );
+    }
+
+    #[test]
+    fn settings_saved_before_toggles_existed_have_every_effect_on() {
+        let json = r##"{"lamp_color":"#ffffff","tv_delay_ms":500}"##;
+        let settings: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.effects, EffectToggles::default());
+    }
+
+    #[test]
+    fn a_missing_toggle_means_on() {
+        let json = r#"{"effects":{"fastest_lap":false}}"#;
+        let settings: Settings = serde_json::from_str(json).unwrap();
+        let expected = EffectToggles {
+            fastest_lap: false,
+            ..EffectToggles::default()
+        };
+        assert_eq!(settings.effects, expected);
+    }
+
+    #[test]
+    fn toggles_are_stored_by_name() {
+        let settings = Settings {
+            effects: EffectToggles {
+                overtake: false,
+                ..EffectToggles::default()
+            },
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(json.contains(r#""overtake":false"#), "{json}");
+        assert!(json.contains(r#""start_lights":true"#), "{json}");
+    }
+
+    #[test]
+    fn a_toggle_that_is_not_a_bool_is_rejected() {
+        let json = r#"{"effects":{"winner":"no"}}"#;
+        assert!(serde_json::from_str::<Settings>(json).is_err());
     }
 }
