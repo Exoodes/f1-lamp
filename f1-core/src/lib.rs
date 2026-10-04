@@ -5,6 +5,7 @@ pub mod command;
 pub mod controller;
 pub mod drivers;
 pub mod effect;
+pub mod feed;
 pub mod frame;
 pub mod input;
 pub mod openf1;
