@@ -1,0 +1,4 @@
+﻿00:00:00.000{"Withheld":false,"Lines":[{"Position":"1","RacingNumber":"81","Tla":"PIA","TeamColour":"F47600"},{"Position":"2","RacingNumber":"16","Tla":"LEC","TeamColour":"ED1131"},{"Position":"3","RacingNumber":"12","Tla":"ANT","TeamColour":"00D7B6"}]}
+00:00:45.000{"Lines":{"1":{"DiffToAhead":"+1.204"}}}
+00:01:12.000{"Lines":{"0":{"RacingNumber":"16","Tla":"LEC"},"1":{"RacingNumber":"81","Tla":"PIA"}}}
+00:02:15.000{"Lines":{"0":{"RacingNumber":"12","Tla":"ANT"},"1":{"RacingNumber":"16","Tla":"LEC"},"2":{"RacingNumber":"81","Tla":"PIA"}}}

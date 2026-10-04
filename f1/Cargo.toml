@@ -35,6 +35,8 @@ toml = "0.8"
 [features]
 # Plays the session in `[replay] dir` of cfg.toml (or $F1_REPLAY_DIR) on the lamp.
 replay = ["player"]
+# Plays the hand-written showcase race in f1-core/tests/data/showcase.
+showcase = ["player"]
 # Internal: what every kind of replay needs. Not meant to be enabled by hand.
 player = []
 

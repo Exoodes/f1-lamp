@@ -1,8 +1,8 @@
-//! With `--features replay`: plays an archived session on the lamp, through
+//! With `--features replay` or `showcase`: plays a session on the lamp, through
 //! the same parsers, track-state machine and tracker the live feed will use.
 //!
-//! The session comes from `[replay] dir` in cfg.toml (see build.rs) and is
-//! embedded in the firmware. The replay owns the phase, so the scheduler
+//! The session comes from `[replay] dir` in cfg.toml, or is the hand-written
+//! showcase race (see build.rs), and is embedded in the firmware. The replay owns the phase, so the scheduler
 //! doesn't send one while this runs. The web page controls it through
 //! [`handle`]: play, pause, speed, jump.
 
@@ -21,8 +21,9 @@ use f1_core::{
     timeline::Stream,
 };
 
-/// Speed until the page sets another: a race in about two minutes.
-const SPEED: u32 = 60;
+/// Speed until the page sets another. The showcase is written for real time;
+/// at 60x a real race takes about two minutes.
+const SPEED: u32 = if cfg!(feature = "showcase") { 1 } else { 60 };
 /// The longest the thread waits without refreshing the status, so the page
 /// sees the position move even during a long gap in the feed.
 const STATUS_EVERY: Duration = Duration::from_secs(1);

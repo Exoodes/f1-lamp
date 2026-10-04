@@ -52,32 +52,37 @@ fn wifi_credentials(f1: &toml::Table) {
     }
 }
 
-/// With `--features replay`: finds the files of the session to replay and
-/// hands their paths to the compiler (see `REPLAY_FILES`), which
-/// `src/replay.rs` embeds with `include_str!`. `$F1_REPLAY_DIR` wins over
-/// `[replay] dir` in cfg.toml, so another session can be tried without
-/// editing the file.
+/// With `--features replay` or `showcase`: finds the files of the session to
+/// play and hands their paths to the compiler (see `REPLAY_FILES`), which
+/// `src/replay.rs` embeds with `include_str!`.
+///
+/// `replay` takes the folder from `$F1_REPLAY_DIR`, else `[replay] dir` in
+/// cfg.toml, so another session can be tried without editing the file.
+/// `showcase` always plays the hand-written race in f1-core's test data.
 fn replay_dir(replay: Option<&toml::Table>) {
     println!("cargo:rerun-if-env-changed=F1_REPLAY_DIR");
-    if std::env::var_os("CARGO_FEATURE_REPLAY").is_none() {
-        return;
-    }
-
-    let dir = std::env::var("F1_REPLAY_DIR")
-        .ok()
-        .or_else(|| {
-            replay
-                .and_then(|t| t.get("dir"))
-                .and_then(toml::Value::as_str)
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| {
-            panic!(
-                "--features replay needs a session: add\n\n[replay]\n\
-                 dir = \"C:/path/to/f1-data/<weekend>/<session>\"\n\n\
-                 to f1/cfg.toml, or set F1_REPLAY_DIR"
-            )
-        });
+    let wants_replay = std::env::var_os("CARGO_FEATURE_REPLAY").is_some();
+    let wants_showcase = std::env::var_os("CARGO_FEATURE_SHOWCASE").is_some();
+    let dir = match (wants_replay, wants_showcase) {
+        (false, false) => return,
+        (true, true) => panic!("--features replay and showcase both play a session: pick one"),
+        (false, true) => "../f1-core/tests/data/showcase".to_owned(),
+        (true, false) => std::env::var("F1_REPLAY_DIR")
+            .ok()
+            .or_else(|| {
+                replay
+                    .and_then(|t| t.get("dir"))
+                    .and_then(toml::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "--features replay needs a session: add\n\n[replay]\n\
+                     dir = \"C:/path/to/f1-data/<weekend>/<session>\"\n\n\
+                     to f1/cfg.toml, or set F1_REPLAY_DIR"
+                )
+            }),
+    };
     // A relative path is taken from f1/.
     let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let dir = Path::new(&manifest).join(dir);
