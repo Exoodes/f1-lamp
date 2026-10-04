@@ -1,7 +1,36 @@
-use chrono::DateTime;
+use chrono::{DateTime, Datelike, Utc};
 use serde::Deserialize;
 
 use crate::schedule::{Session, SessionKind};
+
+const SESSIONS_URL: &str = "https://api.openf1.org/v1/sessions";
+/// How far ahead the calendar looks: long enough to always include the next
+/// race weekend, short enough to keep the response small (about 7 KB at most,
+/// where a whole season is about 48 KB).
+pub const CALENDAR_DAYS: i64 = 35;
+const DAY: i64 = 24 * 60 * 60;
+
+/// The OpenF1 query for sessions starting from the UTC day of `now` (Unix
+/// seconds) until `CALENDAR_DAYS` later. Whole days, so a session that is
+/// live or just over today is still included.
+pub fn sessions_url(now: i64) -> String {
+    let from = DateTime::from_timestamp(now, 0);
+    let to = DateTime::from_timestamp(now + CALENDAR_DAYS * DAY, 0);
+    match (from, to) {
+        (Some(from), Some(to)) => format!(
+            "{SESSIONS_URL}?date_start>={}&date_start<{}",
+            date(from),
+            date(to)
+        ),
+        // Only for absurd times; asking for everything is the safe fallback.
+        _ => SESSIONS_URL.to_string(),
+    }
+}
+
+/// `2026-10-04`. Built by hand: chrono's `format` needs its `alloc` feature.
+fn date(t: DateTime<Utc>) -> String {
+    format!("{:04}-{:02}-{:02}", t.year(), t.month(), t.day())
+}
 
 #[derive(Debug, Deserialize)]
 pub struct SessionDto {
@@ -204,5 +233,50 @@ mod tests {
             "date_start":"2026-09-06T13:00:00+00:00","date_end":"2026-09-06T15:00:00+00:00"}"#;
         let d: SessionDto = serde_json::from_str(json).unwrap();
         assert!(!d.is_cancelled);
+    }
+
+    // ---- sessions_url ----
+
+    /// 2026-10-04 12:00 UTC.
+    const OCT_4_NOON: i64 = 1_791_115_200;
+
+    #[test]
+    fn sessions_url_covers_the_next_35_days() {
+        assert_eq!(
+            sessions_url(OCT_4_NOON),
+            "https://api.openf1.org/v1/sessions?date_start>=2026-10-04&date_start<2026-11-08"
+        );
+    }
+
+    #[test]
+    fn sessions_url_uses_the_utc_date() {
+        // 23:59:59 UTC, already 5 October in Prague: OpenF1's times are UTC.
+        assert_eq!(
+            sessions_url(1_791_158_399),
+            "https://api.openf1.org/v1/sessions?date_start>=2026-10-04&date_start<2026-11-08"
+        );
+    }
+
+    #[test]
+    fn sessions_url_window_crosses_new_year() {
+        // 2026-12-21 00:00 UTC; no year filter, so January 2027 is included.
+        assert_eq!(
+            sessions_url(1_797_811_200),
+            "https://api.openf1.org/v1/sessions?date_start>=2026-12-21&date_start<2027-01-25"
+        );
+    }
+
+    #[test]
+    fn sessions_url_pads_month_and_day() {
+        // 2026-01-02 00:00 UTC.
+        assert_eq!(
+            sessions_url(1_767_312_000),
+            "https://api.openf1.org/v1/sessions?date_start>=2026-01-02&date_start<2026-02-06"
+        );
+    }
+
+    #[test]
+    fn sessions_url_falls_back_to_no_filter_for_impossible_times() {
+        assert_eq!(sessions_url(i64::MAX / 2), SESSIONS_URL);
     }
 }

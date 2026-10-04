@@ -26,6 +26,7 @@ ws2812-esp32-rmt-driver = { version = "0.14.0", features = ["smart-leds-trait"] 
 f1-core = { path = "../f1-core" }
 anyhow = "1.0.104"
 serde_json = "1.0.151"
+serde = "1.0.229"
 
 [build-dependencies]
 embuild = "0.33.5"
