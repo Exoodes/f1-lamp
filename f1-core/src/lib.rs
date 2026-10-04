@@ -13,4 +13,5 @@ pub mod post;
 pub mod schedule;
 pub mod settings;
 pub mod snapshot;
+pub mod stream;
 pub mod theme;
