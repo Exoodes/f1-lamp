@@ -3,6 +3,7 @@
 pub mod color;
 pub mod command;
 pub mod controller;
+pub mod delay;
 pub mod drivers;
 pub mod effect;
 pub mod feed;

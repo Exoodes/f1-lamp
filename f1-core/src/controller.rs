@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use crate::{
+    delay::DelayQueue,
     effect::Effect,
     frame::Frame,
     input::{Input, NetStatus, RaceEvent, SessionPhase, TrackFlag},
@@ -42,6 +43,14 @@ fn stamp<T: PartialEq>(slot: &mut Option<Stamped<T>>, value: T, now: Instant) {
     }
 }
 
+/// What waits for the TV delay: race events, and phase changes, so the live
+/// layer can't end before a delayed chequered flag has been shown.
+#[derive(Clone, Copy, Debug)]
+enum Delayed {
+    Race(RaceEvent),
+    Phase(SessionPhase),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct WinnerScene {
     scene: Scene,
@@ -66,6 +75,9 @@ pub struct Controller {
     booted: Instant,
     layers: LayerState,
     overlays: Overlays,
+    /// Race events and phase changes until the TV shows them. Settings,
+    /// overrides, the clock and the network status act at once.
+    delayed: DelayQueue<Delayed>,
 }
 
 type Layer = fn(&Controller) -> Option<Scene>;
@@ -94,13 +106,15 @@ impl Controller {
                 minute_of_day: None,
             },
             overlays: Overlays::default(),
+            delayed: DelayQueue::new(),
         }
     }
 
     pub fn apply(&mut self, input: Input, now: Instant) {
         match input {
-            Input::Race { event, .. } => self.apply_race_event(event, now),
-            Input::Phase(phase) => self.layers.phase = phase,
+            // Measured from arrival, so time spent in channels doesn't add up.
+            Input::Race { event, received } => self.delay(Delayed::Race(event), received, now),
+            Input::Phase(phase) => self.delay(Delayed::Phase(phase), now, now),
             Input::Net(status) => {
                 self.layers.net.update(status, now);
                 self.layers.ever_online |= status == NetStatus::Online;
@@ -113,6 +127,7 @@ impl Controller {
     }
 
     pub fn tick(&mut self, now: Instant) {
+        self.release_due(now);
         self.overlays.tick(now);
         if self.layers.winner.is_some_and(|w| now >= w.until) {
             self.layers.winner = None;
@@ -137,6 +152,23 @@ impl Controller {
         let brightness = post::brightness(&layers.settings, layers.minute_of_day, layers.phase);
         post::post_process(frame, brightness);
         layer
+    }
+
+    /// Queues `item` until `received` plus the TV delay. With no delay it
+    /// acts at once, still in order behind anything already waiting.
+    fn delay(&mut self, item: Delayed, received: Instant, now: Instant) {
+        let delay = Duration::from_millis(u64::from(self.layers.settings.tv_delay_ms));
+        self.delayed.push(item, received + delay);
+        self.release_due(now);
+    }
+
+    fn release_due(&mut self, now: Instant) {
+        while let Some(item) = self.delayed.pop_ready(now) {
+            match item {
+                Delayed::Race(event) => self.apply_race_event(event, now),
+                Delayed::Phase(phase) => self.layers.phase = phase,
+            }
+        }
     }
 
     fn apply_race_event(&mut self, event: RaceEvent, now: Instant) {
@@ -673,5 +705,124 @@ mod tests {
         };
         c.apply(settings_with(off, &[]), t0);
         assert_eq!(winner_at(&mut c, t0).0, "overlay");
+    }
+
+    fn with_delay(ms_delay: u32) -> Input {
+        Input::Settings(Settings {
+            tv_delay_ms: ms_delay,
+            ..Settings::default()
+        })
+    }
+
+    /// Live, online, with a 10 s TV delay.
+    fn live_delayed(t0: Instant) -> Controller {
+        let mut c = live(t0);
+        c.apply(with_delay(10_000), t0);
+        c
+    }
+
+    #[test]
+    fn flag_waits_for_the_tv_delay() {
+        let t0 = Instant::now();
+        let mut c = live_delayed(t0);
+        c.apply(flag(TrackFlag::Yellow, t0), t0);
+        assert_ne!(winner_at(&mut c, t0 + ms(9_999)).0, "live track");
+        assert_eq!(
+            winner_at(&mut c, t0 + ms(10_000)),
+            ("live track", flag_effect(TrackFlag::Yellow))
+        );
+    }
+
+    #[test]
+    fn delay_counts_from_arrival_not_from_apply() {
+        let t0 = Instant::now();
+        let mut c = live_delayed(t0);
+        // Received at t0, handed to the controller 3 s later.
+        c.apply(flag(TrackFlag::Red, t0), t0 + ms(3_000));
+        assert_eq!(winner_at(&mut c, t0 + ms(10_000)).0, "live track");
+    }
+
+    #[test]
+    fn zero_delay_applies_at_once_even_without_a_tick() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(flag(TrackFlag::Red, t0), t0);
+        assert_eq!(
+            c.arbitrate(),
+            (
+                "live track",
+                Scene {
+                    effect: flag_effect(TrackFlag::Red),
+                    started: t0
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn phase_change_waits_for_the_tv_delay() {
+        let t0 = Instant::now();
+        let mut c = live_delayed(t0);
+        c.apply(Input::Phase(SessionPhase::PostSession), t0);
+        assert_eq!(c.snapshot().phase, SessionPhase::Live);
+        c.tick(t0 + ms(10_000));
+        assert_eq!(c.snapshot().phase, SessionPhase::PostSession);
+    }
+
+    #[test]
+    fn chequered_flag_shows_before_the_lamp_leaves_live() {
+        let t0 = Instant::now();
+        let mut c = live_delayed(t0);
+        c.apply(flag(TrackFlag::Green, t0), t0);
+        let chequered = Input::Race {
+            event: RaceEvent::ChequeredFlag,
+            received: t0 + ms(5_000),
+        };
+        c.apply(chequered, t0 + ms(5_000));
+        // The scheduler ends the session a second after the flag arrived.
+        c.apply(Input::Phase(SessionPhase::PostSession), t0 + ms(6_000));
+
+        let at_flag = t0 + ms(15_000);
+        assert_eq!(winner_at(&mut c, at_flag).0, "overlay");
+        assert_eq!(c.snapshot().phase, SessionPhase::Live);
+        winner_at(&mut c, t0 + ms(16_000));
+        assert_eq!(c.snapshot().phase, SessionPhase::PostSession);
+    }
+
+    #[test]
+    fn overrides_and_settings_ignore_the_delay() {
+        let t0 = Instant::now();
+        let mut c = live_delayed(t0);
+        c.apply(Input::Override(Some(Effect::Solid(Rgb::WHITE))), t0);
+        assert_eq!(winner_at(&mut c, t0).0, "override");
+        let mut brighter = Settings {
+            tv_delay_ms: 10_000,
+            ..Settings::default()
+        };
+        brighter.lamp_brightness = 1.0;
+        c.apply(Input::Settings(brighter), t0);
+        assert!((c.snapshot().settings.lamp_brightness - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn events_keep_their_order_through_the_delay() {
+        let t0 = Instant::now();
+        let mut c = live_delayed(t0);
+        c.apply(flag(TrackFlag::Yellow, t0), t0);
+        c.apply(flag(TrackFlag::SafetyCar, t0), t0);
+        assert_eq!(
+            winner_at(&mut c, t0 + ms(10_000)),
+            ("live track", flag_effect(TrackFlag::SafetyCar))
+        );
+    }
+
+    #[test]
+    fn changing_the_delay_leaves_queued_events_where_they_are() {
+        let t0 = Instant::now();
+        let mut c = live_delayed(t0);
+        c.apply(flag(TrackFlag::Red, t0), t0);
+        c.apply(with_delay(0), t0 + ms(1));
+        assert_ne!(winner_at(&mut c, t0 + ms(5_000)).0, "live track");
+        assert_eq!(winner_at(&mut c, t0 + ms(10_000)).0, "live track");
     }
 }
