@@ -108,7 +108,7 @@ fn replay_dir(replay: Option<&toml::Table>) {
         let path = match find(&dir, &name) {
             Some(path) => {
                 println!("cargo:rerun-if-changed={}", slashes(&path));
-                path
+                trimmed(&path, stream, &out_dir.join(&name))
             }
             None if required => panic!("replay: no {name} in {} or its subfolders", slashes(&dir)),
             None => {
@@ -124,6 +124,32 @@ fn replay_dir(replay: Option<&toml::Table>) {
         };
         println!("cargo:rustc-env={var}={}", slashes(&path));
     }
+}
+
+/// Writes the lines of `source` the replay can use to `target` and returns
+/// `target`. The rest would be skipped unparsed anyway (`Stream::is_relevant`),
+/// so leaving them out changes nothing but the size: TopThree and
+/// TimingStats are about 200 KB each for a race, and with them whole a
+/// replay build doesn't fit an app slot. Lines that don't even split are kept,
+/// so the replay still reports them.
+fn trimmed(source: &Path, stream: &str, target: &Path) -> PathBuf {
+    use f1_core::{stream::parse_line, timeline::Stream};
+
+    let text = std::fs::read_to_string(source)
+        .unwrap_or_else(|e| panic!("replay: can't read {}: {e}", slashes(source)));
+    let Some(kind) = Stream::from_name(stream) else {
+        panic!("replay: {stream} is not a stream the replay knows");
+    };
+    let kept: Vec<&str> = text
+        .lines()
+        .filter(|raw| match parse_line(raw) {
+            Ok(line) => kind.is_relevant(line.json),
+            Err(_) => !raw.trim().is_empty(),
+        })
+        .collect();
+    std::fs::write(target, kept.join("\n"))
+        .unwrap_or_else(|e| panic!("replay: can't write {}: {e}", slashes(target)));
+    target.to_path_buf()
 }
 
 /// `name` in `dir` or in one of its direct subfolders, which is where the

@@ -31,6 +31,8 @@ serde = "1.0.229"
 [build-dependencies]
 embuild = "0.33.5"
 toml = "0.8"
+# build.rs trims replay files with the same filter the replay uses.
+f1-core = { path = "../f1-core" }
 
 [features]
 # Plays the session in `[replay] dir` of cfg.toml (or $F1_REPLAY_DIR) on the lamp.
