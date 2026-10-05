@@ -112,6 +112,10 @@ impl Controller {
 
     pub fn apply(&mut self, input: Input, now: Instant) {
         match input {
+            Input::Race {
+                event: RaceEvent::StartLights,
+                received,
+            } => self.schedule_start_lights(received, now),
             // Measured from arrival, so time spent in channels doesn't add up.
             Input::Race { event, received } => self.delay(Delayed::Race(event), received, now),
             Input::Phase(phase) => self.delay(Delayed::Phase(phase), now, now),
@@ -154,11 +158,38 @@ impl Controller {
         layer
     }
 
+    fn tv_delay(&self) -> Duration {
+        Duration::from_millis(u64::from(self.layers.settings.tv_delay_ms))
+    }
+
     /// Queues `item` until `received` plus the TV delay. With no delay it
     /// acts at once, still in order behind anything already waiting.
     fn delay(&mut self, item: Delayed, received: Instant, now: Instant) {
-        let delay = Duration::from_millis(u64::from(self.layers.settings.tv_delay_ms));
-        self.delayed.push(item, received + delay);
+        self.delayed.push(item, received + self.tv_delay());
+        self.release_due(now);
+    }
+
+    /// The feed reports the start at lights out, and the TV shows it one
+    /// delay later. The lights are queued to begin early enough to go out
+    /// exactly then. With a delay shorter than the sequence that moment has
+    /// already passed, so they're skipped rather than shown late.
+    ///
+    /// Overlays play one after another: an overlay still running at that
+    /// moment (unlikely on the grid) would make them late.
+    fn schedule_start_lights(&mut self, received: Instant, now: Instant) {
+        let Some(lead) =
+            event_overlay(RaceEvent::StartLights).and_then(|effect| effect.lights_out_after())
+        else {
+            return;
+        };
+        let delay = self.tv_delay();
+        if delay >= lead {
+            // `checked_sub`: an `Instant` can't go before the clock's start.
+            if let Some(begin) = (received + delay).checked_sub(lead) {
+                self.delayed
+                    .push(Delayed::Race(RaceEvent::StartLights), begin);
+            }
+        }
         self.release_due(now);
     }
 
@@ -824,5 +855,84 @@ mod tests {
         c.apply(with_delay(0), t0 + ms(1));
         assert_ne!(winner_at(&mut c, t0 + ms(5_000)).0, "live track");
         assert_eq!(winner_at(&mut c, t0 + ms(10_000)).0, "live track");
+    }
+
+    fn start(at: Instant) -> Input {
+        Input::Race {
+            event: RaceEvent::StartLights,
+            received: at,
+        }
+    }
+
+    fn start_lights() -> Effect {
+        event_overlay(RaceEvent::StartLights).unwrap()
+    }
+
+    #[test]
+    fn start_lights_go_out_exactly_when_the_delayed_start_is_released() {
+        let t0 = Instant::now();
+        let mut c = live_delayed(t0);
+        // The feed's start: lights and green flag, both received at lights out.
+        c.apply(start(t0), t0);
+        c.apply(flag(TrackFlag::Green, t0), t0);
+
+        // 10 s delay - 6 s sequence: the lights begin 4 s after the feed said go.
+        assert_ne!(winner_at(&mut c, t0 + ms(3_999)).0, "overlay");
+        let (layer, effect) = winner_at(&mut c, t0 + ms(4_000));
+        assert_eq!((layer, effect), ("overlay", start_lights()));
+        let lights_out = t0 + ms(4_000) + start_lights().lights_out_after().unwrap();
+        assert_eq!(lights_out, t0 + ms(10_000));
+
+        // The green flag is released at that same moment, under the last
+        // second of darkness, and shows once the lights have finished.
+        let (_, scene) = c.arbitrate();
+        assert_eq!(scene.started, t0 + ms(4_000));
+        winner_at(&mut c, t0 + ms(10_000));
+        assert_eq!(
+            winner_at(&mut c, t0 + ms(11_000)),
+            ("live track", flag_effect(TrackFlag::Green))
+        );
+    }
+
+    #[test]
+    fn with_a_two_second_delay_no_start_lights_are_scheduled() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(with_delay(2_000), t0);
+        c.apply(start(t0), t0);
+        for t in (0..=12_000).step_by(500) {
+            assert_ne!(winner_at(&mut c, t0 + ms(t)).0, "overlay", "at {t} ms");
+        }
+    }
+
+    #[test]
+    fn without_a_delay_no_start_lights_are_scheduled() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(start(t0), t0);
+        assert_ne!(winner_at(&mut c, t0).0, "overlay");
+    }
+
+    #[test]
+    fn delay_equal_to_the_sequence_starts_the_lights_at_once() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(with_delay(6_000), t0);
+        c.apply(start(t0), t0);
+        assert_eq!(winner_at(&mut c, t0), ("overlay", start_lights()));
+    }
+
+    #[test]
+    fn switched_off_start_lights_stay_off_with_a_delay() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        let mut settings = Settings {
+            tv_delay_ms: 10_000,
+            ..Settings::default()
+        };
+        settings.effects.start_lights = false;
+        c.apply(Input::Settings(settings), t0);
+        c.apply(start(t0), t0);
+        assert_ne!(winner_at(&mut c, t0 + ms(4_000)).0, "overlay");
     }
 }

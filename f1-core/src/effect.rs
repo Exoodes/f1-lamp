@@ -87,6 +87,15 @@ impl Effect {
         }
     }
 
+    /// How long after the start lights begin they go out: the moment that
+    /// has to line up with lights out on TV. `None` for other effects.
+    pub fn lights_out_after(&self) -> Option<Duration> {
+        match self {
+            Effect::StartLights { hold_ms } => Some(Duration::from_millis(lights_out_ms(*hold_ms))),
+            _ => None,
+        }
+    }
+
     pub const fn flash(color: Rgb, times: u8) -> Effect {
         Effect::Blink {
             color,
@@ -569,5 +578,16 @@ mod tests {
         let effect = Effect::StartLights { hold_ms: 0 };
         assert_eq!(lit_segments(&render_at(effect, 3999)), 4);
         assert!(all_pixels_are(&render_at(effect, 4000), Rgb::OFF));
+    }
+
+    #[test]
+    fn start_lights_go_out_after_five_steps_and_the_hold() {
+        // Lights 1-5 at 0, 1, 2, 3, 4 s, then the 2 s hold.
+        assert_eq!(START.lights_out_after(), Some(Duration::from_secs(6)));
+    }
+
+    #[test]
+    fn other_effects_have_no_lights_out() {
+        assert_eq!(Effect::Solid(Rgb::RED).lights_out_after(), None);
     }
 }
