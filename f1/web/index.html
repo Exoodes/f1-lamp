@@ -7,216 +7,387 @@
 <!-- Inline icon, so the browser doesn't ask the server for /favicon.ico. -->
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%23e10600'/></svg>">
 <style>
-  /* Colours used everywhere, defined once. */
+  /* Colours used everywhere, defined once. --accent follows the lamp colour
+     (set from the script); the flag colours only appear where they mean a flag. */
   :root {
-    --bg: #15151e; --card: #1f1f2b; --line: #2e2e3d;
-    --text: #f0f0f0; --muted: #9a9aa5; --red: #e10600; --ok: #2ecc71;
+    --bg: #25272b; --panel: #303338; --well: #1f2124; --line: #45484f;
+    --text: #ecece6; --muted: #9ca1a8;
+    --accent: #e10600; --on-accent: #fff;
+    --green: #00a651; --yellow: #ffd100; --orange: #ff9100; --red: #e10600;
+    --err: #ff6b6b; --warn: #ffd100;
+    /* No web fonts: the page must work with only the lamp reachable.
+       DIN-style condensed faces that ship with Windows / Apple / Android. */
+    --display: "Bahnschrift SemiCondensed", "Bahnschrift", "DIN Condensed", "DIN Alternate",
+               "Roboto Condensed", "Arial Narrow", sans-serif;
+    --body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    color-scheme: dark;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; }
-  main { max-width: 480px; margin: 0 auto; padding: 16px; }
-
-  header { border-top: 4px solid var(--red); padding-top: 12px; margin-bottom: 16px; }
-  h1 { margin: 0; font-size: 1.6rem; }
-  .host { color: var(--muted); font-size: .85rem; }
-
-  /* Each block of the page is a "card". */
-  section { background: var(--card); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
-  h2 { margin: 0 0 10px; font-size: .9rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
-
-  /* One setting per row: name on the left, control on the right. */
-  label { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 0; }
-  .slider { display: flex; align-items: center; gap: 8px; flex: 1; max-width: 60%; }
-  .slider input { flex: 1; }
-  output { min-width: 3rem; text-align: right; color: var(--muted); }
-  input[type=number], input[type=time], input[type=text] {
-    width: 7.5rem; padding: 6px; font: inherit;
-    background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 1rem/1.45 var(--body);
   }
-  input[type=color] { width: 3.5rem; height: 2.2rem; border: none; background: none; padding: 0; }
-  .hint { color: var(--muted); font-size: .8rem; margin: 0 0 4px; }
-  input[type=checkbox] { width: 1.3rem; height: 1.3rem; accent-color: var(--red); }
+  h1, h2, .tab, .hero-layer, .flag { font-family: var(--display); }
+  :focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 
-  /* Status: a two-column list of name / value. */
-  .status { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; margin: 0; }
-  .status dt { color: var(--muted); }
-  .status dd { margin: 0; font-weight: 600; }
-  .link { margin: 0 0 10px; }
-  .dot { display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; background: var(--muted); margin-right: 6px; }
-  .dot.on { background: var(--ok); }
+  /* ---- Top bar: name, connection (always visible) ---- */
+  .top {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    max-width: 1120px; margin: 0 auto; padding: 14px 16px 10px;
+  }
+  h1 { margin: 0; font-size: 1.5rem; font-weight: 600; letter-spacing: .01em; }
+  h1::before {
+    content: ""; display: inline-block; width: .55em; height: .55em; margin-right: .4em;
+    border-radius: 2px; background: var(--accent); vertical-align: .08em;
+  }
+  .conn { margin: 0; font-size: .875rem; color: var(--muted); text-align: right; }
+  .host { display: block; font-size: .75rem; }
+  .dot {
+    display: inline-block; width: .55rem; height: .55rem; border-radius: 50%;
+    background: var(--muted); margin-right: 6px; vertical-align: .05em;
+  }
+  .dot.on { background: var(--green); }
   .dot.off { background: var(--red); }
 
-  button { font: inherit; padding: 10px; border: none; border-radius: 8px; background: var(--line); color: var(--text); cursor: pointer; }
-  button:active { filter: brightness(1.3); }
-  button:disabled { opacity: .4; }
-  /* Flag buttons: two per row, each with a coloured stripe (--c is set per button). */
-  .flags { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .flags button { border-left: 6px solid var(--c); text-align: left; }
-  .row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+  /* ---- Layout: one column of tabs on a phone; on a PC the race panel
+     stays on the left and the other tabs open on the right. ---- */
+  .layout {
+    max-width: 1120px; margin: 0 auto; padding: 0 16px 80px;
+    display: grid; grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "tabs" "panel";
+  }
+  .tabs {
+    grid-area: tabs; position: sticky; top: 0; z-index: 2;
+    display: flex; background: var(--bg); border-bottom: 1px solid var(--line);
+    margin: 0 -16px 16px; padding: 0 8px;
+  }
+  .tab {
+    flex: 1; padding: 12px 4px 10px; margin-bottom: -1px; border: 0; border-bottom: 3px solid transparent;
+    background: none; color: var(--muted); font-size: 1.05rem; cursor: pointer;
+  }
+  .tab:hover { color: var(--text); }
+  .tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+  .panel { grid-area: panel; display: none; min-width: 0; }
+  .panel.active { display: block; }
+
+  @media (min-width: 960px) {
+    .layout {
+      grid-template-columns: 400px minmax(0, 1fr); column-gap: 32px;
+      /* The tab bar keeps its height; a short tab next to the taller race
+         panel leaves the extra space below it, not in the tab bar. */
+      grid-template-rows: auto 1fr;
+      grid-template-areas: "race tabs" "race panel";
+    }
+    .tabs { margin: 0 0 16px; padding: 0; justify-content: flex-start; }
+    .tab { flex: 0 0 auto; padding: 12px 18px 10px; }
+    .tab[data-tab="race"] { display: none; }
+    #tab-race { display: block; grid-area: race; align-self: start; position: sticky; top: 16px; }
+    main.layout { padding-top: 6px; }
+  }
+
+  /* ---- Blocks and headings ---- */
+  section { background: var(--panel); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  h2 { margin: 0 0 10px; font-size: 1.2rem; font-weight: 600; }
+  .note, .hint { color: var(--muted); font-size: .85rem; margin: 0 0 12px; max-width: 60ch; }
+  .note { margin: 0 0 16px; }
+  .msg { min-height: 1.2em; margin: 10px 0 0; color: var(--muted); font-size: .875rem; }
+  .msg:empty { display: none; }
+  .msg.err { color: var(--err); }
+  code { font-family: var(--mono); font-size: .85em; }
+
+  /* ---- Now showing: the one loud thing on the page ---- */
+  .hero { position: relative; overflow: hidden; padding: 18px 18px 16px; }
+  .hero::before {
+    content: ""; position: absolute; inset: -40% -20% auto auto; width: 70%; aspect-ratio: 1;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 45%, transparent), transparent);
+    pointer-events: none;
+  }
+  .hero > * { position: relative; }
+  .hero-label { margin: 0; color: var(--muted); font-size: .875rem; }
+  .hero-layer {
+    margin: 0 0 14px; font-size: clamp(2.6rem, 11vw, 3.4rem); line-height: 1;
+    font-weight: 700; font-family: "Bahnschrift Condensed", var(--display);
+  }
+  .hero-layer::first-letter { text-transform: uppercase; }
+  .status { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 0; }
+  .status div { border-top: 1px solid var(--line); padding-top: 6px; }
+  .status dt { color: var(--muted); font-size: .75rem; }
+  .status dd { margin: 0; font-weight: 600; }
+  .status dd::first-letter { text-transform: uppercase; }
+  body.offline .hero-layer, body.offline .status dd { opacity: .4; }
+
+  /* ---- Controls ---- */
+  button {
+    font: inherit; padding: 10px 14px; border: 1px solid var(--line); border-radius: 6px;
+    background: var(--well); color: var(--text); cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--muted); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { opacity: .4; cursor: default; }
+  button.primary { background: var(--accent); color: var(--on-accent); border-color: transparent; font-weight: 600; }
+  .row { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
   .row button { flex: 1; }
 
-  .msg { min-height: 1.2em; margin: 8px 0 0; color: var(--muted); font-size: .9rem; }
-  .msg.err { color: #ff6b6b; }
+  input[type=number], input[type=time], input[type=text], input[type=password], select {
+    width: 8.5rem; padding: 7px 9px; font: inherit; font-variant-numeric: tabular-nums;
+    background: var(--well); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+  }
+  input:disabled { opacity: .4; }
+  input[type=color] {
+    width: 3.2rem; height: 2.4rem; padding: 2px; border: 1px solid var(--line);
+    border-radius: 6px; background: var(--well); cursor: pointer;
+  }
+  input[type=range] { accent-color: var(--accent); }
 
-  /* "Saved ✓" bubble at the bottom of the screen, visible wherever you scrolled. */
+  /* Settings: one per row, name left and control right, divided by lines. */
+  .settings label, .rowed label {
+    display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    min-height: 3rem; padding: 6px 0; border-top: 1px solid var(--line);
+  }
+  .settings h2 + label, .settings .hint + label { border-top: 0; }
+  .settings .hint { margin: 10px 0 2px; }
+  .slider { display: flex; align-items: center; gap: 10px; flex: 1; max-width: 60%; }
+  .slider input { flex: 1; min-width: 0; }
+  output { min-width: 3.2rem; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* Checkboxes drawn as switches; still real checkboxes underneath. */
+  input[type=checkbox] {
+    appearance: none; -webkit-appearance: none; flex: none; margin: 0; cursor: pointer;
+    width: 2.75rem; height: 1.6rem; border-radius: 1rem; border: 1px solid var(--line);
+    background: radial-gradient(circle at .78rem 50%, var(--muted) .5rem, transparent .55rem) var(--well);
+  }
+  input[type=checkbox]:checked {
+    border-color: transparent;
+    background: radial-gradient(circle at calc(100% - .78rem) 50%, var(--on-accent) .5rem, transparent .55rem) var(--accent);
+  }
+
+  /* ---- Force a flag: tiles that look like the flags ---- */
+  .flags { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .flag {
+    position: relative; height: 4.75rem; padding: 8px 10px; border: 0; border-radius: 6px;
+    display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start;
+    font-size: 1.1rem; font-weight: 600; text-align: left; line-height: 1.1;
+  }
+  .flag:hover:not(:disabled) { filter: brightness(1.08); }
+  .flag b {
+    position: absolute; top: 4px; right: 10px; font-size: 2.1rem; font-weight: 700; letter-spacing: .02em;
+  }
+  .f-green { background: var(--green); color: #fff; }
+  .f-yellow { background: var(--yellow); color: #1c1c1a; }
+  .f-double {
+    color: #1c1c1a;
+    background: linear-gradient(var(--yellow) 0 0) top / 100% 44% no-repeat,
+                linear-gradient(var(--yellow) 0 0) bottom / 100% 44% no-repeat, var(--well);
+  }
+  .f-sc { background: var(--orange); color: #1c1c1a; }
+  .f-sc b { color: rgba(0, 0, 0, .75); }
+  /* Virtual safety car: an outline of the real one. */
+  .f-vsc { background: var(--well); color: var(--orange); box-shadow: inset 0 0 0 2px var(--orange); }
+  .f-red { background: var(--red); color: #fff; }
+
+  /* ---- Replay (only shown when the firmware was built with a replay) ---- */
+  #replay[hidden] { display: none; }
+  .replay-name { margin: 0 0 10px; font-weight: 600; word-break: break-all; }
+  #r-seek { width: 100%; margin: 0; }
+  .replay-time {
+    display: flex; justify-content: space-between; color: var(--muted);
+    font-size: .875rem; font-variant-numeric: tabular-nums;
+  }
+  #r-state { color: var(--text); }
+
+  /* ---- F1TV token ---- */
+  #token-input { width: 100%; }
+  .token-line { margin: 0 0 12px; }
+  .token-state { font-weight: 600; }
+  .token-state.ok { color: var(--green); }
+  .token-state.warn { color: var(--warn); }
+  .token-state.bad { color: var(--err); }
+
+  /* ---- Live log: only polled while its tab is open ---- */
+  .log-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .log-head button { padding: 6px 12px; }
+  #log {
+    margin: 4px 0 0; height: 60vh; overflow: auto; padding: 10px 12px; border-radius: 6px;
+    background: var(--well); font: .75rem/1.4 var(--mono);
+    white-space: pre-wrap; word-break: break-all;
+  }
+  #log .w { color: var(--warn); }
+  #log .e { color: var(--err); }
+  #log .gap { color: var(--muted); font-style: italic; }
+
+  /* "Saved" bubble at the bottom of the screen, visible wherever you scrolled. */
   .toast {
-    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
-    margin: 0; padding: 8px 14px; border-radius: 8px; font-size: .9rem;
-    background: var(--card); border: 1px solid var(--line); color: var(--text);
-    opacity: 0; transition: opacity .3s; pointer-events: none;
+    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 3;
+    margin: 0; padding: 8px 14px; border-radius: 6px; font-size: .875rem;
+    background: var(--panel); border: 1px solid var(--line); color: var(--text);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, .35);
+    opacity: 0; transition: opacity .25s; pointer-events: none;
   }
   .toast.show { opacity: 1; }
+  .toast.err { color: var(--err); }
 
-  /* Live log: only polled while open. */
-  details.log summary { cursor: pointer; color: var(--muted); font-size: .9rem; text-transform: uppercase; letter-spacing: .06em; }
-  #log { margin: 10px 0 0; max-height: 50vh; overflow: auto; font: .75rem/1.35 ui-monospace, monospace; white-space: pre-wrap; word-break: break-all; color: var(--text); }
-  #log .w { color: #ffd600; }
-  #log .e { color: #ff6b6b; }
-  #log .gap { color: var(--muted); font-style: italic; }
-  .toast.err { color: #ff6b6b; }
-
-  /* Replay: only shown when the firmware was built with a replay. */
-  #replay[hidden] { display: none; }
-  .replay-name { margin: 0 0 8px; font-weight: 600; word-break: break-all; }
-  .replay-time { display: flex; justify-content: space-between; color: var(--muted); font-variant-numeric: tabular-nums; }
-  #r-seek { width: 100%; accent-color: var(--red); }
-
-  /* F1TV token: a password field, so it isn't shown while pasting. */
-  #token-input { width: 100%; padding: 6px; font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; }
-  .token-state { font-weight: 600; }
-  .token-state.ok { color: var(--ok); }
-  .token-state.warn { color: #ffd600; }
-  .token-state.bad { color: #ff6b6b; }
-  select { padding: 6px; font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; }
+  @media (prefers-reduced-motion: reduce) {
+    .toast { transition: none; }
+  }
 </style>
 </head>
 <body>
-<main>
-  <header>
-    <h1>F1 Lightbox</h1>
-    <div class="host"><span id="host"></span> · settings save automatically</div>
-  </header>
+<header class="top">
+  <h1>F1 Lightbox</h1>
+  <p class="conn"><span class="dot" id="dot"></span><span id="link">connecting…</span><span class="host" id="host"></span></p>
+</header>
 
-  <section>
-    <h2>Status</h2>
-    <p class="link"><span class="dot" id="dot"></span><span id="link">connecting…</span></p>
-    <dl class="status">
-      <dt>Showing</dt><dd id="s-layer">–</dd>
-      <dt>Session</dt><dd id="s-phase">–</dd>
-      <dt>Network</dt><dd id="s-net">–</dd>
-      <dt>Override</dt><dd id="s-override">–</dd>
-    </dl>
-  </section>
+<main class="layout">
+  <nav class="tabs" role="tablist" aria-label="Sections">
+    <button class="tab" role="tab" data-tab="race" aria-controls="tab-race">Race</button>
+    <button class="tab" role="tab" data-tab="lamp" aria-controls="tab-lamp">Lamp</button>
+    <button class="tab" role="tab" data-tab="events" aria-controls="tab-events">Events</button>
+    <button class="tab" role="tab" data-tab="f1tv" aria-controls="tab-f1tv">F1TV</button>
+    <button class="tab" role="tab" data-tab="log" aria-controls="tab-log">Log</button>
+  </nav>
 
-  <section id="replay" hidden>
-    <h2>Replay</h2>
-    <p class="replay-name" id="r-name"></p>
-    <input type="range" id="r-seek" min="0" max="1" value="0" aria-label="Position">
-    <div class="replay-time"><span id="r-pos">–</span><span id="r-state">–</span><span id="r-end">–</span></div>
-    <div class="row">
-      <button id="r-play">Play</button>
-      <button id="r-lights-out">Lights out −10 s</button>
-    </div>
-    <label>Speed
-      <select id="r-speed">
-        <option value="1">1× (real time)</option>
-        <option value="5">5×</option>
-        <option value="10">10×</option>
-        <option value="30">30×</option>
-        <option value="60">60×</option>
-        <option value="120">120×</option>
-        <option value="200">200×</option>
-      </select>
-    </label>
-    <p class="hint">To watch a recording with the lamp: 1×, Lights out −10 s, then Play when your video is 10 s before lights out.</p>
-    <p class="msg" id="replay-msg"></p>
-  </section>
+  <!-- Race: what's happening now and what you can do about it. -->
+  <div class="panel" id="tab-race" data-tab="race" role="tabpanel">
+    <section class="hero">
+      <p class="hero-label">The lamp is showing</p>
+      <p class="hero-layer" id="s-layer">–</p>
+      <dl class="status">
+        <div><dt>Session</dt><dd id="s-phase">–</dd></div>
+        <div><dt>Network</dt><dd id="s-net">–</dd></div>
+        <div><dt>Override</dt><dd id="s-override">–</dd></div>
+      </dl>
+    </section>
 
-  <section class="settings">
-    <h2>Lamp</h2>
-    <label>Colour <input type="color" id="lamp_color"></label>
-    <label>Brightness
-      <span class="slider"><input type="range" id="lamp_brightness" min="0" max="100"><output id="lamp_brightness_out"></output></span>
-    </label>
-  </section>
+    <section>
+      <h2>Force a flag</h2>
+      <div class="flags">
+        <button class="flag f-green" data-flag="green"><span class="name">Green</span></button>
+        <button class="flag f-yellow" data-flag="yellow"><span class="name">Yellow</span></button>
+        <button class="flag f-double" data-flag="double_yellow"><span class="name">Double yellow</span></button>
+        <button class="flag f-red" data-flag="red"><span class="name">Red</span></button>
+        <button class="flag f-sc" data-flag="safety_car"><b aria-hidden="true">SC</b><span class="name">Safety car</span></button>
+        <button class="flag f-vsc" data-flag="virtual_safety_car"><b aria-hidden="true">VSC</b><span class="name">Virtual safety car</span></button>
+      </div>
+      <div class="row">
+        <input type="color" id="override_color" value="#ffffff" aria-label="Colour to force">
+        <button id="force-color">Force colour</button>
+        <button id="release">Release</button>
+      </div>
+      <p class="msg" id="override-msg"></p>
+    </section>
 
-  <section class="settings">
-    <h2>Display</h2>
-    <label>Overall brightness
-      <span class="slider"><input type="range" id="global_brightness" min="0" max="100"><output id="global_brightness_out"></output></span>
-    </label>
-    <label>Winner shown (min) <input type="number" id="winner_minutes" min="0" step="0.5"></label>
-    <label>Green shown (s) <input type="number" id="green_seconds" min="0" step="1"></label>
-    <p class="hint">After a green flag the lamp returns to its own colour; 0 keeps it green.</p>
-    <label>TV delay (s) <input type="number" id="tv_delay" min="0" step="0.5"></label>
-  </section>
+    <section id="replay" hidden>
+      <h2>Replay</h2>
+      <p class="replay-name" id="r-name"></p>
+      <input type="range" id="r-seek" min="0" max="1" value="0" aria-label="Position">
+      <div class="replay-time"><span id="r-pos">–</span><span id="r-state">–</span><span id="r-end">–</span></div>
+      <div class="row">
+        <button class="primary" id="r-play">Play</button>
+        <button id="r-lights-out">Lights out −10 s</button>
+      </div>
+      <div class="rowed">
+        <label>Speed
+          <select id="r-speed">
+            <option value="1">1× (real time)</option>
+            <option value="5">5×</option>
+            <option value="10">10×</option>
+            <option value="30">30×</option>
+            <option value="60">60×</option>
+            <option value="120">120×</option>
+            <option value="200">200×</option>
+          </select>
+        </label>
+      </div>
+      <p class="hint">To watch a recording with the lamp: 1×, Lights out −10 s, then Play when your video is 10 s before lights out.</p>
+      <p class="msg" id="replay-msg"></p>
+    </section>
+  </div>
 
-  <section class="settings">
-    <h2>Show on the lamp</h2>
-    <p class="hint">Track flags always show. Unticked events are ignored.</p>
-    <label>Start lights <input type="checkbox" id="fx_start_lights"></label>
-    <label>Chequered flag <input type="checkbox" id="fx_chequered_flag"></label>
-    <label>Fastest lap <input type="checkbox" id="fx_fastest_lap"></label>
-    <label>Winner <input type="checkbox" id="fx_winner"></label>
-    <label>Pit stops <input type="checkbox" id="fx_pit_stop"></label>
-    <label>Overtakes <input type="checkbox" id="fx_overtake"></label>
-    <p class="hint">Pit stops and overtakes flash only for these drivers:</p>
-    <label>Followed drivers <input type="text" id="followed_drivers" inputmode="numeric" placeholder="e.g. 1, 44, 63"></label>
-    <label>All drivers <input type="checkbox" id="follow_all"></label>
-    <p class="hint">For the showcase. In a race, every driver means hundreds of overtake flashes.</p>
-  </section>
+  <!-- Lamp: how it looks. -->
+  <div class="panel" id="tab-lamp" data-tab="lamp" role="tabpanel">
+    <p class="note">Changes save automatically.</p>
+    <section class="settings">
+      <h2>Lamp</h2>
+      <label>Colour <input type="color" id="lamp_color"></label>
+      <label>Brightness
+        <span class="slider"><input type="range" id="lamp_brightness" min="0" max="100"><output id="lamp_brightness_out"></output></span>
+      </label>
+    </section>
 
-  <section class="settings">
-    <h2>Night mode</h2>
-    <p class="hint">Leave both times empty to turn night mode off.</p>
-    <label>Starts <input type="time" id="night_start"></label>
-    <label>Ends <input type="time" id="night_end"></label>
-    <label>Brightness
-      <span class="slider"><input type="range" id="night_brightness" min="0" max="100"><output id="night_brightness_out"></output></span>
-    </label>
-  </section>
+    <section class="settings">
+      <h2>Display</h2>
+      <label>Overall brightness
+        <span class="slider"><input type="range" id="global_brightness" min="0" max="100"><output id="global_brightness_out"></output></span>
+      </label>
+      <label>Winner shown (min) <input type="number" id="winner_minutes" min="0" step="0.5"></label>
+      <label>Green shown (s) <input type="number" id="green_seconds" min="0" step="1"></label>
+      <p class="hint">After a green flag the lamp returns to its own colour; 0 keeps it green.</p>
+      <label>TV delay (s) <input type="number" id="tv_delay" min="0" step="0.5"></label>
+    </section>
 
-  <section>
-    <h2>F1TV account (optional)</h2>
-    <p class="hint">Unlocks extra live data such as pit stops. Paste your token, or the whole value of formula1.com's <code>loginSession</code> cookie. The lamp never shows it again.</p>
-    <p>Status: <span class="token-state" id="token-state">–</span></p>
-    <input type="password" id="token-input" autocomplete="off" placeholder="paste token here">
-    <div class="row">
-      <button id="token-save">Save token</button>
-      <button id="token-remove">Remove</button>
-    </div>
-    <p class="msg" id="token-msg"></p>
-  </section>
+    <section class="settings">
+      <h2>Night mode</h2>
+      <p class="hint">Leave both times empty to turn night mode off.</p>
+      <label>Starts <input type="time" id="night_start"></label>
+      <label>Ends <input type="time" id="night_end"></label>
+      <label>Brightness
+        <span class="slider"><input type="range" id="night_brightness" min="0" max="100"><output id="night_brightness_out"></output></span>
+      </label>
+    </section>
+  </div>
 
-  <section>
-    <h2>Force a flag</h2>
-    <div class="flags">
-      <button data-flag="green" style="--c:#00c853">Green</button>
-      <button data-flag="yellow" style="--c:#ffd600">Yellow</button>
-      <button data-flag="double_yellow" style="--c:#ffd600">Double yellow</button>
-      <button data-flag="safety_car" style="--c:#ff9100">Safety car</button>
-      <button data-flag="virtual_safety_car" style="--c:#ffab40">Virtual SC</button>
-      <button data-flag="red" style="--c:#e10600">Red</button>
-    </div>
-    <div class="row">
-      <input type="color" id="override_color" value="#ffffff">
-      <button id="force-color">Force colour</button>
-    </div>
-    <div class="row">
-      <button id="release">Release override</button>
-    </div>
-    <p class="msg" id="override-msg"></p>
-  </section>
-  <section>
-    <details class="log" id="log-box">
-      <summary>Log (live)</summary>
-      <p class="hint">New lines only, from when you open this. Nothing is kept on the lamp.</p>
-      <div class="row"><button id="log-clear">Clear</button></div>
+  <!-- Events: what the lamp reacts to. -->
+  <div class="panel" id="tab-events" data-tab="events" role="tabpanel">
+    <p class="note">Changes save automatically.</p>
+    <section class="settings">
+      <h2>Show on the lamp</h2>
+      <p class="hint">Track flags always show. Switched-off events are ignored.</p>
+      <label>Start lights <input type="checkbox" id="fx_start_lights"></label>
+      <label>Chequered flag <input type="checkbox" id="fx_chequered_flag"></label>
+      <label>Fastest lap <input type="checkbox" id="fx_fastest_lap"></label>
+      <label>Winner <input type="checkbox" id="fx_winner"></label>
+      <label>Pit stops <input type="checkbox" id="fx_pit_stop"></label>
+      <label>Overtakes <input type="checkbox" id="fx_overtake"></label>
+    </section>
+
+    <section class="settings">
+      <h2>Drivers</h2>
+      <p class="hint">Pit stops and overtakes flash only for these drivers.</p>
+      <label>Followed drivers <input type="text" id="followed_drivers" inputmode="numeric" placeholder="e.g. 1, 44, 63"></label>
+      <label>All drivers <input type="checkbox" id="follow_all"></label>
+      <p class="hint">For the showcase. In a race, every driver means hundreds of overtake flashes.</p>
+    </section>
+  </div>
+
+  <!-- F1TV: optional account for extra live data. -->
+  <div class="panel" id="tab-f1tv" data-tab="f1tv" role="tabpanel">
+    <section>
+      <h2>F1TV account</h2>
+      <p class="hint">Optional. Unlocks extra live data such as pit stops. Paste your token, or the whole value of formula1.com's <code>loginSession</code> cookie. The lamp never shows it again.</p>
+      <p class="token-line">Status: <span class="token-state" id="token-state">–</span></p>
+      <input type="password" id="token-input" autocomplete="off" placeholder="Paste token here" aria-label="F1TV token">
+      <div class="row">
+        <button class="primary" id="token-save">Save token</button>
+        <button id="token-remove">Remove</button>
+      </div>
+      <p class="msg" id="token-msg"></p>
+    </section>
+  </div>
+
+  <!-- Log: live lines from the lamp. -->
+  <div class="panel" id="tab-log" data-tab="log" role="tabpanel">
+    <section>
+      <div class="log-head">
+        <h2>Live log</h2>
+        <button id="log-clear">Clear</button>
+      </div>
+      <p class="hint">New lines only, from when you open this tab. Nothing is kept on the lamp.</p>
       <div id="log"></div>
-    </details>
-  </section>
+    </section>
+  </div>
 </main>
-<p class="toast" id="save-msg"></p>
+<p class="toast" id="save-msg" role="status"></p>
 
 <script>
 // Shortcut: $("release") instead of document.getElementById("release").
@@ -260,9 +431,21 @@ function showPercent(id) {
   $(id + "_out").textContent = $(id).value + " %";
 }
 
+// The page's accent is the lamp colour. A very dark colour is lifted towards
+// white so it stays visible, and text on it is black or white, whichever reads.
+function setAccent(hex) {
+  let [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  const light = (r, g, b) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  if (light(r, g, b) < 0.25) [r, g, b] = [r, g, b].map((c) => Math.round(c + (255 - c) * 0.35));
+  const root = document.documentElement.style;
+  root.setProperty("--accent", `rgb(${r}, ${g}, ${b})`);
+  root.setProperty("--on-accent", light(r, g, b) > 0.55 ? "#1c1c1a" : "#fff");
+}
+
 // Device settings (JSON from /api/state) -> form fields.
 function fillForm(s) {
   $("lamp_color").value = s.lamp_color;
+  setAccent(s.lamp_color);
   for (const id of SLIDERS) {
     $(id).value = Math.round(s[id] * 100);
     showPercent(id);
@@ -323,6 +506,7 @@ function message(id, text, isError) {
 const words = (s) => s.replaceAll("_", " ");
 
 function showStatus(state) {
+  document.body.classList.remove("offline");
   $("dot").className = "dot on";
   $("link").textContent = "connected";
   $("s-layer").textContent = state.layer;
@@ -338,6 +522,7 @@ async function refreshStatus() {
   try {
     showStatus(await getState());
   } catch {
+    document.body.classList.add("offline");
     $("dot").className = "dot off";
     $("link").textContent = "can't reach the lamp";
   }
@@ -380,7 +565,7 @@ async function save() {
   toast("Saving…");
   try {
     await post("/api/settings", readForm());
-    toast("Saved ✓");
+    toast("Saved");
   } catch (e) {
     toast("Not saved: " + e.message, true);
   } finally {
@@ -517,12 +702,13 @@ async function sendToken(text, label) {
   }
 }
 
-// ---- Live log (polled once a second, only while the section is open) ----
+// ---- Live log (polled once a second, only while its tab is open) ----
 
 const LOG_KEEP = 500;   // lines kept on the page; older ones are dropped
 let logNext = null;     // sequence number to ask from; null = not started
 let logTimer = null;
 let logBusy = false;    // a request is on its way: don't send another
+let logOpen = false;
 
 function addLogLine(text, cls) {
   const box = $("log");
@@ -560,27 +746,68 @@ async function pollLog() {
   }
 }
 
-function startLog() {
-  $("log-box").addEventListener("toggle", () => {
-    clearInterval(logTimer);
-    if ($("log-box").open) {
-      // Opening starts fresh: only lines from now on.
-      logNext = null;
-      pollLog();
-      logTimer = setInterval(pollLog, 1000);
-    }
+// Called whenever the tab changes; opening the log starts fresh.
+function setLogOpen(open) {
+  if (open === logOpen) return;
+  logOpen = open;
+  clearInterval(logTimer);
+  if (open) {
+    logNext = null;
+    pollLog();
+    logTimer = setInterval(pollLog, 1000);
+  }
+}
+
+// ---- Tabs ----
+
+// On a wide screen the race panel is always shown, so it isn't a tab there.
+const WIDE = matchMedia("(min-width: 960px)");
+const TABS = [...document.querySelectorAll(".tab")];
+let currentTab = "race";
+
+function showTab(name) {
+  if (WIDE.matches && name === "race") name = "lamp";
+  currentTab = name;
+  for (const t of TABS) {
+    const on = t.dataset.tab === name;
+    t.setAttribute("aria-selected", on);
+    t.tabIndex = on ? 0 : -1;
+  }
+  for (const p of document.querySelectorAll(".panel")) {
+    p.classList.toggle("active", p.dataset.tab === name);
+  }
+  setLogOpen(name === "log");
+  // Remembered per browser; storage may be blocked, which is fine.
+  try { localStorage.setItem("tab", name); } catch {}
+}
+
+function startTabs() {
+  for (const t of TABS) t.addEventListener("click", () => showTab(t.dataset.tab));
+  // Left/right arrows move between tabs, as in any tab bar.
+  document.querySelector(".tabs").addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    const shown = TABS.filter((t) => t.offsetParent !== null);
+    const i = shown.findIndex((t) => t.dataset.tab === currentTab);
+    const next = shown[(i + (e.key === "ArrowRight" ? 1 : shown.length - 1)) % shown.length];
+    showTab(next.dataset.tab);
+    next.focus();
   });
-  $("log-clear").addEventListener("click", () => { $("log").textContent = ""; });
+  WIDE.addEventListener("change", () => showTab(currentTab));
+  let saved = null;
+  try { saved = localStorage.getItem("tab"); } catch {}
+  showTab(TABS.some((t) => t.dataset.tab === saved) ? saved : "race");
 }
 
 // ---- Start-up ----
 
 async function start() {
   $("host").textContent = location.host;
+  startTabs();
 
   for (const id of SLIDERS) {
     $(id).addEventListener("input", () => showPercent(id));
   }
+  $("lamp_color").addEventListener("input", () => setAccent($("lamp_color").value));
   // The list doesn't count while "All drivers" is ticked.
   $("follow_all").addEventListener("change", () => {
     $("followed_drivers").disabled = $("follow_all").checked;
@@ -591,8 +818,9 @@ async function start() {
     section.addEventListener("change", scheduleSave);
   }
   for (const b of document.querySelectorAll("[data-flag]")) {
+    const name = b.querySelector(".name").textContent;
     b.addEventListener("click", () =>
-      override({ kind: "flag", flag: b.dataset.flag }, b.textContent + " forced"));
+      override({ kind: "flag", flag: b.dataset.flag }, name + " forced"));
   }
   $("force-color").addEventListener("click", () =>
     override({ kind: "color", color: $("override_color").value }, "Colour forced"));
@@ -620,7 +848,7 @@ async function start() {
   $("token-remove").addEventListener("click", () => sendToken("", "Token removed"));
   refreshToken();
   setInterval(refreshToken, 60000);
-  startLog();
+  $("log-clear").addEventListener("click", () => { $("log").textContent = ""; });
 }
 
 start();
