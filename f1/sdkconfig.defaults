@@ -14,3 +14,12 @@ CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=4096
 # The WebSocket upgrade request is built in this buffer; the default 1 KB
 # can't hold `Authorization: Bearer <F1TV token>` (the token alone is 1-2 KB).
 CONFIG_WS_BUFFER_SIZE=4096
+
+# mbedTLS keeps a 16 KB receive and a 4 KB send buffer for as long as a TLS
+# connection is open; the live feed's WebSocket stays open all session. With
+# dynamic buffers they exist only while data moves, and the handshake's
+# certificates and keys are freed once it's done: 10-20 KB more free heap
+# while connected, so an HTTPS request (calendar, winner) still fits.
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT=y
