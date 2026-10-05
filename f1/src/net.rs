@@ -69,8 +69,12 @@ const FIRST_CALENDAR_RETRY: Duration = Duration::from_secs(60);
 const MAX_CALENDAR_RETRY: Duration = Duration::from_secs(30 * 60);
 /// How often to check whether WiFi and the clock are ready for a download.
 const CALENDAR_WAITING_EVERY: Duration = Duration::from_secs(5);
-/// How often to work out the phase. Phase windows are minutes long, so 30 s is precise enough.
+/// The phase job wakes at the next boundary (`schedule::next_change`); this
+/// is the longest it waits anyway, in case the calendar or the clock changed.
 const PHASE_EVERY: Duration = Duration::from_secs(30);
+/// Wake this long after a boundary: the clock counts whole seconds, so right
+/// on it the old phase could still be read.
+const BOUNDARY_MARGIN: Duration = Duration::from_millis(500);
 /// How often to check for a valid clock before the first phase.
 const PHASE_WAITING_EVERY: Duration = Duration::from_secs(1);
 /// How often to look for a race's winner while it's due; results can take a
@@ -244,7 +248,10 @@ fn run(
                         cfg!(feature = "live-now")
                             || matches!(phase, SessionPhase::PreSession | SessionPhase::Live),
                     );
-                    now + PHASE_EVERY
+                    let to_boundary = schedule::next_change(&schedule.sessions, unix)
+                        .and_then(|at| u64::try_from(at - unix).ok())
+                        .map(|secs| Duration::from_secs(secs) + BOUNDARY_MARGIN);
+                    now + to_boundary.map_or(PHASE_EVERY, |d| d.min(PHASE_EVERY))
                 }
                 // No valid time yet: the schedule can't be read without it.
                 None => now + PHASE_WAITING_EVERY,
@@ -384,7 +391,7 @@ fn log_phase(sessions: &[Session], now_unix: i64) {
     log_next(sessions, now_unix);
 }
 
-/// The next tracked session and a countdown to it.
+/// The next session and a countdown to it.
 fn log_next(sessions: &[Session], now_unix: i64) {
     match schedule::next_session(sessions, now_unix) {
         Some(next) => log::info!(
@@ -393,7 +400,7 @@ fn log_next(sessions: &[Session], now_unix: i64) {
             next.key,
             in_words(next.start - now_unix)
         ),
-        None => log::info!("next: no tracked session coming up"),
+        None => log::info!("next: no session coming up"),
     }
 }
 

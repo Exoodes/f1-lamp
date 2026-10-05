@@ -10,6 +10,7 @@ pub mod feed;
 pub mod frame;
 pub mod input;
 pub mod live;
+pub mod logbuf;
 pub mod openf1;
 pub mod overlays;
 pub mod playback;

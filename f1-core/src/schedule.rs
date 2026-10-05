@@ -31,17 +31,6 @@ pub struct Session {
 }
 
 impl SessionKind {
-    /// Whether the lamp follows this kind of session at all. Practice is left
-    /// out so Fridays don't keep the lamp in pre-session status.
-    pub fn is_tracked(self) -> bool {
-        matches!(
-            self,
-            SessionKind::Race
-                | SessionKind::Sprint
-                | SessionKind::Qualifying
-                | SessionKind::SprintQualifying
-        )
-    }
     /// Whether the session ends with a winner, and so a post-session window.
     pub fn has_winner(self) -> bool {
         matches!(self, SessionKind::Race | SessionKind::Sprint)
@@ -51,11 +40,11 @@ impl SessionKind {
 /// The phase this one session puts the lamp in at `now`, if any. Each window
 /// includes its first second and excludes its last, so a boundary second
 /// belongs to the later phase.
+///
+/// Every kind of session is followed, practice too: flags and red flags
+/// happen there as well, and Friday practice is the first live test of a
+/// weekend.
 fn phase_of(session: &Session, now: i64) -> Option<SessionPhase> {
-    if !session.kind.is_tracked() {
-        return None;
-    }
-
     let pre_start = session.start - PRE_SESSION;
     let live_end = session.end + LIVE_GRACE;
     let post_end = live_end + POST_SESSION;
@@ -98,12 +87,32 @@ pub fn phase_at(sessions: &[Session], now: i64) -> SessionPhase {
     current_session(sessions, now).map_or(SessionPhase::Idle, |(phase, _)| phase)
 }
 
-/// The first tracked session that hasn't started yet. `sessions` must be
+/// The first session that hasn't started yet. `sessions` must be
 /// sorted by start, as `openf1::usable_sessions` returns them.
-pub fn next_session(sessions: &[Session], now: i64) -> Option<&Session> {
+/// The next moment after `now` at which the phase can change: a session's
+/// pre-session start, start, end of live, or end of post-session.
+/// Waking up then makes phase changes exact instead of up to a polling
+/// interval late, which matters for the start lights.
+pub fn next_change(sessions: &[Session], now: i64) -> Option<i64> {
     sessions
         .iter()
-        .find(|s| s.kind.is_tracked() && s.start > now)
+        .flat_map(|s| {
+            let live_end = s.end + LIVE_GRACE;
+            let post_end = s.kind.has_winner().then_some(live_end + POST_SESSION);
+            [
+                Some(s.start - PRE_SESSION),
+                Some(s.start),
+                Some(live_end),
+                post_end,
+            ]
+        })
+        .flatten()
+        .filter(|&t| t > now)
+        .min()
+}
+
+pub fn next_session(sessions: &[Session], now: i64) -> Option<&Session> {
+    sessions.iter().find(|s| s.start > now)
 }
 
 /// The sessions that can still affect the lamp at `now` (not fully over,
@@ -243,10 +252,11 @@ mod tests {
     }
 
     #[test]
-    fn practice_is_ignored() {
+    fn practice_is_followed_like_qualifying() {
         let practice = [session(1, SessionKind::Practice, START, END)];
-        assert_eq!(phase_at(&practice, START - 1), SessionPhase::Idle);
-        assert_eq!(phase_at(&practice, START), SessionPhase::Idle);
+        assert_eq!(phase_at(&practice, START - 1), SessionPhase::PreSession);
+        assert_eq!(phase_at(&practice, START), SessionPhase::Live);
+        assert_eq!(phase_at(&practice, END + LIVE_GRACE), SessionPhase::Idle);
     }
 
     #[test]
@@ -313,15 +323,15 @@ mod tests {
     }
 
     #[test]
-    fn untracked_sessions_never_decide() {
-        // Practice overlapping a race's pre-session doesn't change anything.
+    fn live_practice_wins_over_a_later_sessions_pre_session() {
+        // Practice still running while the race's pre-session has begun.
         let sessions = [
             session(9, SessionKind::Practice, START - HOUR, START),
             race(),
         ];
         let (phase, s) = current_session(&sessions, START - 10 * MINUTE).unwrap();
-        assert_eq!(phase, SessionPhase::PreSession);
-        assert_eq!(s.key, 1);
+        assert_eq!(phase, SessionPhase::Live);
+        assert_eq!(s.key, 9);
     }
 
     // ---- Next session ----
@@ -353,12 +363,12 @@ mod tests {
     }
 
     #[test]
-    fn next_session_skips_practice() {
+    fn next_session_includes_practice() {
         let sessions = [
             session(1, SessionKind::Practice, START, END),
             session(2, SessionKind::Race, START + 24 * HOUR, END + 24 * HOUR),
         ];
-        assert_eq!(next_session(&sessions, 0).map(|s| s.key), Some(2));
+        assert_eq!(next_session(&sessions, 0).map(|s| s.key), Some(1));
     }
 
     #[test]
@@ -496,5 +506,72 @@ mod tests {
     #[test]
     fn empty_list_awaits_no_winner() {
         assert_eq!(awaiting_key(&[], POST_START), None);
+    }
+
+    #[test]
+    fn next_change_walks_through_every_boundary_of_a_race() {
+        let race = [session(1, SessionKind::Race, START, END)];
+        let pre = START - PRE_SESSION;
+        let live_end = END + LIVE_GRACE;
+        let post_end = live_end + POST_SESSION;
+        assert_eq!(next_change(&race, 0), Some(pre));
+        assert_eq!(next_change(&race, pre), Some(START));
+        assert_eq!(next_change(&race, START), Some(live_end));
+        assert_eq!(next_change(&race, live_end), Some(post_end));
+        assert_eq!(next_change(&race, post_end), None);
+    }
+
+    #[test]
+    fn phase_really_changes_at_each_boundary() {
+        let race = [session(1, SessionKind::Race, START, END)];
+        let mut t = 0;
+        let mut phases = vec![phase_at(&race, t)];
+        while let Some(next) = next_change(&race, t) {
+            assert_ne!(
+                phase_at(&race, next - 1),
+                phase_at(&race, next),
+                "at {next}"
+            );
+            phases.push(phase_at(&race, next));
+            t = next;
+        }
+        assert_eq!(
+            phases,
+            [
+                SessionPhase::Idle,
+                SessionPhase::PreSession,
+                SessionPhase::Live,
+                SessionPhase::PostSession,
+                SessionPhase::Idle
+            ]
+        );
+    }
+
+    #[test]
+    fn qualifying_has_no_post_session_boundary() {
+        let quali = [session(1, SessionKind::Qualifying, START, END)];
+        assert_eq!(next_change(&quali, START), Some(END + LIVE_GRACE));
+        assert_eq!(next_change(&quali, END + LIVE_GRACE), None);
+    }
+
+    #[test]
+    fn practice_has_boundaries_but_no_post_session() {
+        let practice = [session(1, SessionKind::Practice, START, END)];
+        assert_eq!(next_change(&practice, 0), Some(START - PRE_SESSION));
+        assert_eq!(next_change(&practice, START), Some(END + LIVE_GRACE));
+        assert_eq!(next_change(&practice, END + LIVE_GRACE), None);
+    }
+
+    #[test]
+    fn next_change_is_the_earliest_over_all_sessions() {
+        let weekend = [
+            session(1, SessionKind::Qualifying, START, END),
+            session(2, SessionKind::Race, START + 24 * HOUR, END + 24 * HOUR),
+        ];
+        assert_eq!(next_change(&weekend, END), Some(END + LIVE_GRACE));
+        assert_eq!(
+            next_change(&weekend, END + LIVE_GRACE),
+            Some(START + 24 * HOUR - PRE_SESSION)
+        );
     }
 }

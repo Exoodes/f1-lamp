@@ -66,6 +66,13 @@
     opacity: 0; transition: opacity .3s; pointer-events: none;
   }
   .toast.show { opacity: 1; }
+
+  /* Live log: only polled while open. */
+  details.log summary { cursor: pointer; color: var(--muted); font-size: .9rem; text-transform: uppercase; letter-spacing: .06em; }
+  #log { margin: 10px 0 0; max-height: 50vh; overflow: auto; font: .75rem/1.35 ui-monospace, monospace; white-space: pre-wrap; word-break: break-all; color: var(--text); }
+  #log .w { color: #ffd600; }
+  #log .e { color: #ff6b6b; }
+  #log .gap { color: var(--muted); font-style: italic; }
   .toast.err { color: #ff6b6b; }
 
   /* Replay: only shown when the firmware was built with a replay. */
@@ -199,6 +206,14 @@
       <button id="release">Release override</button>
     </div>
     <p class="msg" id="override-msg"></p>
+  </section>
+  <section>
+    <details class="log" id="log-box">
+      <summary>Log (live)</summary>
+      <p class="hint">New lines only, from when you open this. Nothing is kept on the lamp.</p>
+      <div class="row"><button id="log-clear">Clear</button></div>
+      <div id="log"></div>
+    </details>
   </section>
 </main>
 <p class="toast" id="save-msg"></p>
@@ -502,6 +517,53 @@ async function sendToken(text, label) {
   }
 }
 
+// ---- Live log (polled once a second, only while the section is open) ----
+
+const LOG_KEEP = 500;   // lines kept on the page; older ones are dropped
+let logNext = null;     // sequence number to ask from; null = not started
+let logTimer = null;
+
+function addLogLine(text, cls) {
+  const box = $("log");
+  // Stay at the bottom only if the user hasn't scrolled up to read.
+  const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 4;
+  const div = document.createElement("div");
+  div.textContent = text;
+  if (cls) div.className = cls;
+  box.appendChild(div);
+  while (box.childElementCount > LOG_KEEP) box.firstElementChild.remove();
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+async function pollLog() {
+  try {
+    const url = logNext === null ? "/api/log" : "/api/log?after=" + logNext;
+    const r = await fetch(url);
+    if (!r.ok) return;
+    const page = await r.json();
+    if (page.missed > 0) addLogLine(`… ${page.missed} lines missed`, "gap");
+    for (const line of page.lines) {
+      addLogLine(line, line.startsWith("E ") ? "e" : line.startsWith("W ") ? "w" : "");
+    }
+    logNext = page.next;
+  } catch {
+    // The status card already says when the lamp can't be reached.
+  }
+}
+
+function startLog() {
+  $("log-box").addEventListener("toggle", () => {
+    clearInterval(logTimer);
+    if ($("log-box").open) {
+      // Opening starts fresh: only lines from now on.
+      logNext = null;
+      pollLog();
+      logTimer = setInterval(pollLog, 1000);
+    }
+  });
+  $("log-clear").addEventListener("click", () => { $("log").textContent = ""; });
+}
+
 // ---- Start-up ----
 
 async function start() {
@@ -549,6 +611,7 @@ async function start() {
   $("token-remove").addEventListener("click", () => sendToken("", "Token removed"));
   refreshToken();
   setInterval(refreshToken, 60000);
+  startLog();
 }
 
 start();

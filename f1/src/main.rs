@@ -29,7 +29,8 @@ const WIFI_PSK: &str = env!("WIFI_PSK");
 fn main() -> anyhow::Result<()> {
     esp_idf_svc::sys::link_patches();
 
-    esp_idf_svc::log::EspLogger::initialize_default();
+    // The serial log as before, plus the last lines for the web page.
+    io::weblog::init();
     if WIFI_SSID.is_empty() {
         log::warn!("WiFi SSID is empty: set wifi_ssid in f1/cfg.toml");
     }

@@ -28,6 +28,7 @@ pub struct TrackState {
     double_yellow: HashSet<u8>,
     shown: Option<TrackFlag>,
     started: bool,
+    is_race: Option<bool>,
 }
 
 impl TrackState {
@@ -44,7 +45,9 @@ impl TrackState {
                 if let Some(state) = s.status {
                     self.session = Some(state);
                     if state == SessionState::Started && !self.started {
-                        events.push(RaceEvent::StartLights);
+                        if self.is_race != Some(false) {
+                            events.push(RaceEvent::StartLights);
+                        }
                         self.started = true;
                     }
                 }
@@ -71,8 +74,12 @@ impl TrackState {
                     _ => {}
                 }
             }
-            FeedMessage::SessionInfo(_)
-            | FeedMessage::DriverList(_)
+            FeedMessage::SessionInfo(info) => {
+                if let Some(is_race) = info.is_race() {
+                    self.is_race = Some(is_race);
+                }
+            }
+            FeedMessage::DriverList(_)
             | FeedMessage::TopThree(_)
             | FeedMessage::PitLane(_)
             | FeedMessage::TimingStats(_)
@@ -368,5 +375,41 @@ mod tests {
             message: Some("TRACK LIMITS".to_owned()),
         });
         assert!(s.apply(other).is_empty());
+    }
+
+    fn info(kind: &str) -> FeedMessage {
+        FeedMessage::SessionInfo(SessionInfo {
+            kind: Some(kind.to_owned()),
+            name: None,
+            key: None,
+        })
+    }
+
+    #[test]
+    fn race_start_has_start_lights() {
+        let mut s = TrackState::default();
+        s.apply(info("Race"));
+        s.apply(track("1"));
+        assert_eq!(
+            s.apply(session(SessionState::Started)),
+            [
+                RaceEvent::StartLights,
+                RaceEvent::TrackFlag(TrackFlag::Green)
+            ]
+        );
+    }
+
+    #[test]
+    fn qualifying_and_practice_start_without_start_lights() {
+        for kind in ["Qualifying", "Practice"] {
+            let mut s = TrackState::default();
+            s.apply(info(kind));
+            s.apply(track("1"));
+            assert_eq!(
+                s.apply(session(SessionState::Started)),
+                flag(TrackFlag::Green),
+                "{kind}"
+            );
+        }
     }
 }

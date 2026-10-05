@@ -15,7 +15,7 @@ use f1_core::{
     token::TokenStatus,
 };
 
-use crate::io::{clock, token_store::TokenKeeper};
+use crate::io::{clock, token_store::TokenKeeper, weblog};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const STACK_SIZE: usize = 10 * 1024;
@@ -80,6 +80,13 @@ pub fn start(
     })?;
 
     token_routes(&mut server, tokens)?;
+
+    // `?after=<n>`: the lines after number n; without it, only where to start.
+    // Logs nothing itself, or every poll would add a line.
+    server.fn_handler::<anyhow::Error, _>("/api/log", Method::Get, |req| {
+        let after = query_number(req.uri(), "after");
+        reply(req, 200, JSON, &serde_json::to_vec(&weblog::page(after))?)
+    })?;
 
     #[cfg(feature = "player")]
     replay_routes(&mut server)?;
@@ -162,6 +169,16 @@ fn token_routes(
         reply(req, code, JSON, &serde_json::to_vec(&status)?)
     })?;
     Ok(())
+}
+
+/// `name`'s value in the query string, if it's a number: `/x?after=12` -> 12.
+fn query_number(uri: &str, name: &str) -> Option<u64> {
+    let (_, query) = uri.split_once('?')?;
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(key, _)| *key == name)
+        .and_then(|(_, value)| value.parse().ok())
 }
 
 /// Sends a complete response with the given status, content type and body.

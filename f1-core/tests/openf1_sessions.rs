@@ -99,10 +99,11 @@ fn monza_race_is_the_current_session_while_live() {
 }
 
 #[test]
-fn after_monza_the_next_session_is_madrid_qualifying() {
+fn after_monza_the_next_session_is_madrid_practice_1() {
+    // Practice is followed too, so Friday's first practice comes first.
     let sessions = usable_sessions(dtos());
     let next = next_session(&sessions, 1_788_706_800).unwrap();
-    assert_eq!(next.key, 11365);
-    assert_eq!(next.kind, SessionKind::Qualifying);
-    assert_eq!(next.start, 1_789_221_600); // 2026-09-12 14:00 UTC
+    assert_eq!(next.key, 11362);
+    assert_eq!(next.kind, SessionKind::Practice);
+    assert_eq!(next.start, 1_789_126_200); // 2026-09-11 11:30 UTC
 }
