@@ -39,6 +39,11 @@ fn main() -> anyhow::Result<()> {
     let peripherals = Peripherals::take()?;
     let sys_loop = EspSystemEventLoop::take()?;
     let nvs = EspDefaultNvsPartition::take()?;
+    // Before anything that could crash: a new firmware on trial is counted
+    // here, and switched back after three boots that never got healthy.
+    io::ota::check_boot(nvs.clone())?;
+    #[cfg(feature = "crash-test")]
+    crash_test();
 
     let mut storage = io::storage::SettingsStore::new(nvs.clone())?;
 
@@ -142,6 +147,17 @@ fn check_threads(threads: &[(&str, JoinHandle<()>)]) {
         log::error!("thread {name} stopped, restarting");
         restart();
     }
+}
+
+/// With `--features crash-test`: a firmware that crashes 10 s after every
+/// boot, to see the update fallback switch back to the firmware before it.
+#[cfg(feature = "crash-test")]
+fn crash_test() {
+    log::warn!("crash-test: this firmware crashes in 10 s, on every boot");
+    std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_secs(10));
+        panic!("crash-test");
+    });
 }
 
 pub fn restart() -> ! {

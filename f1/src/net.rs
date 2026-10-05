@@ -19,8 +19,8 @@ use f1_core::{
 
 use crate::{
     io::{
-        clock, http, live::LiveControl, mdns, storage::ScheduleStore, token_store::TokenKeeper,
-        wifi,
+        clock, http, live::LiveControl, mdns, ota, storage::ScheduleStore,
+        token_store::TokenKeeper, wifi,
     },
     web, WIFI_PSK, WIFI_SSID,
 };
@@ -47,6 +47,8 @@ pub fn spawn(
     Ok(handle)
 }
 
+/// A new firmware passes its trial once its web server has run this long.
+const HEALTHY_AFTER: Duration = Duration::from_secs(60);
 /// How often to check that WiFi is still up.
 const WIFI_CHECK_EVERY: Duration = Duration::from_secs(5);
 /// How often to log the free heap.
@@ -160,6 +162,10 @@ fn run(
     // Same here: dropping it stops the server. Started once WiFi is up, as the
     // TCP/IP stack doesn't exist before WiFi is created.
     let mut server: Option<EspHttpServer<'static>> = None;
+    // When the web server started; a new firmware is healthy once it has
+    // served for `HEALTHY_AFTER`, and can then take the next update.
+    let mut server_since: Option<Instant> = None;
+    let mut healthy = false;
 
     let mut retry_wait = FIRST_RETRY_WAIT;
     let mut calendar_retry = FIRST_CALENDAR_RETRY;
@@ -190,6 +196,11 @@ fn run(
                 web::start(Arc::clone(&snapshot), tx.clone(), Arc::clone(&tokens))
                     .context("start web server")?,
             );
+            server_since = Some(now);
+        }
+        if !healthy && server_since.is_some_and(|t| now.duration_since(t) >= HEALTHY_AFTER) {
+            ota::mark_healthy();
+            healthy = true;
         }
         if now >= due.clock {
             due.clock = match clock::minute_of_day() {

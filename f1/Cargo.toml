@@ -42,6 +42,9 @@ showcase = ["player"]
 # Connects to F1's live feed at once, whatever the schedule says: to test
 # between sessions (the feed then holds the last session's state).
 live-now = []
+# A firmware that crashes 10 s after every boot: to test the update fallback.
+# Only ever send it with `cargo ota --features crash-test`.
+crash-test = []
 # Internal: what every kind of replay needs. Not meant to be enabled by hand.
 player = []
 
