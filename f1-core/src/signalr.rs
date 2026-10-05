@@ -106,6 +106,16 @@ impl Splitter {
         frames
     }
 
+    /// Makes room for `additional` more bytes in one allocation. When the
+    /// size of what's coming is known, this avoids the buffer doubling its way
+    /// up: growing a 64 KB buffer would briefly need a 128 KB block.
+    /// A frame that won't fit is skipped anyway, so nothing is reserved for it.
+    pub fn reserve(&mut self, additional: usize) {
+        if self.buf.len() + additional <= self.max_len {
+            self.buf.reserve_exact(additional);
+        }
+    }
+
     /// Bytes waiting for their separator.
     pub fn pending(&self) -> usize {
         self.buf.len()
@@ -425,5 +435,19 @@ mod tests {
             .data
             .get()
             .contains(r#"\"PER\" –"#));
+    }
+
+    #[test]
+    fn reserve_makes_room_once() {
+        let mut s = Splitter::new(100);
+        s.reserve(60);
+        assert!(s.buf.capacity() >= 60 && s.buf.capacity() < 100);
+    }
+
+    #[test]
+    fn nothing_is_reserved_for_a_frame_that_will_be_skipped() {
+        let mut s = Splitter::new(100);
+        s.reserve(1000);
+        assert_eq!(s.buf.capacity(), 0);
     }
 }

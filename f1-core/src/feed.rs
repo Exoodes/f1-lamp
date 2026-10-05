@@ -171,6 +171,8 @@ pub struct SessionInfo {
     pub kind: Option<String>,
     #[serde(rename = "Name")]
     pub name: Option<String>,
+    #[serde(rename = "Key")]
+    pub key: Option<u32>,
 }
 
 impl SessionInfo {

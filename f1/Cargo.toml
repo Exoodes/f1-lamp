@@ -37,8 +37,17 @@ toml = "0.8"
 replay = ["player"]
 # Plays the hand-written showcase race in f1-core/tests/data/showcase.
 showcase = ["player"]
+# Connects to F1's live feed at once, whatever the schedule says: to test
+# between sessions (the feed then holds the last session's state).
+live-now = []
 # Internal: what every kind of replay needs. Not meant to be enabled by hand.
 player = []
 
 [[package.metadata.esp-idf-sys.extra_components]]
 remote_component = { name = "espressif/mdns", version = "1.2" }
+
+# The WebSocket client for F1's live feed (stage 6); since ESP-IDF 5 it is a
+# separate component. After changing these, touch sdkconfig.defaults so
+# ESP-IDF is rebuilt.
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/esp_websocket_client", version = "1.2" }

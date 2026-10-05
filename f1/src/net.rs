@@ -18,7 +18,7 @@ use f1_core::{
 };
 
 use crate::{
-    io::{clock, http, mdns, storage::ScheduleStore, wifi},
+    io::{clock, http, live::LiveControl, mdns, storage::ScheduleStore, wifi},
     web, WIFI_PSK, WIFI_SSID,
 };
 
@@ -30,12 +30,13 @@ pub fn spawn(
     nvs: EspDefaultNvsPartition,
     tx: SyncSender<Input>,
     snapshot: Arc<Mutex<Snapshot>>,
+    live: Arc<LiveControl>,
 ) -> anyhow::Result<JoinHandle<()>> {
     let handle = thread::Builder::new()
         .name("net".into())
         .stack_size(16 * 1024)
         .spawn(move || {
-            if let Err(e) = run(modem, sys_loop, nvs, &tx, snapshot) {
+            if let Err(e) = run(modem, sys_loop, nvs, &tx, snapshot, &live) {
                 log::error!("network thread stopped: {e:#}");
             }
         })?;
@@ -105,21 +106,23 @@ impl Schedule {
         self.sessions = sessions;
     }
 
-    /// Works out the phase at `now_unix` and sends it, but only when it changed.
-    fn update_phase(&mut self, now_unix: i64, tx: &SyncSender<Input>) -> anyhow::Result<()> {
-        // A replay owns the phase; two producers would fight over it.
-        if cfg!(feature = "player") {
-            return Ok(());
-        }
+    /// Works out the phase at `now_unix` and sends it, but only when it
+    /// changed. Returns it either way.
+    fn update_phase(
+        &mut self,
+        now_unix: i64,
+        tx: &SyncSender<Input>,
+    ) -> anyhow::Result<SessionPhase> {
         let phase = schedule::phase_at(&self.sessions, now_unix);
-        if self.sent_phase == Some(phase) {
-            return Ok(());
+        // A replay owns the phase; two producers would fight over it.
+        if cfg!(feature = "player") || self.sent_phase == Some(phase) {
+            return Ok(phase);
         }
         tx.send(Input::Phase(phase))
             .context("render loop is gone")?;
         self.sent_phase = Some(phase);
         log_phase(&self.sessions, now_unix);
-        Ok(())
+        Ok(phase)
     }
 }
 
@@ -130,6 +133,7 @@ fn run(
     nvs: EspDefaultNvsPartition,
     tx: &SyncSender<Input>,
     snapshot: Arc<Mutex<Snapshot>>,
+    live: &LiveControl,
 ) -> anyhow::Result<()> {
     let mut status = None;
     report(tx, &mut status, NetStatus::Connecting)?;
@@ -227,7 +231,12 @@ fn run(
         if now >= due.phase {
             due.phase = match clock::unix_now() {
                 Some(unix) => {
-                    schedule.update_phase(unix, tx)?;
+                    let phase = schedule.update_phase(unix, tx)?;
+                    // The live feed is needed just before and during a session.
+                    live.set_wanted(
+                        cfg!(feature = "live-now")
+                            || matches!(phase, SessionPhase::PreSession | SessionPhase::Live),
+                    );
                     now + PHASE_EVERY
                 }
                 // No valid time yet: the schedule can't be read without it.
@@ -236,7 +245,7 @@ fn run(
         }
         if now >= due.winner {
             if let (Some(unix), true) = (clock::unix_now(), wifi.is_up().unwrap_or(false)) {
-                check_winner(&schedule.sessions, unix, &mut winner_sent, tx)?;
+                check_winner(&schedule.sessions, unix, &mut winner_sent, live, tx)?;
             }
             due.winner = now + WINNER_EVERY;
         }
@@ -287,12 +296,22 @@ fn check_winner(
     sessions: &[Session],
     now_unix: i64,
     sent: &mut Option<u32>,
+    live: &LiveControl,
     tx: &SyncSender<Input>,
 ) -> anyhow::Result<()> {
     let Some(race) = schedule::awaiting_winner(sessions, now_unix) else {
         return Ok(());
     };
     if *sent == Some(race.key) {
+        return Ok(());
+    }
+    // The live feed showed it at the flag; OpenF1 is only the fallback.
+    if live.winner_shown() == Some(race.key) {
+        log::info!(
+            "winner: session {} already shown from the live feed",
+            race.key
+        );
+        *sent = Some(race.key);
         return Ok(());
     }
 

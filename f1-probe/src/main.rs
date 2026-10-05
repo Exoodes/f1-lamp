@@ -21,7 +21,8 @@ use std::{
 use anyhow::{bail, Context};
 use f1_core::{
     feed::SessionState,
-    signalr::{self, Message, Splitter, HANDSHAKE, PING},
+    live::LiveSession,
+    signalr::{self, Message, Splitter, PING},
     timeline::Stream,
     track_state::FeedMessage,
 };
@@ -32,8 +33,6 @@ const NEGOTIATE: &str = "https://livetiming.formula1.com/signalrcore/negotiate";
 const HUB: &str = "wss://livetiming.formula1.com/signalrcore";
 const HOST: &str = "livetiming.formula1.com";
 
-/// Our six streams, plus Heartbeat to see the connection is alive.
-const EXTRA_STREAMS: [&str; 1] = ["Heartbeat"];
 /// The server drops clients that stay quiet for about 30 s.
 const PING_EVERY: Duration = Duration::from_secs(15);
 /// How long one read waits, so pings go out on time.
@@ -62,11 +61,11 @@ fn main() -> anyhow::Result<()> {
     let mut capture = Capture::create()?;
     println!("saving to {}", capture.dir.display());
 
-    let mut streams: Vec<&str> = Stream::ALL.iter().map(|s| s.name()).collect();
-    streams.extend(EXTRA_STREAMS);
-    send(&mut ws, HANDSHAKE)?;
-    send(&mut ws, &signalr::subscribe(1, &streams))?;
-    println!("subscribed to {}", streams.join(", "));
+    // The same frames the lamp sends.
+    for frame in LiveSession::opening_frames() {
+        send(&mut ws, &frame)?;
+    }
+    println!("sent handshake and two Subscribe calls");
 
     let mut splitter = Splitter::new(MAX_FRAME);
     let mut next_ping = Instant::now() + PING_EVERY;
@@ -200,11 +199,17 @@ fn handle(frame: &str, capture: &mut Capture) -> anyhow::Result<bool> {
         Message::Handshake { error: Some(e) } => bail!("handshake refused: {e}"),
         Message::Completion { error: Some(e), .. } => bail!("Subscribe refused: {e}"),
         Message::Completion {
+            invocation_id,
             result: Some(result),
             ..
         } => {
             let state = signalr::initial_state(result)?;
-            println!("initial state of {} streams:", state.len());
+            println!(
+                "answer to Subscribe {}: {} bytes, initial state of {} streams:",
+                invocation_id.as_deref().unwrap_or("?"),
+                frame.len(),
+                state.len()
+            );
             for (stream, data) in state {
                 report(capture, &stream, data.get())?;
             }

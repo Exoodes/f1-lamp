@@ -98,3 +98,38 @@ fn top_three_leader_is_verstappen() {
     });
     assert_eq!(leader.as_deref(), Some("3"));
 }
+
+/// The capture put back together as the server's answer to `Subscribe`.
+fn subscribe_answer() -> String {
+    let streams: Vec<String> = FILES
+        .iter()
+        .map(|(stream, text)| {
+            let json = &text.trim_start_matches('\u{feff}')[12..].trim_end();
+            format!("\"{}\":{json}", stream.name())
+        })
+        .collect();
+    format!(
+        "{{\"type\":3,\"invocationId\":\"1\",\"result\":{{{}}}}}\u{1e}",
+        streams.join(",")
+    )
+}
+
+#[test]
+fn joining_after_the_race_applies_57_kb_of_state_silently() {
+    use f1_core::live::LiveSession;
+    let answer = subscribe_answer();
+    assert!(answer.len() > 50_000);
+
+    let mut live = LiveSession::new(96 * 1024);
+    live.expect(answer.len());
+    let mut subscribed = false;
+    for piece in answer.as_bytes().chunks(1024) {
+        let r = live.receive(piece);
+        assert!(r.problems.is_empty(), "{:?}", r.problems);
+        // The session has ended: no flag, and no chequered flag or winner
+        // from the race control history.
+        assert!(r.events.is_empty(), "{:?}", r.events);
+        subscribed |= r.subscribed;
+    }
+    assert!(subscribed);
+}

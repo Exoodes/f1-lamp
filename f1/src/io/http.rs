@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{sync::Mutex, time::Duration};
 
 use anyhow::Context;
 use esp_idf_svc::http::{
@@ -13,9 +13,24 @@ const TIMEOUT: Duration = Duration::from_secs(15);
 /// How much of an error response's body goes into the error message.
 const ERROR_DETAIL_MAX: usize = 256;
 
-/// GETs `url` over HTTPS and parses the JSON body into `T`. `None` when the
-/// server answers 404: OpenF1 does that for an empty result instead of `[]`.
-pub fn get_json<T: DeserializeOwned>(url: &str) -> anyhow::Result<Option<T>> {
+/// Held during every TLS handshake. Each one needs tens of KB of heap for a
+/// moment; the live feed's WebSocket and an HTTPS request doing theirs at the
+/// same time could run out.
+pub static TLS: Mutex<()> = Mutex::new(());
+
+/// An HTTP response, read in full.
+pub struct Reply {
+    pub status: u16,
+    /// The `Set-Cookie` header. With several, the client keeps the last one.
+    #[cfg_attr(feature = "player", allow(dead_code))]
+    pub set_cookie: Option<String>,
+    pub body: Vec<u8>,
+}
+
+/// Sends a request without a body and reads the whole response, whatever
+/// its status.
+pub fn request(method: Method, url: &str, headers: &[(&str, &str)]) -> anyhow::Result<Reply> {
+    let _tls = TLS.lock().unwrap_or_else(|e| e.into_inner());
     let config = Configuration {
         crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
         timeout: Some(TIMEOUT),
@@ -24,24 +39,41 @@ pub fn get_json<T: DeserializeOwned>(url: &str) -> anyhow::Result<Option<T>> {
 
     let mut connection = EspHttpConnection::new(&config).context("create HTTP client")?;
     connection
-        .initiate_request(Method::Get, url, &[("accept", "application/json")])
-        .with_context(|| format!("send GET {url}"))?;
+        .initiate_request(method, url, headers)
+        .with_context(|| format!("send {method:?} {url}"))?;
     connection
         .initiate_response()
         .with_context(|| format!("no response from {url}"))?;
 
-    match connection.status() {
+    let status = connection.status();
+    let set_cookie = connection.header("Set-Cookie").map(str::to_owned);
+    let body = if (200..300).contains(&status) {
+        read_body(&mut connection).with_context(|| format!("read body of {url}"))?
+    } else {
+        error_detail(&mut connection).into_bytes()
+    };
+    Ok(Reply {
+        status,
+        set_cookie,
+        body,
+    })
+}
+
+/// GETs `url` over HTTPS and parses the JSON body into `T`. `None` when the
+/// server answers 404: OpenF1 does that for an empty result instead of `[]`.
+pub fn get_json<T: DeserializeOwned>(url: &str) -> anyhow::Result<Option<T>> {
+    let reply = request(Method::Get, url, &[("accept", "application/json")])?;
+    match reply.status {
         200 => {}
         404 => return Ok(None),
         // The body usually says why, e.g. OpenF1's "Live F1 session in progress".
         status => anyhow::bail!(
             "GET {url}: HTTP {status}: {}",
-            error_detail(&mut connection)
+            String::from_utf8_lossy(&reply.body)
         ),
     }
-
-    let body = read_body(&mut connection).with_context(|| format!("read body of {url}"))?;
-    let value = serde_json::from_slice(&body).with_context(|| format!("parse JSON from {url}"))?;
+    let value =
+        serde_json::from_slice(&reply.body).with_context(|| format!("parse JSON from {url}"))?;
     Ok(Some(value))
 }
 

@@ -65,6 +65,8 @@ fn main() -> anyhow::Result<()> {
     let mut last_snapshot = controller.snapshot();
 
     let (tx, rx) = mpsc::sync_channel::<Input>(32);
+    // Set by the net thread, read by the live-feed thread.
+    let live = Arc::new(io::live::LiveControl::default());
     // Every spawned thread, watched by `check_threads`.
     let threads = [
         (
@@ -75,8 +77,12 @@ fn main() -> anyhow::Result<()> {
                 nvs.clone(),
                 tx.clone(),
                 Arc::clone(&snapshot),
+                Arc::clone(&live),
             )?,
         ),
+        // A replay plays its own events; the live feed would mix in real ones.
+        #[cfg(not(feature = "player"))]
+        ("live", io::live::spawn(tx.clone(), Arc::clone(&live))?),
         #[cfg(feature = "player")]
         ("replay", replay::spawn(tx.clone())?),
     ];
