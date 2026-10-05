@@ -18,7 +18,10 @@ use f1_core::{
 };
 
 use crate::{
-    io::{clock, http, live::LiveControl, mdns, storage::ScheduleStore, wifi},
+    io::{
+        clock, http, live::LiveControl, mdns, storage::ScheduleStore, token_store::TokenKeeper,
+        wifi,
+    },
     web, WIFI_PSK, WIFI_SSID,
 };
 
@@ -31,12 +34,13 @@ pub fn spawn(
     tx: SyncSender<Input>,
     snapshot: Arc<Mutex<Snapshot>>,
     live: Arc<LiveControl>,
+    tokens: Arc<TokenKeeper>,
 ) -> anyhow::Result<JoinHandle<()>> {
     let handle = thread::Builder::new()
         .name("net".into())
         .stack_size(16 * 1024)
         .spawn(move || {
-            if let Err(e) = run(modem, sys_loop, nvs, &tx, snapshot, &live) {
+            if let Err(e) = run(modem, sys_loop, nvs, &tx, snapshot, &live, tokens) {
                 log::error!("network thread stopped: {e:#}");
             }
         })?;
@@ -134,6 +138,7 @@ fn run(
     tx: &SyncSender<Input>,
     snapshot: Arc<Mutex<Snapshot>>,
     live: &LiveControl,
+    tokens: Arc<TokenKeeper>,
 ) -> anyhow::Result<()> {
     let mut status = None;
     report(tx, &mut status, NetStatus::Connecting)?;
@@ -177,8 +182,10 @@ fn run(
             log::info!("SNTP started");
         }
         if server.is_none() && wifi.is_up().unwrap_or(false) {
-            server =
-                Some(web::start(Arc::clone(&snapshot), tx.clone()).context("start web server")?);
+            server = Some(
+                web::start(Arc::clone(&snapshot), tx.clone(), Arc::clone(&tokens))
+                    .context("start web server")?,
+            );
         }
         if now >= due.clock {
             due.clock = match clock::minute_of_day() {

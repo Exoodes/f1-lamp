@@ -10,6 +10,9 @@ use serde::de::DeserializeOwned;
 /// Larger responses are refused, so a surprise can't exhaust the heap.
 const MAX_BODY: usize = 32 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(15);
+/// Room for the request line and headers. The default 512 bytes can't hold
+/// `Authorization: Bearer <F1TV token>`: the token alone is 1-2 KB.
+const TX_BUFFER: usize = 4096;
 /// How much of an error response's body goes into the error message.
 const ERROR_DETAIL_MAX: usize = 256;
 
@@ -34,6 +37,7 @@ pub fn request(method: Method, url: &str, headers: &[(&str, &str)]) -> anyhow::R
     let config = Configuration {
         crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
         timeout: Some(TIMEOUT),
+        buffer_size_tx: Some(TX_BUFFER),
         ..Default::default()
     };
 

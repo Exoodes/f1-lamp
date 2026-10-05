@@ -21,5 +21,6 @@ pub mod snapshot;
 pub mod stream;
 pub mod theme;
 pub mod timeline;
+pub mod token;
 pub mod track_state;
 pub mod tracker;

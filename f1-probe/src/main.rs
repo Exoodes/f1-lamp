@@ -7,7 +7,12 @@
 //! cargo run                 until Ctrl+C
 //! cargo run -- 30           for 30 minutes
 //! cargo run -- --raw        also print every SignalR frame
+//! cargo run -- --extra      also subscribe to the streams in `EXTRA_STREAMS`
 //! ```
+//!
+//! With the environment variable `F1TV_TOKEN` set, it is sent as
+//! `Authorization: Bearer ...` with the negotiate and the WebSocket upgrade.
+//! The token itself is never printed.
 
 use std::{
     collections::HashMap,
@@ -24,6 +29,7 @@ use f1_core::{
     live::LiveSession,
     signalr::{self, Message, Splitter, PING},
     timeline::Stream,
+    token::{F1tvToken, TokenStatus},
     track_state::FeedMessage,
 };
 use serde::Deserialize;
@@ -40,24 +46,71 @@ const READ_TIMEOUT: Duration = Duration::from_secs(1);
 /// One SignalR frame. The Subscribe answer late in a race can be large.
 const MAX_FRAME: usize = 4 * 1024 * 1024;
 
+/// With `--extra`: streams beyond the lamp's, to see which ones answer with
+/// and without an F1TV token.
+const EXTRA_STREAMS: [&str; 15] = [
+    "PitStopSeries",
+    "PitStop",
+    "PitLaneTimeCollection",
+    "TimingData",
+    "TimingAppData",
+    "TimingStats",
+    "TyreStintSeries",
+    "LapCount",
+    "WeatherData",
+    "TeamRadio",
+    "ExtrapolatedClock",
+    "OvertakeSeries",
+    "DriverRaceInfo",
+    "CarData.z",
+    "Position.z",
+];
+
 fn main() -> anyhow::Result<()> {
     let mut minutes = None;
     let mut raw = false;
+    let mut extra = false;
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--raw" => raw = true,
+            "--extra" => extra = true,
             n => {
                 minutes = Some(
                     n.parse::<u64>()
-                        .context("usage: f1-probe [minutes] [--raw]")?,
+                        .context("usage: f1-probe [minutes] [--raw] [--extra]")?,
                 )
             }
         }
     }
     let stop_at = minutes.map(|m| Instant::now() + Duration::from_secs(m * 60));
 
-    let token = negotiate()?;
-    let mut ws = connect(&token)?;
+    // Checked the same way as on the lamp; a bad token is left out.
+    let auth = match std::env::var("F1TV_TOKEN") {
+        Err(_) => {
+            println!("F1TV token: none");
+            None
+        }
+        Ok(pasted) => match F1tvToken::parse(&pasted) {
+            Ok(token) => {
+                let now = chrono::Utc::now().timestamp();
+                let expires = chrono::DateTime::from_timestamp(token.expires(), 0)
+                    .map_or("?".to_owned(), |t| t.to_rfc3339());
+                println!(
+                    "F1TV token: {:?}, expires {expires}",
+                    TokenStatus::of(Some(&token), now)
+                );
+                token.is_usable(now).then(|| token.bearer())
+            }
+            Err(e) => {
+                println!("F1TV token rejected ({e}); going on without");
+                println!("  what arrived: {}", shape(&pasted));
+                None
+            }
+        },
+    };
+
+    let token = negotiate(auth.as_deref())?;
+    let mut ws = connect(&token, auth.as_deref())?;
     let mut capture = Capture::create()?;
     println!("saving to {}", capture.dir.display());
 
@@ -66,6 +119,10 @@ fn main() -> anyhow::Result<()> {
         send(&mut ws, &frame)?;
     }
     println!("sent handshake and two Subscribe calls");
+    if extra {
+        send(&mut ws, &signalr::subscribe(3, &EXTRA_STREAMS))?;
+        println!("sent Subscribe 3: {}", EXTRA_STREAMS.join(", "));
+    }
 
     let mut splitter = Splitter::new(MAX_FRAME);
     let mut next_ping = Instant::now() + PING_EVERY;
@@ -122,7 +179,7 @@ struct Negotiation {
 
 /// Gets the load balancer's cookie, then a connection token. Returns the
 /// cookie and token as one `Cookie` header value plus token.
-fn negotiate() -> anyhow::Result<(String, String)> {
+fn negotiate(auth: Option<&str>) -> anyhow::Result<(String, String)> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .http_status_as_error(false)
         .build()
@@ -147,11 +204,13 @@ fn negotiate() -> anyhow::Result<(String, String)> {
         println!("!! no AWSALB cookie in the OPTIONS answer; trying without");
     }
 
-    let mut response = agent
+    let mut request = agent
         .post(&format!("{NEGOTIATE}?negotiateVersion=1"))
-        .header("Cookie", &cookie)
-        .send_empty()
-        .context("negotiate (POST)")?;
+        .header("Cookie", &cookie);
+    if let Some(auth) = auth {
+        request = request.header("Authorization", auth);
+    }
+    let mut response = request.send_empty().context("negotiate (POST)")?;
     let status = response.status();
     let body = response.body_mut().read_to_string()?;
     if !status.is_success() {
@@ -165,12 +224,17 @@ fn negotiate() -> anyhow::Result<(String, String)> {
 
 type Socket = WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
 
-fn connect((cookie, token): &(String, String)) -> anyhow::Result<Socket> {
+fn connect((cookie, token): &(String, String), auth: Option<&str>) -> anyhow::Result<Socket> {
     let mut request = format!("{HUB}?id={token}").into_client_request()?;
     if !cookie.is_empty() {
         request
             .headers_mut()
             .insert("Cookie", HeaderValue::from_str(cookie)?);
+    }
+    if let Some(auth) = auth {
+        let mut value = HeaderValue::from_str(auth).context("token is not a valid header")?;
+        value.set_sensitive(true);
+        request.headers_mut().insert("Authorization", value);
     }
     // Our own TCP stream, so reads can time out and pings go out on time.
     let tcp = TcpStream::connect((HOST, 443)).context("TCP connect")?;
@@ -333,5 +397,25 @@ fn offset(d: Duration) -> String {
         s / 60 % 60,
         s % 60,
         ms % 1000
+    )
+}
+
+/// Describes a pasted token without revealing it: length, separators, and
+/// how it starts, but only when that start is one of the known harmless
+/// prefixes (every JWT starts with `eyJ`, an encoded cookie with `%7B`).
+fn shape(pasted: &str) -> String {
+    let count = |f: fn(char) -> bool| pasted.chars().filter(|c| f(*c)).count();
+    let known = ["eyJ", "Bearer ", "%7B", "{\"", "\"", "loginSession"];
+    let start = known
+        .iter()
+        .find(|k| pasted.trim_start().starts_with(*k))
+        .map_or("something else".to_owned(), |k| format!("{k:?}"));
+    format!(
+        "{} characters, {} dots, {} spaces, {} line breaks, {} '%', starts with {start}",
+        pasted.chars().count(),
+        count(|c| c == '.'),
+        count(|c| c == ' '),
+        count(|c| c == '\n' || c == '\r'),
+        count(|c| c == '%'),
     )
 }

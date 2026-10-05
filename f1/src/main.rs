@@ -67,6 +67,8 @@ fn main() -> anyhow::Result<()> {
     let (tx, rx) = mpsc::sync_channel::<Input>(32);
     // Set by the net thread, read by the live-feed thread.
     let live = Arc::new(io::live::LiveControl::default());
+    // Set from the web page, read by the live-feed thread.
+    let tokens = Arc::new(io::token_store::TokenKeeper::new(nvs.clone())?);
     // Every spawned thread, watched by `check_threads`.
     let threads = [
         (
@@ -78,11 +80,15 @@ fn main() -> anyhow::Result<()> {
                 tx.clone(),
                 Arc::clone(&snapshot),
                 Arc::clone(&live),
+                Arc::clone(&tokens),
             )?,
         ),
         // A replay plays its own events; the live feed would mix in real ones.
         #[cfg(not(feature = "player"))]
-        ("live", io::live::spawn(tx.clone(), Arc::clone(&live))?),
+        (
+            "live",
+            io::live::spawn(tx.clone(), Arc::clone(&live), Arc::clone(&tokens))?,
+        ),
         #[cfg(feature = "player")]
         ("replay", replay::spawn(tx.clone())?),
     ];

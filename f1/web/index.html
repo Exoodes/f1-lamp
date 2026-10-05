@@ -73,6 +73,13 @@
   .replay-name { margin: 0 0 8px; font-weight: 600; word-break: break-all; }
   .replay-time { display: flex; justify-content: space-between; color: var(--muted); font-variant-numeric: tabular-nums; }
   #r-seek { width: 100%; accent-color: var(--red); }
+
+  /* F1TV token: a password field, so it isn't shown while pasting. */
+  #token-input { width: 100%; padding: 6px; font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; }
+  .token-state { font-weight: 600; }
+  .token-state.ok { color: var(--ok); }
+  .token-state.warn { color: #ffd600; }
+  .token-state.bad { color: #ff6b6b; }
   select { padding: 6px; font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; }
 </style>
 </head>
@@ -156,6 +163,18 @@
     <label>Brightness
       <span class="slider"><input type="range" id="night_brightness" min="0" max="100"><output id="night_brightness_out"></output></span>
     </label>
+  </section>
+
+  <section>
+    <h2>F1TV account (optional)</h2>
+    <p class="hint">Unlocks extra live data such as pit stops. Paste your token, or the whole value of formula1.com's <code>loginSession</code> cookie. The lamp never shows it again.</p>
+    <p>Status: <span class="token-state" id="token-state">–</span></p>
+    <input type="password" id="token-input" autocomplete="off" placeholder="paste token here">
+    <div class="row">
+      <button id="token-save">Save token</button>
+      <button id="token-remove">Remove</button>
+    </div>
+    <p class="msg" id="token-msg"></p>
   </section>
 
   <section>
@@ -428,6 +447,52 @@ async function startReplay() {
   setInterval(refreshReplay, 1000);
 }
 
+// ---- F1TV token (the page only ever sees its status) ----
+
+// 1791530993 -> "Fri 9 Oct, 09:29" in the browser's time zone.
+function when(unix) {
+  return new Date(unix * 1000).toLocaleString(undefined, {
+    weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+  });
+}
+
+function showToken(st) {
+  const el = $("token-state");
+  const shown = {
+    not_configured: ["not configured: public data only", ""],
+    valid: [`valid until ${when(st.expires)}`, "ok"],
+    expiring_soon: [`expires ${when(st.expires)}: paste a new one soon`, "warn"],
+    expired: [`expired ${when(st.expired)}: paste a new one (public data until then)`, "bad"],
+    rejected: [`rejected: ${st.reason} (public data only)`, "bad"],
+  }[st.state] || [st.state, ""];
+  el.textContent = shown[0];
+  el.className = "token-state " + shown[1];
+  $("token-remove").disabled = st.state === "not_configured";
+}
+
+async function refreshToken() {
+  try {
+    const r = await fetch("/api/token");
+    if (r.ok) showToken(await r.json());
+  } catch {
+    // The status card already says the lamp can't be reached.
+  }
+}
+
+// Sends the pasted text as it is; an empty body removes the token.
+async function sendToken(text, label) {
+  try {
+    const r = await fetch("/api/token", { method: "POST", body: text });
+    const st = await r.json();
+    showToken(st);
+    message("token-msg", r.ok ? label : "Not saved", !r.ok);
+  } catch (e) {
+    message("token-msg", "Failed: " + e.message, true);
+  } finally {
+    $("token-input").value = "";
+  }
+}
+
 // ---- Start-up ----
 
 async function start() {
@@ -463,6 +528,14 @@ async function start() {
 
   setInterval(refreshStatus, 2000);
   startReplay();
+
+  $("token-save").addEventListener("click", () => {
+    const text = $("token-input").value.trim();
+    if (text) sendToken(text, "Token saved");
+  });
+  $("token-remove").addEventListener("click", () => sendToken("", "Token removed"));
+  refreshToken();
+  setInterval(refreshToken, 60000);
 }
 
 start();

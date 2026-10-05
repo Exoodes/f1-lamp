@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 chrono = { version = "0.4.45", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
+# Reads the expiry out of an F1TV token (a JWT).
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 # The timeline parses feed lines; the firmware uses the same version, so Cargo
 # builds it once.
 serde_json = { version = "1.0.151", features = ["raw_value"] }

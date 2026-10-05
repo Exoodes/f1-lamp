@@ -10,12 +10,19 @@ use esp_idf_svc::{
     },
     io::Write,
 };
-use f1_core::{command::OverrideRequest, input::Input, settings::Settings, snapshot::Snapshot};
+use f1_core::{
+    command::OverrideRequest, input::Input, settings::Settings, snapshot::Snapshot,
+    token::TokenStatus,
+};
+
+use crate::io::{clock, token_store::TokenKeeper};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const STACK_SIZE: usize = 10 * 1024;
 /// Larger request bodies are refused, so a client can't exhaust the heap.
 const MAX_BODY: usize = 2048;
+/// A pasted F1TV token, or the whole `loginSession` cookie holding one.
+const MAX_TOKEN_BODY: usize = 8192;
 
 const HTML: &str = "text/html; charset=utf-8";
 const JSON: &str = "application/json";
@@ -26,6 +33,7 @@ const TEXT: &str = "text/plain; charset=utf-8";
 pub fn start(
     snapshot: Arc<Mutex<Snapshot>>,
     tx: SyncSender<Input>,
+    tokens: Arc<TokenKeeper>,
 ) -> anyhow::Result<EspHttpServer<'static>> {
     let config = Configuration {
         stack_size: STACK_SIZE,
@@ -46,7 +54,7 @@ pub fn start(
 
     let settings_tx = tx.clone();
     server.fn_handler::<anyhow::Error, _>("/api/settings", Method::Post, move |mut req| {
-        let Some(body) = read_body(&mut req)? else {
+        let Some(body) = read_body(&mut req, MAX_BODY)? else {
             return reply(req, 413, TEXT, b"body too large");
         };
         match serde_json::from_slice::<Settings>(&body) {
@@ -59,7 +67,7 @@ pub fn start(
     })?;
 
     server.fn_handler::<anyhow::Error, _>("/api/override", Method::Post, move |mut req| {
-        let Some(body) = read_body(&mut req)? else {
+        let Some(body) = read_body(&mut req, MAX_BODY)? else {
             return reply(req, 413, TEXT, b"body too large");
         };
         match serde_json::from_slice::<OverrideRequest>(&body) {
@@ -70,6 +78,8 @@ pub fn start(
             }
         }
     })?;
+
+    token_routes(&mut server, tokens)?;
 
     #[cfg(feature = "player")]
     replay_routes(&mut server)?;
@@ -103,7 +113,7 @@ fn replay_routes(server: &mut EspHttpServer<'static>) -> anyhow::Result<()> {
         let Some(replay) = crate::replay::handle() else {
             return reply(req, 404, TEXT, b"no replay");
         };
-        let Some(body) = read_body(&mut req)? else {
+        let Some(body) = read_body(&mut req, MAX_BODY)? else {
             return reply(req, 413, TEXT, b"body too large");
         };
         match serde_json::from_slice::<ReplayCommand>(&body) {
@@ -125,6 +135,35 @@ fn replay_routes(server: &mut EspHttpServer<'static>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `GET /api/token` gives the F1TV token's status; `POST /api/token` takes a
+/// pasted token (plain text; empty removes it) and answers with the new
+/// status. Neither ever returns the token, and the body is never logged.
+fn token_routes(
+    server: &mut EspHttpServer<'static>,
+    tokens: Arc<TokenKeeper>,
+) -> anyhow::Result<()> {
+    let get_tokens = Arc::clone(&tokens);
+    server.fn_handler::<anyhow::Error, _>("/api/token", Method::Get, move |req| {
+        let status = get_tokens.status(clock::unix_now());
+        reply(req, 200, JSON, &serde_json::to_vec(&status)?)
+    })?;
+
+    server.fn_handler::<anyhow::Error, _>("/api/token", Method::Post, move |mut req| {
+        let Some(body) = read_body(&mut req, MAX_TOKEN_BODY)? else {
+            return reply(req, 413, TEXT, b"too long for a token");
+        };
+        let pasted = String::from_utf8_lossy(&body);
+        let status = tokens.set(&pasted, clock::unix_now())?;
+        let code = if matches!(status, TokenStatus::Rejected { .. }) {
+            400
+        } else {
+            200
+        };
+        reply(req, code, JSON, &serde_json::to_vec(&status)?)
+    })?;
+    Ok(())
+}
+
 /// Sends a complete response with the given status, content type and body.
 fn reply(
     req: Request<&mut EspHttpConnection<'_>>,
@@ -138,7 +177,10 @@ fn reply(
 }
 
 /// The request body, or `None` if it is larger than `MAX_BODY`.
-fn read_body(req: &mut Request<&mut EspHttpConnection<'_>>) -> anyhow::Result<Option<Vec<u8>>> {
+fn read_body(
+    req: &mut Request<&mut EspHttpConnection<'_>>,
+    max: usize,
+) -> anyhow::Result<Option<Vec<u8>>> {
     let mut body = Vec::new();
     let mut chunk = [0u8; 256];
     loop {
@@ -146,7 +188,7 @@ fn read_body(req: &mut Request<&mut EspHttpConnection<'_>>) -> anyhow::Result<Op
         if n == 0 {
             return Ok(Some(body));
         }
-        if body.len() + n > MAX_BODY {
+        if body.len() + n > max {
             return Ok(None);
         }
         body.extend_from_slice(&chunk[..n]);

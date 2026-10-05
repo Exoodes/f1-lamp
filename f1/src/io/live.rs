@@ -25,7 +25,8 @@ use f1_core::{
 use serde::Deserialize;
 
 use crate::io::{
-    http,
+    clock, http,
+    token_store::TokenKeeper,
     ws::{WebSocket, WsEvent},
 };
 
@@ -77,17 +78,21 @@ impl LiveControl {
     }
 }
 
-pub fn spawn(tx: SyncSender<Input>, control: Arc<LiveControl>) -> anyhow::Result<JoinHandle<()>> {
+pub fn spawn(
+    tx: SyncSender<Input>,
+    control: Arc<LiveControl>,
+    tokens: Arc<TokenKeeper>,
+) -> anyhow::Result<JoinHandle<()>> {
     let handle = thread::Builder::new()
         .name("live".into())
         .stack_size(12 * 1024)
-        .spawn(move || run(&tx, &control))?;
+        .spawn(move || run(&tx, &control, &tokens))?;
     Ok(handle)
 }
 
 /// Never returns. Without the render loop the lamp is dead anyway, and the
 /// thread check in main restarts the chip.
-fn run(tx: &SyncSender<Input>, control: &LiveControl) {
+fn run(tx: &SyncSender<Input>, control: &LiveControl, tokens: &TokenKeeper) {
     let mut retry = FIRST_RETRY;
     loop {
         if !control.wanted() {
@@ -95,7 +100,7 @@ fn run(tx: &SyncSender<Input>, control: &LiveControl) {
             thread::sleep(IDLE);
             continue;
         }
-        match session(tx, control) {
+        match session(tx, control, tokens) {
             Ok(()) => retry = FIRST_RETRY,
             Err(e) => {
                 log::warn!("live: {e:#}; again in {} s", retry.as_secs());
@@ -113,7 +118,8 @@ struct Negotiation {
 }
 
 /// The load balancer's cookie, then a connection token.
-fn negotiate() -> anyhow::Result<(Option<String>, String)> {
+/// `auth` is the `Authorization` header value, with the F1TV token.
+fn negotiate(auth: Option<&str>) -> anyhow::Result<(Option<String>, String)> {
     // The OPTIONS answer is 405, but it sets the cookie that keeps the
     // WebSocket on the same server as the negotiate.
     let options = http::request(Method::Options, NEGOTIATE, &[]).context("negotiate (OPTIONS)")?;
@@ -130,6 +136,9 @@ fn negotiate() -> anyhow::Result<(Option<String>, String)> {
     let mut headers = vec![("Content-Length", "0")];
     if let Some(cookie) = &cookie {
         headers.push(("Cookie", cookie));
+    }
+    if let Some(auth) = auth {
+        headers.push(("Authorization", auth));
     }
     let reply = http::request(
         Method::Post,
@@ -150,9 +159,23 @@ fn negotiate() -> anyhow::Result<(Option<String>, String)> {
 }
 
 /// One connection, from negotiate until it drops or isn't wanted any more.
-fn session(tx: &SyncSender<Input>, control: &LiveControl) -> anyhow::Result<()> {
-    let (cookie, token) = negotiate()?;
-    let headers = cookie.map_or(String::new(), |c| format!("Cookie: {c}\r\n"));
+fn session(
+    tx: &SyncSender<Input>,
+    control: &LiveControl,
+    tokens: &TokenKeeper,
+) -> anyhow::Result<()> {
+    // Without a usable token, the public streams: the lamp works either way.
+    // `auth` holds the token: never log it or `headers`.
+    let auth = tokens.bearer_if_usable(clock::unix_now());
+    log::info!(
+        "live: connecting {} F1TV token",
+        if auth.is_some() { "with" } else { "without" }
+    );
+    let (cookie, token) = negotiate(auth.as_deref())?;
+    let mut headers = cookie.map_or(String::new(), |c| format!("Cookie: {c}\r\n"));
+    if let Some(auth) = &auth {
+        headers.push_str(&format!("Authorization: {auth}\r\n"));
+    }
 
     // No HTTPS request while the handshake and the large first answer need
     // the heap; released once subscribed.

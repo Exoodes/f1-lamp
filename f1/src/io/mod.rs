@@ -6,6 +6,7 @@ pub mod led;
 pub mod live;
 pub mod mdns;
 pub mod storage;
+pub mod token_store;
 pub mod wifi;
 #[cfg_attr(feature = "player", allow(dead_code))]
 pub mod ws;
