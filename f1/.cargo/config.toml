@@ -20,3 +20,8 @@ ESP_IDF_TOOLS_INSTALL_DIR = "global"
 # Uncomment this if you have moved the target dir by setting CARGO_TARGET_DIR or similar.
 # Required for now due to embuild limitations.
 #CARGO_WORKSPACE_DIR = { value = "", relative = true }
+
+[alias]
+# `cargo ota [--features ...]`: build the release firmware and send it to the
+# lamp over WiFi instead of USB; ota.ps1 is the runner that does the upload.
+ota = ["run", "--release", "--config", '''target.'cfg(target_os = "espidf")'.runner = "powershell -NoProfile -ExecutionPolicy Bypass -File ota.ps1"''']
