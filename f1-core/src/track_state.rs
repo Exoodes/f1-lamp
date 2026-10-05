@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use crate::{
     feed::{
-        DriverList, RcMessage, SessionInfo, SessionState, SessionStatus, TopThree, TrackCode,
-        TrackStatus,
+        DriverList, OvertakeSeries, PitLaneTimes, RcMessage, SessionInfo, SessionState,
+        SessionStatus, TimingStats, TopThree, TrackCode, TrackStatus,
     },
     input::{RaceEvent, TrackFlag},
 };
@@ -16,6 +16,9 @@ pub enum FeedMessage {
     RaceControl(RcMessage),
     DriverList(DriverList),
     TopThree(TopThree),
+    PitLane(PitLaneTimes),
+    TimingStats(TimingStats),
+    Overtakes(OvertakeSeries),
 }
 
 #[derive(Debug, Default)]
@@ -68,8 +71,12 @@ impl TrackState {
                     _ => {}
                 }
             }
-            FeedMessage::SessionInfo(_) | FeedMessage::DriverList(_) | FeedMessage::TopThree(_) => {
-            }
+            FeedMessage::SessionInfo(_)
+            | FeedMessage::DriverList(_)
+            | FeedMessage::TopThree(_)
+            | FeedMessage::PitLane(_)
+            | FeedMessage::TimingStats(_)
+            | FeedMessage::Overtakes(_) => {}
         }
 
         let new = self.derive();

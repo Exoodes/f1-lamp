@@ -155,6 +155,8 @@
     <label>Overtakes <input type="checkbox" id="fx_overtake"></label>
     <p class="hint">Pit stops and overtakes flash only for these drivers:</p>
     <label>Followed drivers <input type="text" id="followed_drivers" inputmode="numeric" placeholder="e.g. 1, 44, 63"></label>
+    <label>All drivers <input type="checkbox" id="follow_all"></label>
+    <p class="hint">For the showcase. In a race, every driver means hundreds of overtake flashes.</p>
   </section>
 
   <section class="settings">
@@ -254,6 +256,8 @@ function fillForm(s) {
   $("green_seconds").value = s.green_display_ms / 1000;
   $("tv_delay").value = s.tv_delay_ms / 1000;
   $("followed_drivers").value = s.followed_drivers.join(", ");
+  $("follow_all").checked = s.follow_all;
+  $("followed_drivers").disabled = s.follow_all;
   $("night_start").value = fromMinutes(s.night_start);
   $("night_end").value = fromMinutes(s.night_end);
   for (const name of EFFECTS) $("fx_" + name).checked = s.effects[name];
@@ -267,6 +271,7 @@ function readForm() {
     green_display_ms: Math.round(Number($("green_seconds").value) * 1000),
     tv_delay_ms: Math.round(Number($("tv_delay").value) * 1000),
     followed_drivers: parseDrivers($("followed_drivers").value),
+    follow_all: $("follow_all").checked,
     night_start: toMinutes($("night_start").value),
     night_end: toMinutes($("night_end").value),
     effects: {},
@@ -505,6 +510,10 @@ async function start() {
   for (const id of SLIDERS) {
     $(id).addEventListener("input", () => showPercent(id));
   }
+  // The list doesn't count while "All drivers" is ticked.
+  $("follow_all").addEventListener("change", () => {
+    $("followed_drivers").disabled = $("follow_all").checked;
+  });
   // `change` fires once per finished edit (slider let go, box ticked, text
   // field left), never while dragging, and bubbles up to its section.
   for (const section of document.querySelectorAll(".settings")) {

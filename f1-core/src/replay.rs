@@ -230,7 +230,7 @@ impl<'a> Replayer<'a> {
 
             if let Some(Ok((offset, msg))) = self.timeline.next() {
                 self.send_phase(self.phase_at(offset), &mut out);
-                if let Some(event) = self.tracker.apply(&msg) {
+                for event in self.tracker.apply(&msg) {
                     out.push(race(event, now));
                 }
                 for event in self.state.apply(msg) {

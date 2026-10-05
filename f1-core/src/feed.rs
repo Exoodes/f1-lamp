@@ -210,6 +210,77 @@ pub struct TopLine {
     pub team_colour: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct PitLaneTimes {
+    pub pit_times: Option<Numbered<u8, PitLaneTime>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct PitLaneTime {
+    pub duration: Option<String>,
+    pub lap: Option<String>,
+}
+
+impl PitLaneTime {
+    pub fn seconds(&self) -> Option<f32> {
+        self.duration.as_deref()?.parse().ok()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct TimingStats {
+    pub lines: Option<Numbered<u8, StatsLine>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct StatsLine {
+    pub personal_best_lap_time: Option<BestLap>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct BestLap {
+    pub value: Option<String>,
+    pub position: Option<u32>,
+    pub lap: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct OvertakeSeries {
+    pub overtakes: Option<Numbered<u8, Overtakes>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum Overtakes {
+    List(Vec<OvertakeEntry>),
+    Map(Numbered<u32, OvertakeEntry>),
+}
+
+impl Overtakes {
+    pub fn len(&self) -> usize {
+        match self {
+            Overtakes::List(v) => v.len(),
+            Overtakes::Map(m) => m.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct OvertakeEntry {
+    pub timestamp: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,5 +526,46 @@ mod tests {
     #[test]
     fn numbered_map_rejects_something_that_is_not_an_object() {
         assert!(serde_json::from_str::<DriverList>("[1,2]").is_err());
+    }
+
+    #[test]
+    fn pit_lane_time_reads_driver_and_seconds_and_skips_deleted() {
+        let p: PitLaneTimes = serde_json::from_str(
+            r#"{"PitTimes":{"27":{"RacingNumber":"27","Duration":"24.2","Lap":"27"},"_deleted":["55"]}}"#,
+        )
+        .unwrap();
+        let times = p.pit_times.unwrap();
+        assert_eq!(times.len(), 1);
+        assert_eq!(times[&27].seconds(), Some(24.2));
+    }
+
+    #[test]
+    fn timing_stats_reads_personal_best_position_and_lap() {
+        let t: TimingStats = serde_json::from_str(
+            r#"{"Lines":{"12":{"PersonalBestLapTime":{"Lap":13,"Position":1,"Value":"1:25.469"}},"3":{"PersonalBestLapTime":{"Position":2}}}}"#,
+        )
+        .unwrap();
+        let lines = t.lines.unwrap();
+        let best = lines[&12].personal_best_lap_time.as_ref().unwrap();
+        assert_eq!((best.position, best.lap), (Some(1), Some(13)));
+        assert_eq!(best.value.as_deref(), Some("1:25.469"));
+        assert_eq!(
+            lines[&3].personal_best_lap_time.as_ref().unwrap().value,
+            None
+        );
+    }
+
+    #[test]
+    fn overtake_series_reads_both_shapes() {
+        let first: OvertakeSeries = serde_json::from_str(
+            r#"{"Overtakes":{"81":[{"Timestamp":"2026-09-06T13:03:40.488Z","count":1}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(first.overtakes.unwrap()[&81].len(), 1);
+        let update: OvertakeSeries = serde_json::from_str(
+            r#"{"Overtakes":{"44":{"5":{"Timestamp":"2026-09-06T13:45:52.666Z","count":3}}}}"#,
+        )
+        .unwrap();
+        assert_eq!(update.overtakes.unwrap()[&44].len(), 1);
     }
 }

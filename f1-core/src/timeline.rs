@@ -8,7 +8,10 @@
 use std::{collections::VecDeque, fmt, time::Duration};
 
 use crate::{
-    feed::{DriverList, RaceControl, SessionInfo, SessionStatus, TopThree, TrackStatus},
+    feed::{
+        DriverList, OvertakeSeries, PitLaneTimes, RaceControl, SessionInfo, SessionStatus,
+        TimingStats, TopThree, TrackStatus,
+    },
     stream::{parse_line, ParseLineError},
     track_state::FeedMessage,
 };
@@ -22,16 +25,25 @@ pub enum Stream {
     RaceControl,
     DriverList,
     TopThree,
+    /// Public: a car's time in the pit lane, sent as it leaves.
+    PitLane,
+    /// Public: personal bests; the fastest lap has position 1.
+    TimingStats,
+    /// Needs an F1TV token live: one entry per overtake.
+    Overtakes,
 }
 
 impl Stream {
-    pub const ALL: [Stream; 6] = [
+    pub const ALL: [Stream; 9] = [
         Stream::SessionInfo,
         Stream::TrackStatus,
         Stream::SessionStatus,
         Stream::RaceControl,
         Stream::DriverList,
         Stream::TopThree,
+        Stream::PitLane,
+        Stream::TimingStats,
+        Stream::Overtakes,
     ];
 
     /// The name F1 uses, in the archive file names and the live feed.
@@ -43,6 +55,9 @@ impl Stream {
             Stream::RaceControl => "RaceControlMessages",
             Stream::DriverList => "DriverList",
             Stream::TopThree => "TopThree",
+            Stream::PitLane => "PitLaneTimeCollection",
+            Stream::TimingStats => "TimingStats",
+            Stream::Overtakes => "OvertakeSeries",
         }
     }
 
@@ -58,6 +73,12 @@ impl Stream {
         match self {
             Stream::TopThree => json.contains("\"RacingNumber\""),
             Stream::DriverList => json.contains("\"TeamColour\""),
+            // Most pit-lane lines only delete finished entries.
+            Stream::PitLane => json.contains("\"Duration\""),
+            // Most lines are sector times and speeds; a new best lap has a value.
+            Stream::TimingStats => {
+                json.contains("\"PersonalBestLapTime\":{") && json.contains("\"Value\":\"")
+            }
             _ => true,
         }
     }
@@ -88,6 +109,15 @@ impl Stream {
             Stream::TopThree => vec![FeedMessage::TopThree(serde_json::from_str::<TopThree>(
                 json,
             )?)],
+            Stream::PitLane => vec![FeedMessage::PitLane(serde_json::from_str::<PitLaneTimes>(
+                json,
+            )?)],
+            Stream::TimingStats => vec![FeedMessage::TimingStats(serde_json::from_str::<
+                TimingStats,
+            >(json)?)],
+            Stream::Overtakes => vec![FeedMessage::Overtakes(serde_json::from_str::<
+                OvertakeSeries,
+            >(json)?)],
         })
     }
 }

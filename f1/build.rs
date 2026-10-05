@@ -1,15 +1,18 @@
 use std::path::{Path, PathBuf};
 
 /// The streams a replay embeds, with the variable that hands each file's path
-/// to `src/replay.rs`. Required ones stop the build when missing; without the
-/// optional ones the replay only has no winner.
-const REPLAY_FILES: [(&str, &str, bool); 6] = [
+/// to `src/replay.rs`. Required ones stop the build when missing; without an
+/// optional one, its events (winner, pit stops, ...) just don't show.
+const REPLAY_FILES: [(&str, &str, bool); 9] = [
     ("SessionInfo", "REPLAY_SESSION_INFO", false),
     ("TrackStatus", "REPLAY_TRACK_STATUS", true),
     ("SessionStatus", "REPLAY_SESSION_STATUS", true),
     ("RaceControlMessages", "REPLAY_RACE_CONTROL", true),
     ("DriverList", "REPLAY_DRIVER_LIST", false),
     ("TopThree", "REPLAY_TOP_THREE", false),
+    ("PitLaneTimeCollection", "REPLAY_PIT_LANE", false),
+    ("TimingStats", "REPLAY_TIMING_STATS", false),
+    ("OvertakeSeries", "REPLAY_OVERTAKES", false),
 ];
 
 fn main() {
@@ -90,6 +93,14 @@ fn replay_dir(replay: Option<&toml::Table>) {
         panic!("replay: {} is not a folder", slashes(&dir));
     }
     println!("cargo:rustc-env=REPLAY_DIR={}", slashes(&dir));
+    // Watch the folders too: a file that appears later (a stream downloaded
+    // or written afterwards) must make this run again.
+    println!("cargo:rerun-if-changed={}", slashes(&dir));
+    for sub in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        if sub.path().is_dir() {
+            println!("cargo:rerun-if-changed={}", slashes(&sub.path()));
+        }
+    }
 
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     for (stream, var, required) in REPLAY_FILES {
@@ -102,7 +113,7 @@ fn replay_dir(replay: Option<&toml::Table>) {
             None if required => panic!("replay: no {name} in {} or its subfolders", slashes(&dir)),
             None => {
                 println!(
-                    "cargo:warning=replay: no {name} in {}, so no winner",
+                    "cargo:warning=replay: no {name} in {}; its events won't show",
                     slashes(&dir)
                 );
                 // An empty stream: the replay plays without it.

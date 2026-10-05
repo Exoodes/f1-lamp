@@ -191,7 +191,7 @@ fn session(
             CONNECT_TIMEOUT.as_secs()
         ),
     }
-    for frame in LiveSession::opening_frames() {
+    for frame in LiveSession::opening_frames(auth.is_some()) {
         ws.send_text(&frame, SEND_TIMEOUT)?;
     }
     log::info!("live: connected, subscribing");

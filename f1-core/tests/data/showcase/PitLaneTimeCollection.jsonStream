@@ -1,0 +1,13 @@
+﻿00:00:00.000{"PitTimes":{}}
+00:01:01.000{"PitTimes":{"81":{"RacingNumber":"81","Duration":"22.0","Lap":"6"}}}
+00:01:02.200{"PitTimes":{"12":{"RacingNumber":"12","Duration":"22.3","Lap":"6"}}}
+00:01:03.400{"PitTimes":{"16":{"RacingNumber":"16","Duration":"22.6","Lap":"6"}}}
+00:01:04.600{"PitTimes":{"3":{"RacingNumber":"3","Duration":"22.9","Lap":"6"}}}
+00:01:05.800{"PitTimes":{"14":{"RacingNumber":"14","Duration":"23.2","Lap":"6"}}}
+00:01:07.000{"PitTimes":{"10":{"RacingNumber":"10","Duration":"23.5","Lap":"6"}}}
+00:01:08.200{"PitTimes":{"23":{"RacingNumber":"23","Duration":"23.8","Lap":"6"}}}
+00:01:09.400{"PitTimes":{"22":{"RacingNumber":"22","Duration":"24.1","Lap":"6"}}}
+00:01:10.600{"PitTimes":{"5":{"RacingNumber":"5","Duration":"24.4","Lap":"6"}}}
+00:01:11.800{"PitTimes":{"31":{"RacingNumber":"31","Duration":"24.7","Lap":"6"}}}
+00:01:13.000{"PitTimes":{"77":{"RacingNumber":"77","Duration":"25.0","Lap":"6"}}}
+00:01:30.000{"PitTimes":{"_deleted":["81","12","16","3","14","10","23","22","5","31","77"]}}

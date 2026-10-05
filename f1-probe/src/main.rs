@@ -115,10 +115,10 @@ fn main() -> anyhow::Result<()> {
     println!("saving to {}", capture.dir.display());
 
     // The same frames the lamp sends.
-    for frame in LiveSession::opening_frames() {
+    for frame in LiveSession::opening_frames(auth.is_some()) {
         send(&mut ws, &frame)?;
     }
-    println!("sent handshake and two Subscribe calls");
+    println!("sent the handshake and the Subscribe calls");
     if extra {
         send(&mut ws, &signalr::subscribe(3, &EXTRA_STREAMS))?;
         println!("sent Subscribe 3: {}", EXTRA_STREAMS.join(", "));
@@ -348,6 +348,45 @@ fn describe(msg: &FeedMessage) -> String {
                 Some(n) => format!("leader #{n}"),
                 None => "update".to_owned(),
             }
+        }
+        FeedMessage::PitLane(p) => {
+            let leaving: Vec<String> = p
+                .pit_times
+                .iter()
+                .flat_map(|t| t.iter())
+                .filter_map(|(d, t)| Some(format!("#{d} {}s", t.duration.as_deref()?)))
+                .collect();
+            if leaving.is_empty() {
+                "update".to_owned()
+            } else {
+                format!("leaving the pit lane: {}", leaving.join(", "))
+            }
+        }
+        FeedMessage::TimingStats(t) => {
+            let fastest: Vec<String> = t
+                .lines
+                .iter()
+                .flat_map(|l| l.iter())
+                .filter_map(|(d, l)| {
+                    let best = l.personal_best_lap_time.as_ref()?;
+                    let value = best.value.as_deref().filter(|v| !v.is_empty())?;
+                    (best.position == Some(1)).then(|| format!("#{d} {value}"))
+                })
+                .collect();
+            if fastest.is_empty() {
+                "update".to_owned()
+            } else {
+                format!("fastest lap: {}", fastest.join(", "))
+            }
+        }
+        FeedMessage::Overtakes(o) => {
+            let drivers: Vec<String> = o
+                .overtakes
+                .iter()
+                .flat_map(|m| m.iter())
+                .map(|(d, e)| format!("#{d} x{}", e.len()))
+                .collect();
+            format!("overtakes: {}", drivers.join(", "))
         }
     }
 }

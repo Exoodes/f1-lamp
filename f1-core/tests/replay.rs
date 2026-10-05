@@ -9,7 +9,7 @@ use f1_core::{
     timeline::Stream,
 };
 
-const FILES: [(Stream, &str); 6] = [
+const FILES: [(Stream, &str); 9] = [
     (
         Stream::SessionInfo,
         include_str!("data/2026-italy/race/SessionInfo.jsonStream"),
@@ -33,6 +33,18 @@ const FILES: [(Stream, &str); 6] = [
     (
         Stream::TopThree,
         include_str!("data/2026-italy/race/TopThree.jsonStream"),
+    ),
+    (
+        Stream::PitLane,
+        include_str!("data/2026-italy/race/PitLaneTimeCollection.jsonStream"),
+    ),
+    (
+        Stream::TimingStats,
+        include_str!("data/2026-italy/race/TimingStats.jsonStream"),
+    ),
+    (
+        Stream::Overtakes,
+        include_str!("data/2026-italy/race/OvertakeSeries.jsonStream"),
     ),
 ];
 
@@ -216,4 +228,55 @@ fn jump_past_the_finish_doesnt_show_the_winner_again() {
             ..
         }
     )));
+}
+
+fn driver_events(inputs: &[Input]) -> Vec<RaceEvent> {
+    inputs
+        .iter()
+        .filter_map(|i| match i {
+            Input::Race { event, .. } => Some(*event),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn race_has_ten_fastest_laps_nine_pit_stops_and_327_overtakes() {
+    let (inputs, _) = play_to_end(60);
+    let events = driver_events(&inputs);
+    let count = |f: fn(&RaceEvent) -> bool| events.iter().filter(|e| f(e)).count();
+    assert_eq!(count(|e| matches!(e, RaceEvent::FastestLap { .. })), 10);
+    assert_eq!(count(|e| matches!(e, RaceEvent::PitStop { .. })), 9);
+    assert_eq!(count(|e| matches!(e, RaceEvent::Overtake { .. })), 327);
+}
+
+#[test]
+fn first_pit_stop_is_ocon_in_team_colour_and_red_flag_waits_are_not_pit_stops() {
+    let (inputs, _) = play_to_end(60);
+    let first = driver_events(&inputs)
+        .into_iter()
+        .find(|e| matches!(e, RaceEvent::PitStop { .. }));
+    // #30 on lap 12. The 21 cars waiting out the red flag in the pit lane
+    // (about 1845 s each) come earlier and are skipped.
+    let Some(RaceEvent::PitStop { driver, team_color }) = first else {
+        panic!("no pit stop")
+    };
+    assert_eq!(driver, 30);
+    assert_ne!(
+        team_color,
+        "#ffffff".parse().unwrap(),
+        "colour from DriverList"
+    );
+}
+
+#[test]
+fn last_fastest_lap_of_the_race_is_antonellis() {
+    let (inputs, _) = play_to_end(60);
+    let last = driver_events(&inputs)
+        .into_iter()
+        .rfind(|e| matches!(e, RaceEvent::FastestLap { .. }));
+    assert!(
+        matches!(last, Some(RaceEvent::FastestLap { driver: 12, .. })),
+        "{last:?}"
+    );
 }

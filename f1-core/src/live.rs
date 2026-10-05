@@ -32,9 +32,25 @@ const INITIAL_ORDER: [Stream; 5] = [
 /// Also subscribed to, so a quiet session still shows the connection is alive.
 const HEARTBEAT: &str = "Heartbeat";
 
-/// Invocation ids of the two `Subscribe` calls.
+/// Invocation ids of the `Subscribe` calls. Only the first one's answer
+/// is used; the others answer with history.
 const STATE_CALL: u32 = 1;
 const RACE_CONTROL_CALL: u32 = 2;
+const DRIVER_EVENTS_CALL: u32 = 3;
+const ACCOUNT_CALL: u32 = 4;
+
+/// The streams whose current state is applied on connecting.
+const STATE_STREAMS: [Stream; 5] = [
+    Stream::SessionInfo,
+    Stream::TrackStatus,
+    Stream::SessionStatus,
+    Stream::DriverList,
+    Stream::TopThree,
+];
+/// Public streams with driver events: pit stops and fastest laps.
+const DRIVER_EVENT_STREAMS: [Stream; 2] = [Stream::PitLane, Stream::TimingStats];
+/// Streams that only answer with an F1TV token: overtakes.
+const ACCOUNT_STREAMS: [Stream; 1] = [Stream::Overtakes];
 
 /// What one batch of received bytes produced.
 #[derive(Debug, Default, PartialEq)]
@@ -70,24 +86,29 @@ impl LiveSession {
     }
 
     /// What to send once the WebSocket is open: the handshake, then the
-    /// subscription.
+    /// subscriptions. `with_token`: the connection carries an F1TV token, so
+    /// the account-only streams are asked for too.
     ///
-    /// Race control gets its own `Subscribe`: its answer is the whole
-    /// message history (44 KB after a race), which we don't use. As a
-    /// separate frame it is larger than `max_frame` and the splitter skips
-    /// it without buffering, so the device never needs one block that big.
-    pub fn opening_frames() -> [String; 3] {
-        let mut streams: Vec<&str> = Stream::ALL
-            .iter()
-            .filter(|s| **s != Stream::RaceControl)
-            .map(|s| s.name())
-            .collect();
-        streams.push(HEARTBEAT);
-        [
+    /// Only the first `Subscribe` answer is used. Every stream whose answer
+    /// is just history gets a call of its own: race control's is 44 KB after
+    /// a race, overtakes' 30 KB. As separate frames, those larger than
+    /// `max_frame` are skipped by the splitter without buffering, so the
+    /// device never needs one block that big, and the first answer stays
+    /// small.
+    pub fn opening_frames(with_token: bool) -> Vec<String> {
+        let names = |streams: &[Stream]| streams.iter().map(|s| s.name()).collect::<Vec<_>>();
+        let mut state = names(&STATE_STREAMS);
+        state.push(HEARTBEAT);
+        let mut frames = vec![
             signalr::HANDSHAKE.to_owned(),
-            signalr::subscribe(STATE_CALL, &streams),
+            signalr::subscribe(STATE_CALL, &state),
             signalr::subscribe(RACE_CONTROL_CALL, &[Stream::RaceControl.name()]),
-        ]
+            signalr::subscribe(DRIVER_EVENTS_CALL, &names(&DRIVER_EVENT_STREAMS)),
+        ];
+        if with_token {
+            frames.push(signalr::subscribe(ACCOUNT_CALL, &names(&ACCOUNT_STREAMS)));
+        }
+        frames
     }
 
     /// A WebSocket frame of `len` bytes is starting: room for it in one go.
@@ -239,8 +260,17 @@ mod tests {
     }
 
     #[test]
-    fn opening_frames_are_handshake_then_two_subscribes() {
-        let [handshake, state, race_control] = LiveSession::opening_frames();
+    fn opening_frames_are_handshake_then_three_subscribes_without_token() {
+        let frames = LiveSession::opening_frames(false);
+        let [handshake, state, race_control, driver_events] = &frames[..] else {
+            panic!("{} frames", frames.len())
+        };
+        assert!(
+            driver_events.contains("TimingStats")
+                && driver_events.contains("PitLaneTimeCollection")
+        );
+        assert!(!frames.iter().any(|f| f.contains("OvertakeSeries")));
+        assert!(!state.contains("TimingStats"));
         assert_eq!(handshake, signalr::HANDSHAKE);
         assert!(state.contains("\"TrackStatus\"") && state.contains("\"Heartbeat\""));
         assert!(!state.contains("RaceControlMessages"));
@@ -424,5 +454,46 @@ mod tests {
         );
         assert!(!r.subscribed);
         assert_eq!(r.problems.len(), 1);
+    }
+
+    #[test]
+    fn with_a_token_overtakes_get_a_fourth_subscribe() {
+        let frames = LiveSession::opening_frames(true);
+        assert_eq!(frames.len(), 5);
+        assert!(frames[4].contains("[[\"OvertakeSeries\"]]"));
+        assert!(frames[4].contains("\"invocationId\":\"4\""));
+    }
+
+    #[test]
+    fn pit_stop_update_after_joining_flashes_in_team_colour() {
+        let (mut live, _) = racing();
+        let r = live.receive(
+            feed(
+                "PitLaneTimeCollection",
+                r#"{"PitTimes":{"81":{"RacingNumber":"81","Duration":"23.9"}}}"#,
+            )
+            .as_bytes(),
+        );
+        assert_eq!(
+            r.events,
+            [RaceEvent::PitStop {
+                driver: 81,
+                team_color: "#f47600".parse().unwrap()
+            }]
+        );
+    }
+
+    #[test]
+    fn driver_event_history_answers_are_ignored() {
+        let (mut live, _) = racing();
+        for id in ["3", "4"] {
+            let r = live.receive(
+                format!(
+                    r#"{{"type":3,"invocationId":"{id}","result":{{"PitLaneTimeCollection":{{"PitTimes":{{"81":{{"Duration":"23.9"}}}}}}}}}}{RS}"#
+                )
+                .as_bytes(),
+            );
+            assert!(r.events.is_empty() && !r.subscribed, "call {id}");
+        }
     }
 }

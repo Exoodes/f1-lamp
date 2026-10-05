@@ -21,6 +21,9 @@ pub struct Settings {
     /// old single `favourite_driver`, which saved settings may still contain;
     /// it's ignored, so the list starts empty.
     pub followed_drivers: DriverSet,
+    /// Pit stops and overtakes of every driver, whatever the list says: for
+    /// the showcase, or to see everything (a race has hundreds of overtakes).
+    pub follow_all: bool,
     pub winner_display_ms: u32,
     /// How long a green flag shows before the lamp's own colour returns;
     /// 0 keeps it green. Green is news only for a moment, and a lamp that
@@ -68,14 +71,16 @@ impl Settings {
             RaceEvent::StartLights => e.start_lights,
             RaceEvent::ChequeredFlag => e.chequered_flag,
             RaceEvent::FastestLap { .. } => e.fastest_lap,
-            RaceEvent::PitStop { driver, .. } => {
-                e.pit_stop && self.followed_drivers.contains(driver)
-            }
-            RaceEvent::Overtake { driver, .. } => {
-                e.overtake && self.followed_drivers.contains(driver)
-            }
+            RaceEvent::PitStop { driver, .. } => e.pit_stop && self.follows(driver),
+            RaceEvent::Overtake { driver, .. } => e.overtake && self.follows(driver),
             RaceEvent::Winner { .. } => e.winner,
         }
+    }
+}
+
+impl Settings {
+    fn follows(&self, driver: u8) -> bool {
+        self.follow_all || self.followed_drivers.contains(driver)
     }
 }
 
@@ -90,6 +95,7 @@ impl Default for Settings {
             night_brightness: 0.3,
             tv_delay_ms: 0,
             followed_drivers: DriverSet::new(),
+            follow_all: false,
             winner_display_ms: 60000,
             green_display_ms: 10_000,
             effects: EffectToggles::default(),
@@ -118,6 +124,7 @@ mod tests {
             night_brightness: 0.1,
             tv_delay_ms: 1500,
             followed_drivers: DriverSet::try_from(vec![1, 44]).unwrap(),
+            follow_all: true,
             winner_display_ms: 90_000,
             green_display_ms: 5_000,
             effects: EffectToggles {
@@ -212,6 +219,7 @@ mod tests {
             night_brightness: 1.0 / 7.0,
             tv_delay_ms: u32::MAX,
             followed_drivers: DriverSet::try_from((1..=MAX_DRIVER).collect::<Vec<_>>()).unwrap(),
+            follow_all: false,
             winner_display_ms: u32::MAX,
             green_display_ms: u32::MAX,
             // "false" is one character longer than "true".
@@ -403,5 +411,41 @@ mod tests {
     fn settings_saved_before_green_display_get_the_default() {
         let settings: Settings = serde_json::from_str(r#"{"tv_delay_ms":500}"#).unwrap();
         assert_eq!(settings.green_display_ms, 10_000);
+    }
+
+    #[test]
+    fn follow_all_shows_pit_stops_and_overtakes_of_everyone() {
+        let s = Settings {
+            follow_all: true,
+            ..Settings::default()
+        };
+        assert!(s.shows(RaceEvent::PitStop {
+            driver: 77,
+            team_color: LAMP
+        }));
+        assert!(s.shows(RaceEvent::Overtake {
+            driver: 77,
+            team_color: LAMP
+        }));
+    }
+
+    #[test]
+    fn follow_all_still_respects_the_switches() {
+        let mut s = Settings {
+            follow_all: true,
+            ..Settings::default()
+        };
+        s.effects.pit_stop = false;
+        assert!(!s.shows(RaceEvent::PitStop {
+            driver: 77,
+            team_color: LAMP
+        }));
+    }
+
+    #[test]
+    fn follow_all_is_off_by_default_and_for_old_saved_settings() {
+        assert!(!Settings::default().follow_all);
+        let old: Settings = serde_json::from_str(r#"{"followed_drivers":[44]}"#).unwrap();
+        assert!(!old.follow_all);
     }
 }
