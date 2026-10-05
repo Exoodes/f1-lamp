@@ -132,6 +132,7 @@ impl Controller {
 
     pub fn tick(&mut self, now: Instant) {
         self.release_due(now);
+        self.expire_green(now);
         self.overlays.tick(now);
         if self.layers.winner.is_some_and(|w| now >= w.until) {
             self.layers.winner = None;
@@ -156,6 +157,25 @@ impl Controller {
         let brightness = post::brightness(&layers.settings, layers.minute_of_day, layers.phase);
         post::post_process(frame, brightness);
         layer
+    }
+
+    /// After `green_display_ms`, a green flag gives way to the lamp's own
+    /// colour; every other flag stays as long as it lasts. The next flag,
+    /// even another green, shows again.
+    fn expire_green(&mut self, now: Instant) {
+        let show_for = self.layers.settings.green_display_ms;
+        if show_for == 0 {
+            return;
+        }
+        let shown_until =
+            |f: &Stamped<TrackFlag>| f.since + Duration::from_millis(u64::from(show_for));
+        if self
+            .layers
+            .flag
+            .is_some_and(|f| f.value == TrackFlag::Green && now >= shown_until(&f))
+        {
+            self.layers.flag = None;
+        }
     }
 
     fn tv_delay(&self) -> Duration {
@@ -482,7 +502,8 @@ mod tests {
     fn winner_shows_above_the_last_flag_then_the_flag_returns() {
         let t0 = Instant::now();
         let mut c = live(t0);
-        c.apply(flag(TrackFlag::Green, t0), t0);
+        // Yellow: a green would have given way to the lamp by then.
+        c.apply(flag(TrackFlag::Yellow, t0), t0);
         c.apply(winner(t0), t0);
         assert_eq!(winner_at(&mut c, t0), ("winner", winner_effect(TEAM)));
         let display = default_winner_display();
@@ -934,5 +955,85 @@ mod tests {
         c.apply(Input::Settings(settings), t0);
         c.apply(start(t0), t0);
         assert_ne!(winner_at(&mut c, t0 + ms(4_000)).0, "overlay");
+    }
+
+    fn with_green_display(ms_display: u32) -> Input {
+        Input::Settings(Settings {
+            green_display_ms: ms_display,
+            ..Settings::default()
+        })
+    }
+
+    #[test]
+    fn green_gives_way_to_the_lamp_after_its_display_time() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(flag(TrackFlag::Green, t0), t0);
+        assert_eq!(
+            winner_at(&mut c, t0 + ms(9_999)),
+            ("live track", flag_effect(TrackFlag::Green))
+        );
+        assert_eq!(winner_at(&mut c, t0 + ms(10_000)), ("lamp", default_lamp()));
+    }
+
+    #[test]
+    fn other_flags_stay_as_long_as_they_last() {
+        let t0 = Instant::now();
+        for f in [
+            TrackFlag::Yellow,
+            TrackFlag::DoubleYellow,
+            TrackFlag::SafetyCar,
+            TrackFlag::VirtualSafetyCar,
+            TrackFlag::Red,
+        ] {
+            let mut c = live(t0);
+            c.apply(flag(f, t0), t0);
+            assert_eq!(
+                winner_at(&mut c, t0 + ms(600_000)),
+                ("live track", flag_effect(f)),
+                "{f:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn green_after_a_yellow_shows_again_for_its_display_time() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(flag(TrackFlag::Green, t0), t0);
+        winner_at(&mut c, t0 + ms(15_000));
+        c.apply(flag(TrackFlag::Yellow, t0 + ms(20_000)), t0 + ms(20_000));
+        c.apply(flag(TrackFlag::Green, t0 + ms(30_000)), t0 + ms(30_000));
+        assert_eq!(winner_at(&mut c, t0 + ms(35_000)).0, "live track");
+        assert_eq!(winner_at(&mut c, t0 + ms(40_000)).0, "lamp");
+    }
+
+    #[test]
+    fn zero_green_display_keeps_green() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(with_green_display(0), t0);
+        c.apply(flag(TrackFlag::Green, t0), t0);
+        assert_eq!(winner_at(&mut c, t0 + ms(3_600_000)).0, "live track");
+    }
+
+    #[test]
+    fn green_display_counts_from_when_the_tv_shows_it() {
+        let t0 = Instant::now();
+        let mut c = live_delayed(t0);
+        c.apply(flag(TrackFlag::Green, t0), t0);
+        // Released at +10 s by the TV delay (the lamp ticks every 20 ms),
+        // so shown until +20 s.
+        winner_at(&mut c, t0 + ms(10_000));
+        assert_eq!(winner_at(&mut c, t0 + ms(19_999)).0, "live track");
+        assert_eq!(winner_at(&mut c, t0 + ms(20_000)).0, "lamp");
+    }
+
+    #[test]
+    fn forced_green_override_stays_until_released() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(Input::Override(Some(flag_effect(TrackFlag::Green))), t0);
+        assert_eq!(winner_at(&mut c, t0 + ms(60_000)).0, "override");
     }
 }

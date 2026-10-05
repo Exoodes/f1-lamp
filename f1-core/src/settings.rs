@@ -22,6 +22,10 @@ pub struct Settings {
     /// it's ignored, so the list starts empty.
     pub followed_drivers: DriverSet,
     pub winner_display_ms: u32,
+    /// How long a green flag shows before the lamp's own colour returns;
+    /// 0 keeps it green. Green is news only for a moment, and a lamp that
+    /// stays green all race hides the flags that matter.
+    pub green_display_ms: u32,
     /// Which race events the lamp shows.
     pub effects: EffectToggles,
 }
@@ -87,6 +91,7 @@ impl Default for Settings {
             tv_delay_ms: 0,
             followed_drivers: DriverSet::new(),
             winner_display_ms: 60000,
+            green_display_ms: 10_000,
             effects: EffectToggles::default(),
         }
     }
@@ -114,6 +119,7 @@ mod tests {
             tv_delay_ms: 1500,
             followed_drivers: DriverSet::try_from(vec![1, 44]).unwrap(),
             winner_display_ms: 90_000,
+            green_display_ms: 5_000,
             effects: EffectToggles {
                 fastest_lap: false,
                 overtake: false,
@@ -207,6 +213,7 @@ mod tests {
             tv_delay_ms: u32::MAX,
             followed_drivers: DriverSet::try_from((1..=MAX_DRIVER).collect::<Vec<_>>()).unwrap(),
             winner_display_ms: u32::MAX,
+            green_display_ms: u32::MAX,
             // "false" is one character longer than "true".
             effects: EffectToggles {
                 start_lights: false,
@@ -390,5 +397,11 @@ mod tests {
             winner: false,
         };
         assert!(with_effects(all_off).shows(RaceEvent::TrackFlag(TrackFlag::Red)));
+    }
+
+    #[test]
+    fn settings_saved_before_green_display_get_the_default() {
+        let settings: Settings = serde_json::from_str(r#"{"tv_delay_ms":500}"#).unwrap();
+        assert_eq!(settings.green_display_ms, 10_000);
     }
 }

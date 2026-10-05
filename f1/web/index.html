@@ -139,6 +139,8 @@
       <span class="slider"><input type="range" id="global_brightness" min="0" max="100"><output id="global_brightness_out"></output></span>
     </label>
     <label>Winner shown (min) <input type="number" id="winner_minutes" min="0" step="0.5"></label>
+    <label>Green shown (s) <input type="number" id="green_seconds" min="0" step="1"></label>
+    <p class="hint">After a green flag the lamp returns to its own colour; 0 keeps it green.</p>
     <label>TV delay (s) <input type="number" id="tv_delay" min="0" step="0.5"></label>
   </section>
 
@@ -249,6 +251,7 @@ function fillForm(s) {
     showPercent(id);
   }
   $("winner_minutes").value = s.winner_display_ms / 60000;
+  $("green_seconds").value = s.green_display_ms / 1000;
   $("tv_delay").value = s.tv_delay_ms / 1000;
   $("followed_drivers").value = s.followed_drivers.join(", ");
   $("night_start").value = fromMinutes(s.night_start);
@@ -261,6 +264,7 @@ function readForm() {
   const s = {
     lamp_color: $("lamp_color").value,
     winner_display_ms: Math.round(Number($("winner_minutes").value) * 60000),
+    green_display_ms: Math.round(Number($("green_seconds").value) * 1000),
     tv_delay_ms: Math.round(Number($("tv_delay").value) * 1000),
     followed_drivers: parseDrivers($("followed_drivers").value),
     night_start: toMinutes($("night_start").value),
