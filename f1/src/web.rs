@@ -15,7 +15,7 @@ use f1_core::{
     token::TokenStatus,
 };
 
-use crate::io::{clock, token_store::TokenKeeper, weblog};
+use crate::io::{clock, ota, token_store::TokenKeeper, weblog};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const STACK_SIZE: usize = 10 * 1024;
@@ -80,6 +80,32 @@ pub fn start(
     })?;
 
     token_routes(&mut server, tokens)?;
+
+    // In every build, replay and showcase included: whatever runs must be
+    // able to receive the next firmware, or the way back needs the cable.
+    server.fn_handler::<anyhow::Error, _>("/api/ota", Method::Post, |mut req| {
+        let Some(len) = req
+            .header("Content-Length")
+            .and_then(|l| l.parse::<usize>().ok())
+        else {
+            return reply(req, 411, TEXT, b"Content-Length needed");
+        };
+        match ota::receive(&mut req, len) {
+            Ok(()) => {
+                reply(req, 200, TEXT, b"updated, restarting")?;
+                // A moment for the answer to leave before the chip restarts.
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    crate::restart();
+                });
+                Ok(())
+            }
+            Err(e) => {
+                log::warn!("ota: {e:#}");
+                reply(req, 400, TEXT, format!("update failed: {e:#}").as_bytes())
+            }
+        }
+    })?;
 
     // `?after=<n>`: the lines after number n; without it, only where to start.
     // Logs nothing itself, or every poll would add a line.

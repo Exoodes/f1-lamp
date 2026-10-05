@@ -26,6 +26,9 @@ pub struct LogPage {
     pub next: u64,
     /// Lines that fell out of the buffer before the page asked.
     pub missed: u64,
+    /// The page's number is from before a restart: these are all the lines
+    /// since the lamp started, as far as the buffer still has them.
+    pub restarted: bool,
 }
 
 impl LogBuffer {
@@ -73,15 +76,17 @@ impl LogBuffer {
                 lines: Vec::new(),
                 next,
                 missed: 0,
+                restarted: false,
             };
         };
         // A number from before a restart is larger than anything here:
-        // start over from now.
+        // everything this run has logged is new to the page.
         if after > next {
             return LogPage {
-                lines: Vec::new(),
+                lines: self.lines.iter().cloned().collect(),
                 next,
-                missed: 0,
+                missed: self.first,
+                restarted: true,
             };
         }
         let missed = self.first.saturating_sub(after);
@@ -90,6 +95,7 @@ impl LogBuffer {
             lines: self.lines.iter().skip(skip).cloned().collect(),
             next,
             missed,
+            restarted: false,
         }
     }
 }
@@ -114,7 +120,8 @@ mod tests {
             LogPage {
                 lines: vec![],
                 next: 5,
-                missed: 0
+                missed: 0,
+                restarted: false
             }
         );
     }
@@ -152,16 +159,26 @@ mod tests {
     }
 
     #[test]
-    fn a_number_from_before_a_restart_starts_over() {
+    fn after_a_restart_the_page_gets_every_line_since_the_boot() {
         let b = filled(3, 30);
         assert_eq!(
             b.since(Some(500)),
             LogPage {
-                lines: vec![],
+                lines: vec!["line 0".into(), "line 1".into(), "line 2".into()],
                 next: 3,
-                missed: 0
+                missed: 0,
+                restarted: true
             }
         );
+    }
+
+    #[test]
+    fn after_a_restart_lines_that_already_fell_out_count_as_missed() {
+        let b = filled(10, 4);
+        let page = b.since(Some(500));
+        assert!(page.restarted);
+        assert_eq!(page.missed, 6);
+        assert_eq!(page.lines.len(), 4);
     }
 
     #[test]
@@ -183,6 +200,9 @@ mod tests {
     #[test]
     fn page_serialises_for_the_web() {
         let json = serde_json::to_string(&filled(1, 4).since(Some(0))).unwrap();
-        assert_eq!(json, r#"{"lines":["line 0"],"next":1,"missed":0}"#);
+        assert_eq!(
+            json,
+            r#"{"lines":["line 0"],"next":1,"missed":0,"restarted":false}"#
+        );
     }
 }

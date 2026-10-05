@@ -1,0 +1,10 @@
+# Two app slots for updates over WiFi: the running firmware stays in one while
+# the new one is written to the other; `otadata` says which slot boots.
+# nvs and phy_init are where espflash's default table had them, so settings,
+# WiFi, the F1TV token and the schedule survive the switch to this table.
+# Name,   Type, SubType, Offset,   Size
+nvs,      data, nvs,     0x9000,   0x6000
+phy_init, data, phy,     0xf000,   0x1000
+ota_0,    app,  ota_0,   0x10000,  0x1F0000
+ota_1,    app,  ota_1,   0x200000, 0x1F0000
+otadata,  data, ota,     0x3F0000, 0x2000

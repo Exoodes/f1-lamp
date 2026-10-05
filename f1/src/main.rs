@@ -144,7 +144,7 @@ fn check_threads(threads: &[(&str, JoinHandle<()>)]) {
     }
 }
 
-fn restart() -> ! {
+pub fn restart() -> ! {
     // SAFETY: `esp_restart` takes no arguments and has no preconditions; it
     // reboots the chip and never returns.
     unsafe { esp_idf_svc::sys::esp_restart() }

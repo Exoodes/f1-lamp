@@ -5,6 +5,7 @@ pub mod led;
 #[cfg_attr(feature = "player", allow(dead_code))]
 pub mod live;
 pub mod mdns;
+pub mod ota;
 pub mod storage;
 pub mod token_store;
 pub mod weblog;

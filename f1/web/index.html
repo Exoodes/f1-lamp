@@ -522,6 +522,7 @@ async function sendToken(text, label) {
 const LOG_KEEP = 500;   // lines kept on the page; older ones are dropped
 let logNext = null;     // sequence number to ask from; null = not started
 let logTimer = null;
+let logBusy = false;    // a request is on its way: don't send another
 
 function addLogLine(text, cls) {
   const box = $("log");
@@ -535,12 +536,18 @@ function addLogLine(text, cls) {
   if (atBottom) box.scrollTop = box.scrollHeight;
 }
 
+// One request at a time: while the lamp is busy (e.g. receiving a firmware
+// update) requests would queue up, all asking for the same lines, and each
+// answer would add them again.
 async function pollLog() {
+  if (logBusy) return;
+  logBusy = true;
   try {
     const url = logNext === null ? "/api/log" : "/api/log?after=" + logNext;
     const r = await fetch(url);
     if (!r.ok) return;
     const page = await r.json();
+    if (page.restarted) addLogLine("— lamp restarted —", "gap");
     if (page.missed > 0) addLogLine(`… ${page.missed} lines missed`, "gap");
     for (const line of page.lines) {
       addLogLine(line, line.startsWith("E ") ? "e" : line.startsWith("W ") ? "w" : "");
@@ -548,6 +555,8 @@ async function pollLog() {
     logNext = page.next;
   } catch {
     // The status card already says when the lamp can't be reached.
+  } finally {
+    logBusy = false;
   }
 }
 

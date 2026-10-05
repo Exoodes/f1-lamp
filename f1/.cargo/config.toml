@@ -3,7 +3,10 @@ target = "riscv32imc-esp-espidf"
 
 [target.'cfg(target_os = "espidf")']
 linker = "ldproxy"
-runner = "espflash flash --monitor"
+# partitions.csv has two app slots for updates over WiFi. USB always writes
+# slot ota_0, and erasing otadata makes the chip boot what was just flashed
+# (after a WiFi update it could otherwise keep booting ota_1).
+runner = "espflash flash --monitor --partition-table partitions.csv --target-app-partition ota_0 --erase-parts otadata"
 rustflags = [ "--cfg",  "espidf_time64"]
 
 [unstable]
