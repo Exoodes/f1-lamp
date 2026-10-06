@@ -27,16 +27,15 @@ use anyhow::{bail, Context};
 use f1_core::{
     feed::SessionState,
     live::LiveSession,
+    negotiate,
     signalr::{self, Message, Splitter, PING},
     timeline::Stream,
     token::{F1tvToken, TokenStatus},
     track_state::FeedMessage,
 };
-use serde::Deserialize;
 use tungstenite::{client::IntoClientRequest, http::HeaderValue, WebSocket};
 
-const NEGOTIATE: &str = "https://livetiming.formula1.com/signalrcore/negotiate";
-const HUB: &str = "wss://livetiming.formula1.com/signalrcore";
+/// The hub's host, for our own TCP connection (see `connect`).
 const HOST: &str = "livetiming.formula1.com";
 
 /// The server drops clients that stay quiet for about 30 s.
@@ -171,41 +170,29 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Negotiation {
-    connection_token: String,
-}
-
-/// Gets the load balancer's cookie, then a connection token. Returns the
-/// cookie and token as one `Cookie` header value plus token.
+/// Gets the load balancer's cookie, then a connection token (see
+/// `f1_core::negotiate`). Returns the cookie as one `Cookie` header value
+/// (empty without one) and the token.
 fn negotiate(auth: Option<&str>) -> anyhow::Result<(String, String)> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .http_status_as_error(false)
         .build()
         .into();
 
-    // The OPTIONS answer is 405, but it sets the AWSALBCORS cookie that keeps
-    // the WebSocket on the same server as the negotiate.
     let options = agent
-        .options(NEGOTIATE)
+        .options(negotiate::NEGOTIATE_URL)
         .call()
         .context("negotiate (OPTIONS)")?;
-    let cookie = options
-        .headers()
-        .get_all("set-cookie")
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .filter_map(|c| c.split(';').next())
-        .filter(|c| c.starts_with("AWSALB"))
-        .collect::<Vec<_>>()
-        .join("; ");
+    let set_cookies = options.headers().get_all("set-cookie");
+    let cookie =
+        negotiate::load_balancer_cookie(set_cookies.iter().filter_map(|v| v.to_str().ok()))
+            .unwrap_or_default();
     if cookie.is_empty() {
         println!("!! no AWSALB cookie in the OPTIONS answer; trying without");
     }
 
     let mut request = agent
-        .post(&format!("{NEGOTIATE}?negotiateVersion=1"))
+        .post(negotiate::NEGOTIATE_POST_URL)
         .header("Cookie", &cookie);
     if let Some(auth) = auth {
         request = request.header("Authorization", auth);
@@ -216,16 +203,16 @@ fn negotiate(auth: Option<&str>) -> anyhow::Result<(String, String)> {
     if !status.is_success() {
         bail!("negotiate answered {status}: {body}");
     }
-    let negotiation: Negotiation =
-        serde_json::from_str(&body).with_context(|| format!("negotiate answer: {body}"))?;
+    let token = negotiate::connection_token(body.as_bytes())
+        .with_context(|| format!("negotiate answer: {body}"))?;
     println!("negotiated ({status})");
-    Ok((cookie, negotiation.connection_token))
+    Ok((cookie, token))
 }
 
 type Socket = WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
 
 fn connect((cookie, token): &(String, String), auth: Option<&str>) -> anyhow::Result<Socket> {
-    let mut request = format!("{HUB}?id={token}").into_client_request()?;
+    let mut request = negotiate::hub_url(token).into_client_request()?;
     if !cookie.is_empty() {
         request
             .headers_mut()

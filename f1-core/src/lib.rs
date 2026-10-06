@@ -14,6 +14,7 @@ pub mod heartbeat;
 pub mod input;
 pub mod live;
 pub mod logbuf;
+pub mod negotiate;
 pub mod openf1;
 pub mod ota_trial;
 pub mod overlays;

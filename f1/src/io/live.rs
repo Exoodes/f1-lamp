@@ -23,9 +23,9 @@ use f1_core::{
     heartbeat::Heartbeat,
     input::{Input, RaceEvent},
     live::{LiveSession, Received},
+    negotiate,
     signalr::PING,
 };
-use serde::Deserialize;
 
 use crate::{
     config,
@@ -35,9 +35,6 @@ use crate::{
         ws::{WebSocket, WsEvent},
     },
 };
-
-const NEGOTIATE: &str = "https://livetiming.formula1.com/signalrcore/negotiate";
-const HUB: &str = "wss://livetiming.formula1.com/signalrcore";
 
 /// The server drops clients that stay quiet for about 30 s.
 const PING_EVERY: Duration = Duration::from_secs(15);
@@ -147,26 +144,17 @@ fn tell(tx: &SyncSender<Input>, change: Option<bool>) -> anyhow::Result<()> {
         .context("render loop is gone")
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Negotiation {
-    connection_token: String,
-}
-
-/// The load balancer's cookie, then a connection token.
-/// `auth` is the `Authorization` header value, with the F1TV token.
+/// The load balancer's cookie, then a connection token (see
+/// `f1_core::negotiate`). `auth` is the `Authorization` header value, with
+/// the F1TV token.
 fn negotiate(auth: Option<&str>) -> anyhow::Result<(Option<String>, String)> {
-    // The OPTIONS answer is 405, but it sets the cookie that keeps the
-    // WebSocket on the same server as the negotiate.
-    let options = http::request(Method::Options, NEGOTIATE, &[]).context("negotiate (OPTIONS)")?;
-    let cookie = options
-        .set_cookie
-        .as_deref()
-        .and_then(|c| c.split(';').next())
-        .filter(|c| c.starts_with("AWSALBCORS="))
-        .map(str::to_owned);
+    let options = http::request(Method::Options, negotiate::NEGOTIATE_URL, &[])
+        .context("negotiate (OPTIONS)")?;
+    // Only one `Set-Cookie` gets here (`http::Reply`), so at most one of the
+    // two load-balancer cookies; either keeps us on the same server.
+    let cookie = negotiate::load_balancer_cookie(options.set_cookie.as_deref());
     if cookie.is_none() {
-        log::warn!("live: no AWSALBCORS cookie; trying without");
+        log::warn!("live: no load-balancer cookie; trying without");
     }
 
     let mut headers = vec![("Content-Length", "0")];
@@ -176,12 +164,8 @@ fn negotiate(auth: Option<&str>) -> anyhow::Result<(Option<String>, String)> {
     if let Some(auth) = auth {
         headers.push(("Authorization", auth));
     }
-    let reply = http::request(
-        Method::Post,
-        &format!("{NEGOTIATE}?negotiateVersion=1"),
-        &headers,
-    )
-    .context("negotiate (POST)")?;
+    let reply = http::request(Method::Post, negotiate::NEGOTIATE_POST_URL, &headers)
+        .context("negotiate (POST)")?;
     if reply.status != 200 {
         bail!(
             "negotiate: HTTP {}: {}",
@@ -189,9 +173,8 @@ fn negotiate(auth: Option<&str>) -> anyhow::Result<(Option<String>, String)> {
             String::from_utf8_lossy(&reply.body)
         );
     }
-    let negotiation: Negotiation =
-        serde_json::from_slice(&reply.body).context("negotiate answer")?;
-    Ok((cookie, negotiation.connection_token))
+    let token = negotiate::connection_token(&reply.body).context("negotiate answer")?;
+    Ok((cookie, token))
 }
 
 /// One connection, from negotiate until it drops or isn't wanted any more.
@@ -264,7 +247,7 @@ impl Connection {
 
         let tls = Some(http::TLS.lock().unwrap_or_else(|e| e.into_inner()));
         let (events_tx, events) = mpsc::channel();
-        let ws = WebSocket::connect(&format!("{HUB}?id={token}"), &headers, events_tx)?;
+        let ws = WebSocket::connect(&negotiate::hub_url(&token), &headers, events_tx)?;
 
         match events.recv_timeout(CONNECT_TIMEOUT) {
             Ok(WsEvent::Connected) => {}
