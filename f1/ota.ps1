@@ -11,6 +11,15 @@ param([Parameter(Mandatory = $true)][string]$Elf)
 
 $ErrorActionPreference = 'Stop'
 $lamp = if ($env:F1_LAMP) { $env:F1_LAMP } else { 'f1-lightbox.local' }
+
+# The lamp only takes an upload with the key from cfg.toml (build.rs checks
+# it: visible ASCII, no quotes). Never printed.
+$keyLine = Select-String -Path cfg.toml -Pattern '^\s*ota_key\s*=\s*"([^"]*)"' | Select-Object -First 1
+if (-not $keyLine) {
+    Write-Host 'cfg.toml has no ota_key; see the README.'
+    exit 1
+}
+$key = $keyLine.Matches[0].Groups[1].Value
 $bin = Join-Path (Split-Path $Elf) 'f1-ota.bin'
 
 # The same layout and slot as a USB flash, so an image too big for a slot
@@ -33,6 +42,7 @@ $started = Get-Date
 # update exits with an error and still shows the lamp's reason.
 curl.exe --fail-with-body --silent --show-error `
     --data-binary "@$bin" -H 'Content-Type: application/octet-stream' `
+    -H 'X-F1-Lamp: 1' -H "X-F1-Key: $key" `
     "http://$lamp/api/ota"
 if ($LASTEXITCODE -ne 0) {
     Write-Host ''

@@ -487,11 +487,14 @@ async function getState() {
   return r.json();
 }
 
+// The lamp refuses POSTs without it (see web.rs): other sites can't send it.
+const LAMP_HEADER = { "X-F1-Lamp": "1" };
+
 // POSTs JSON. Success is 204 (no body); on error, throws the server's message.
 async function post(url, body) {
   const r = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...LAMP_HEADER },
     body: JSON.stringify(body),
   });
   if (!r.ok) throw new Error((await r.text()) || "HTTP " + r.status);
@@ -691,7 +694,7 @@ async function refreshToken() {
 // Sends the pasted text as it is; an empty body removes the token.
 async function sendToken(text, label) {
   try {
-    const r = await fetch("/api/token", { method: "POST", body: text });
+    const r = await fetch("/api/token", { method: "POST", headers: LAMP_HEADER, body: text });
     const st = await r.json();
     showToken(st);
     message("token-msg", r.ok ? label : "Not saved", !r.ok);

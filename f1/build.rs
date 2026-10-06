@@ -24,6 +24,7 @@ fn main() {
         .and_then(toml::Value::as_table)
         .unwrap_or_else(|| panic!("f1/cfg.toml has no [f1] table"));
     wifi_credentials(f1);
+    ota_key(f1);
     replay_dir(cfg.get("replay").and_then(toml::Value::as_table));
 }
 
@@ -53,6 +54,33 @@ fn wifi_credentials(f1: &toml::Table) {
             .unwrap_or_else(|| panic!("f1/cfg.toml: [f1] has no text value `{key}`"));
         println!("cargo:rustc-env={var}={value}");
     }
+}
+
+/// The shortest `ota_key` accepted: anything shorter is guessable.
+const MIN_OTA_KEY: usize = 16;
+
+/// Hands the update key to the compiler as `OTA_KEY`. The lamp only takes a
+/// firmware upload that carries it (`web.rs`); `ota.ps1` reads it from
+/// cfg.toml too.
+fn ota_key(f1: &toml::Table) {
+    let key = f1
+        .get("ota_key")
+        .and_then(toml::Value::as_str)
+        .unwrap_or_else(|| {
+            panic!(
+                "f1/cfg.toml: [f1] has no `ota_key`: add a random text of at least \
+                 {MIN_OTA_KEY} characters, e.g. ota_key = \"<32 random letters>\""
+            )
+        });
+    // Checked here so a bad key stops the build, not an update later. Header
+    // values can't hold control characters, and ota.ps1 reads it between quotes.
+    if key.len() < MIN_OTA_KEY {
+        panic!("f1/cfg.toml: ota_key must be at least {MIN_OTA_KEY} characters");
+    }
+    if !key.chars().all(|c| c.is_ascii_graphic() && c != '"') {
+        panic!("f1/cfg.toml: ota_key may only hold visible ASCII characters, no quotes");
+    }
+    println!("cargo:rustc-env=OTA_KEY={key}");
 }
 
 /// With `--features replay` or `showcase`: finds the files of the session to

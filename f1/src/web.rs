@@ -24,6 +24,15 @@ const MAX_BODY: usize = 2048;
 /// A pasted F1TV token, or the whole `loginSession` cookie holding one.
 const MAX_TOKEN_BODY: usize = 8192;
 
+/// Every POST must carry this header (any value). A page from another site
+/// can't send it without the browser asking the lamp first (a CORS
+/// preflight), which the lamp never allows, so other sites can't change
+/// settings or upload firmware through a browser on the home network.
+const PAGE_HEADER: &str = "X-F1-Lamp";
+/// A firmware upload must also carry `ota_key` from cfg.toml in this header.
+const KEY_HEADER: &str = "X-F1-Key";
+const OTA_KEY: &str = env!("OTA_KEY");
+
 const HTML: &str = "text/html; charset=utf-8";
 const JSON: &str = "application/json";
 const TEXT: &str = "text/plain; charset=utf-8";
@@ -54,6 +63,9 @@ pub fn start(
 
     let settings_tx = tx.clone();
     server.fn_handler::<anyhow::Error, _>("/api/settings", Method::Post, move |mut req| {
+        if !from_page(&req) {
+            return refuse(req);
+        }
         let Some(body) = read_body(&mut req, MAX_BODY)? else {
             return reply(req, 413, TEXT, b"body too large");
         };
@@ -67,6 +79,9 @@ pub fn start(
     })?;
 
     server.fn_handler::<anyhow::Error, _>("/api/override", Method::Post, move |mut req| {
+        if !from_page(&req) {
+            return refuse(req);
+        }
         let Some(body) = read_body(&mut req, MAX_BODY)? else {
             return reply(req, 413, TEXT, b"body too large");
         };
@@ -84,6 +99,13 @@ pub fn start(
     // In every build, replay and showcase included: whatever runs must be
     // able to receive the next firmware, or the way back needs the cable.
     server.fn_handler::<anyhow::Error, _>("/api/ota", Method::Post, |mut req| {
+        if !from_page(&req) {
+            return refuse(req);
+        }
+        if !req.header(KEY_HEADER).is_some_and(is_ota_key) {
+            log::warn!("ota: refused an upload without the right key");
+            return reply(req, 401, TEXT, b"wrong or missing update key");
+        }
         let Some(len) = req
             .header("Content-Length")
             .and_then(|l| l.parse::<usize>().ok())
@@ -143,6 +165,9 @@ fn replay_routes(server: &mut EspHttpServer<'static>) -> anyhow::Result<()> {
     })?;
 
     server.fn_handler::<anyhow::Error, _>("/api/replay", Method::Post, |mut req| {
+        if !from_page(&req) {
+            return refuse(req);
+        }
         let Some(replay) = crate::replay::handle() else {
             return reply(req, 404, TEXT, b"no replay");
         };
@@ -182,6 +207,9 @@ fn token_routes(
     })?;
 
     server.fn_handler::<anyhow::Error, _>("/api/token", Method::Post, move |mut req| {
+        if !from_page(&req) {
+            return refuse(req);
+        }
         let Some(body) = read_body(&mut req, MAX_TOKEN_BODY)? else {
             return reply(req, 413, TEXT, b"too long for a token");
         };
@@ -205,6 +233,26 @@ fn query_number(uri: &str, name: &str) -> Option<u64> {
         .filter_map(|pair| pair.split_once('='))
         .find(|(key, _)| *key == name)
         .and_then(|(_, value)| value.parse().ok())
+}
+
+/// Whether a POST carries `PAGE_HEADER`, as the lamp's own page and ota.ps1 do.
+fn from_page(req: &Request<&mut EspHttpConnection<'_>>) -> bool {
+    req.header(PAGE_HEADER).is_some()
+}
+
+fn refuse(req: Request<&mut EspHttpConnection<'_>>) -> anyhow::Result<()> {
+    reply(req, 403, TEXT, b"missing X-F1-Lamp header")
+}
+
+/// Compares every byte whatever the first difference, so the time taken
+/// doesn't tell how much of a guess was right.
+fn is_ota_key(given: &str) -> bool {
+    given.len() == OTA_KEY.len()
+        && given
+            .bytes()
+            .zip(OTA_KEY.bytes())
+            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+            == 0
 }
 
 /// Sends a complete response with the given status, content type and body.

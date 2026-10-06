@@ -69,6 +69,9 @@ Create `f1/cfg.toml` (it's in `.gitignore`, keep it out of git):
 [f1]
 wifi_ssid = "your network"
 wifi_psk = "your password"
+# Updates over WiFi need this key (at least 16 visible characters, no quotes).
+# `cargo ota` reads it from here; nothing else is accepted by /api/ota.
+ota_key = "some long random text"
 
 # Only for --features replay: the session to play.
 [replay]
@@ -91,7 +94,10 @@ which no flash or update touches.
 
 `cargo ota` is an alias (`f1/.cargo/config.toml`) that builds like
 `cargo run --release` and hands the result to `ota.ps1`, which uploads it to
-`f1-lightbox.local`. If that name doesn't resolve, point it at the lamp's IP:
+`f1-lightbox.local` with the `ota_key` from `cfg.toml`; the lamp refuses an
+upload without it. A new key takes effect with the firmware that carries it,
+so the upload that brings a changed key still needs the old one: after changing
+`ota_key`, flash once over USB. If the name doesn't resolve, point it at the lamp's IP:
 
 ```powershell
 $env:F1_LAMP = "192.168.1.53"; cargo ota; Remove-Item Env:F1_LAMP
@@ -130,6 +136,11 @@ only the lines the lamp uses, so a whole race fits in the firmware.
 - a live log of the lamp's own messages, with times.
 
 Settings save on their own as you change them.
+
+Every POST to the lamp must carry the header `X-F1-Lamp` (any value), which
+the page sends; other websites can't, so they can't change the lamp through a
+browser on your network. Scripts must add it too, e.g.
+`curl -H "X-F1-Lamp: 1" -d '{"kind":"release"}' http://f1-lightbox.local/api/override`.
 
 ## F1TV (optional)
 
