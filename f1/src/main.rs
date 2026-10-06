@@ -32,6 +32,7 @@ const WIFI_PSK: &str = env!("WIFI_PSK");
 
 fn main() -> anyhow::Result<()> {
     esp_idf_svc::sys::link_patches();
+    let booted = Instant::now();
 
     // The serial log as before, plus the last lines for the web page.
     io::weblog::init();
@@ -44,7 +45,8 @@ fn main() -> anyhow::Result<()> {
     let sys_loop = EspSystemEventLoop::take()?;
     let nvs = EspDefaultNvsPartition::take()?;
     // Before anything that could crash: a new firmware on trial is counted
-    // here, and switched back after three boots that never got healthy.
+    // here, and switched back after three boots that never got healthy
+    // (a crash, or no health within `HEALTHY_WITHIN`, see the render loop).
     io::ota::check_boot(nvs.clone())?;
     #[cfg(feature = "crash-test")]
     crash_test();
@@ -127,6 +129,14 @@ fn main() -> anyhow::Result<()> {
 
         if now >= next_thread_check {
             check_threads(&threads, now);
+            // Here, not in the net thread: that thread may be the one stuck.
+            if io::ota::trial_overdue(now.duration_since(booted)) {
+                log::error!(
+                    "ota: new firmware not healthy {} s after boot, restarting",
+                    now.duration_since(booted).as_secs()
+                );
+                restart();
+            }
             next_thread_check = now + THREAD_CHECK_EVERY;
         }
 

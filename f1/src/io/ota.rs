@@ -4,9 +4,17 @@
 //!
 //! A new firmware then runs on trial (see `f1_core::ota_trial`): every boot
 //! is counted in NVS, and a firmware that hasn't proved healthy within three
-//! boots is switched back to the one in the other slot.
+//! boots is switched back to the one in the other slot. A trial boot that
+//! isn't healthy in time restarts itself (`trial_overdue`), so one that never
+//! gets WiFi goes back too, without anyone pulling the plug.
 
-use std::sync::{Mutex, OnceLock};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex, OnceLock,
+    },
+    time::Duration,
+};
 
 use anyhow::{bail, Context};
 use esp_idf_svc::{
@@ -18,7 +26,7 @@ use esp_idf_svc::{
         esp_ota_set_boot_partition,
     },
 };
-use f1_core::ota_trial::{on_boot, BootDecision};
+use f1_core::ota_trial::{on_boot, BootDecision, HEALTHY_WITHIN};
 
 /// NVS limits names to 15 characters.
 const NAMESPACE: &str = "f1";
@@ -29,6 +37,8 @@ const FELL_BACK_KEY: &str = "ota_fell_back";
 
 /// Opened at boot by `check_boot`, used by `receive` and `mark_healthy`.
 static TRIAL: OnceLock<Mutex<EspNvs<NvsDefault>>> = OnceLock::new();
+/// This boot is a trial boot that hasn't proved healthy yet.
+static ON_TRIAL: AtomicBool = AtomicBool::new(false);
 
 /// The first thing after the logger, before WiFi or anything else that could
 /// crash: counts a trial boot, or switches back to the other slot after
@@ -45,6 +55,7 @@ pub fn check_boot(partition: EspDefaultNvsPartition) -> anyhow::Result<()> {
             nvs.set_u8(TRIAL_KEY, boot)
                 .context("count the trial boot")?;
             log::info!("ota: new firmware on trial, boot {boot}");
+            ON_TRIAL.store(true, Ordering::Relaxed);
         }
         BootDecision::FallBack => {
             // Cleared first: whatever happens next, no endless switching.
@@ -70,11 +81,19 @@ pub fn check_boot(partition: EspDefaultNvsPartition) -> anyhow::Result<()> {
 /// The firmware works well enough to receive the next update: the trial is
 /// over.
 pub fn mark_healthy() {
+    ON_TRIAL.store(false, Ordering::Relaxed);
     let Some(nvs) = TRIAL.get() else { return };
     let nvs = nvs.lock().unwrap_or_else(|e| e.into_inner());
     if nvs.remove(TRIAL_KEY).unwrap_or(false) {
         log::info!("ota: new firmware is healthy, trial passed");
     }
+}
+
+/// Whether this trial boot has had its time (`HEALTHY_WITHIN`) and still
+/// isn't healthy, so the caller should restart: that counts the next trial
+/// boot, and after the last one `check_boot` goes back.
+pub fn trial_overdue(since_boot: Duration) -> bool {
+    ON_TRIAL.load(Ordering::Relaxed) && since_boot >= HEALTHY_WITHIN
 }
 
 /// Boots the other app slot next time; checks its image first.

@@ -105,7 +105,10 @@ $env:F1_LAMP = "192.168.1.53"; cargo ota; Remove-Item Env:F1_LAMP
 
 A new firmware runs on trial: if it restarts three times without its web
 server running for a minute, the lamp switches back to the previous one on
-its own.
+its own. A trial boot that isn't there 3 minutes after starting (e.g. it never
+gets WiFi) restarts itself, so that counts too: such a firmware is gone after
+about 10 minutes. The same happens if the WiFi itself is down for that long
+right after an update; then just send the update again.
 
 ### Feature builds
 

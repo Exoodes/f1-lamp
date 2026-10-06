@@ -5,9 +5,18 @@
 //! every boot, before anything that could crash, it asks [`on_boot`] what
 //! to do with that number.
 
+use std::time::Duration;
+
 /// Boots a new firmware gets to prove itself; on the next one the lamp goes
 /// back.
 pub const TRIAL_BOOTS: u8 = 3;
+
+/// A trial boot that isn't healthy this long after starting restarts itself,
+/// which counts as its next boot. Without it, a firmware that never gets
+/// WiFi (and so never gets healthy) would wait forever instead of going back.
+/// Healthy takes WiFi plus a minute of web server, so this leaves two
+/// minutes for WiFi.
+pub const HEALTHY_WITHIN: Duration = Duration::from_secs(3 * 60);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BootDecision {
