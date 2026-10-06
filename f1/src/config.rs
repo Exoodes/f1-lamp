@@ -34,6 +34,14 @@ pub mod led {
     pub const RMT_MEM_BLOCKS: u8 = 4;
 }
 
+/// The render loop's FreeRTOS priority (the main task starts at 1). Above
+/// everything the firmware starts itself: the threads, the web server and
+/// the WebSocket client run at 5, and at 1 a TLS handshake (seconds of
+/// crypto) froze the LEDs for 1.7 s. Below lwIP (18) and WiFi (23), which it
+/// mustn't hold up; it sleeps 20 ms per frame and works ~1 ms of it, so they
+/// lose next to nothing.
+pub const RENDER_PRIORITY: u32 = 6;
+
 /// Inputs waiting for the render loop, which takes them all every frame
 /// (20 ms). When it's full, threads wait and the web server answers 503.
 pub const INPUT_QUEUE: usize = 32;

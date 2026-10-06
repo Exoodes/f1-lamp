@@ -10,6 +10,7 @@ pub mod effect;
 pub mod feed;
 pub mod feed_health;
 pub mod frame;
+pub mod frame_stats;
 pub mod heartbeat;
 pub mod input;
 pub mod live;

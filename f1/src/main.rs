@@ -10,7 +10,8 @@ use std::{
 use esp_idf_svc::hal::{modem::Modem, peripherals::Peripherals};
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use f1_core::{
-    controller::Controller, frame::Frame, heartbeat::Heartbeat, input::Input, snapshot::Snapshot,
+    controller::Controller, frame::Frame, frame_stats::FrameStats, heartbeat::Heartbeat,
+    input::Input, snapshot::Snapshot,
 };
 use io::{led::LedOutput, storage::SettingsStore};
 
@@ -75,7 +76,11 @@ fn main() -> anyhow::Result<()> {
         storage,
         frame: Frame::new(),
         snapshot,
+        stats: FrameStats::new(Instant::now()),
     };
+    // From here on the main task is the render loop: it must not wait for
+    // the network threads' work. Why 6: `config::RENDER_PRIORITY`.
+    io::system::set_own_priority(config::RENDER_PRIORITY);
     let mut next_check = Instant::now() + THREAD_CHECK_EVERY;
     loop {
         let now = Instant::now();
@@ -164,6 +169,8 @@ struct Lamp {
     snapshot: Arc<Mutex<Snapshot>>,
     /// The last one shared, so only changes are copied and logged.
     last_snapshot: Snapshot,
+    /// How smoothly frames come, logged once a minute.
+    stats: FrameStats,
 }
 
 impl Lamp {
@@ -183,6 +190,14 @@ impl Lamp {
         self.controller.render(now, &mut self.frame);
         if let Err(e) = self.leds.write(&self.frame) {
             log::warn!("{e}");
+        }
+        if let Some(r) = self.stats.frame(now) {
+            log::info!(
+                "frames: {} in {} s, longest gap {} ms",
+                r.frames,
+                r.over.as_secs(),
+                r.longest_gap.as_millis()
+            );
         }
     }
 

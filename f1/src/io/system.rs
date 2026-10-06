@@ -13,6 +13,13 @@ pub struct Heap {
     pub largest_block: usize,
 }
 
+/// Sets the calling task's FreeRTOS priority.
+pub fn set_own_priority(priority: u32) {
+    // SAFETY: a null handle means the calling task, which exists while it
+    // calls; `priority` is clamped by FreeRTOS to its highest priority.
+    unsafe { sys::vTaskPrioritySet(std::ptr::null_mut(), priority) }
+}
+
 pub fn heap() -> Heap {
     // SAFETY: all three only read ESP-IDF's heap counters; they have no
     // preconditions.
