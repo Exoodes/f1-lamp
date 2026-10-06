@@ -355,7 +355,8 @@ mod tests {
                 RaceEvent::Winner {
                     driver: 81,
                     team_color: "#f47600".parse().unwrap()
-                }
+                },
+                RaceEvent::FlagCleared,
             ]
         );
     }

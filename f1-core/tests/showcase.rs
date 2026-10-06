@@ -84,7 +84,7 @@ fn every_line_parses() {
 
 #[test]
 fn showcase_plays_every_flag_and_the_winner_in_order() {
-    use RaceEvent::{ChequeredFlag, FastestLap, Overtake, StartLights, Winner};
+    use RaceEvent::{ChequeredFlag, FastestLap, FlagCleared, Overtake, StartLights, Winner};
     use TrackFlag::*;
     let flag = RaceEvent::TrackFlag;
     let events: Vec<(Duration, RaceEvent)> = play()
@@ -103,6 +103,8 @@ fn showcase_plays_every_flag_and_the_winner_in_order() {
     assert_eq!(
         events,
         [
+            // The replay's first sync: no flag before the start.
+            (secs(10.0), FlagCleared),
             (secs(20.0), StartLights),
             (secs(20.0), flag(Green)),
             (secs(35.0), flag(Yellow)),
@@ -151,6 +153,8 @@ fn showcase_plays_every_flag_and_the_winner_in_order() {
                     team_color: "#00d7b6".parse().unwrap(),
                 }
             ),
+            // Finished: the last flag doesn't stay on the lamp.
+            (secs(150.5), FlagCleared),
         ]
     );
 }

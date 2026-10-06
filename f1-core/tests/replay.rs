@@ -185,10 +185,14 @@ fn antonelli_wins_in_mercedes_teal_after_the_chequered_flag() {
         .unwrap();
     assert_eq!(
         events[chequered + 1..],
-        [RaceEvent::Winner {
-            driver: 12,
-            team_color: "#00d7b6".parse().unwrap(),
-        }]
+        [
+            RaceEvent::Winner {
+                driver: 12,
+                team_color: "#00d7b6".parse().unwrap(),
+            },
+            // Finished: the last flag doesn't stay on the lamp.
+            RaceEvent::FlagCleared,
+        ]
     );
 }
 
@@ -207,10 +211,16 @@ fn winner_comes_while_still_live() {
             )
         })
         .unwrap();
-    assert_eq!(
+    assert!(matches!(
         inputs[winner + 1..],
-        [Input::Phase(SessionPhase::PostSession)]
-    );
+        [
+            Input::Race {
+                event: RaceEvent::FlagCleared,
+                ..
+            },
+            Input::Phase(SessionPhase::PostSession)
+        ]
+    ));
 }
 
 #[test]

@@ -48,7 +48,7 @@ fn hms(h: u64, m: u64, s: u64, ms: u64) -> Duration {
 
 #[test]
 fn whole_race_gives_the_expected_events_at_the_right_times() {
-    use RaceEvent::{ChequeredFlag, StartLights};
+    use RaceEvent::{ChequeredFlag, FlagCleared, StartLights};
     use TrackFlag::*;
     let flag = RaceEvent::TrackFlag;
     assert_eq!(
@@ -67,6 +67,7 @@ fn whole_race_gives_the_expected_events_at_the_right_times() {
             (hms(2, 11, 9, 379), flag(VirtualSafetyCar)),
             (hms(2, 13, 6, 880), flag(Green)),
             (hms(2, 48, 10, 829), ChequeredFlag),
+            (hms(2, 48, 11, 236), FlagCleared),
         ]
     );
 }
@@ -97,10 +98,11 @@ fn every_safety_car_vsc_and_red_ends_in_green() {
 }
 
 #[test]
-fn chequered_flag_is_the_last_event() {
+fn the_race_ends_with_the_chequered_flag_then_no_flag() {
+    let events: Vec<RaceEvent> = race_events().into_iter().map(|(_, e)| e).collect();
     assert_eq!(
-        race_events().last().map(|(_, e)| *e),
-        Some(RaceEvent::ChequeredFlag)
+        events[events.len() - 2..],
+        [RaceEvent::ChequeredFlag, RaceEvent::FlagCleared]
     );
 }
 

@@ -67,7 +67,7 @@ impl Settings {
         let e = &self.effects;
         // No `_` arm: a new kind of event must get a decision here.
         match event {
-            RaceEvent::TrackFlag(_) => true,
+            RaceEvent::TrackFlag(_) | RaceEvent::FlagCleared => true,
             RaceEvent::StartLights => e.start_lights,
             RaceEvent::ChequeredFlag => e.chequered_flag,
             RaceEvent::FastestLap { .. } => e.fastest_lap,

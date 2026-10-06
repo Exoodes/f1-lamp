@@ -188,9 +188,13 @@ impl<'a> Replayer<'a> {
 
         if let Some(position) = self.sync_at.take() {
             self.send_phase(self.phase_at(position), &mut out);
-            if let Some(flag) = self.state.flag() {
-                out.push(race(RaceEvent::TrackFlag(flag), now));
-            }
+            // Also when there's none: a jump back from a flag to before the
+            // start, or between qualifying parts, must not leave it showing.
+            let flag = self.state.flag();
+            out.push(race(
+                flag.map_or(RaceEvent::FlagCleared, RaceEvent::TrackFlag),
+                now,
+            ));
         }
 
         loop {
@@ -362,11 +366,20 @@ mod tests {
     }
 
     #[test]
-    fn first_step_sends_pre_session_and_no_flag() {
+    fn first_step_sends_pre_session_and_clears_the_flag() {
         let t0 = Instant::now();
         let mut r = Replayer::new(&files(), 10, t0);
         let (inputs, step) = drain(&mut r, t0);
-        assert_eq!(inputs, [Input::Phase(SessionPhase::PreSession)]);
+        assert_eq!(
+            inputs,
+            [
+                Input::Phase(SessionPhase::PreSession),
+                Input::Race {
+                    event: RaceEvent::FlagCleared,
+                    received: t0
+                }
+            ]
+        );
         assert!(matches!(step, Step::Paused));
     }
 
@@ -408,10 +421,14 @@ mod tests {
         assert_eq!(
             race_events(&inputs),
             [
+                // The first sync: no flag before the start.
+                RaceEvent::FlagCleared,
                 RaceEvent::StartLights,
                 RaceEvent::TrackFlag(TrackFlag::Green),
                 RaceEvent::TrackFlag(TrackFlag::Yellow),
                 RaceEvent::TrackFlag(TrackFlag::Green),
+                // The session finished.
+                RaceEvent::FlagCleared,
             ]
         );
         assert_eq!(
@@ -466,6 +483,8 @@ mod tests {
         assert_eq!(
             race_events(&inputs),
             [
+                // The jump leaves the finished session's state behind.
+                RaceEvent::FlagCleared,
                 RaceEvent::StartLights,
                 RaceEvent::TrackFlag(TrackFlag::Green)
             ]

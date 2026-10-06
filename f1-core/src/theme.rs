@@ -49,7 +49,7 @@ pub fn flag_effect(flag: TrackFlag) -> Effect {
 
 pub fn event_overlay(event: RaceEvent) -> Option<Effect> {
     match event {
-        RaceEvent::TrackFlag(_) => None,
+        RaceEvent::TrackFlag(_) | RaceEvent::FlagCleared => None,
         RaceEvent::StartLights => Some(Effect::StartLights {
             hold_ms: START_HOLD_MS,
         }),

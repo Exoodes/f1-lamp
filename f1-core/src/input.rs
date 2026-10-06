@@ -18,12 +18,27 @@ pub enum TrackFlag {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RaceEvent {
     TrackFlag(TrackFlag),
+    /// No flag any more: the session (or a qualifying part) has finished,
+    /// so the last flag must not stay on the lamp.
+    FlagCleared,
     StartLights,
     ChequeredFlag,
-    FastestLap { driver: u8, team_color: Rgb },
-    PitStop { driver: u8, team_color: Rgb },
-    Overtake { driver: u8, team_color: Rgb },
-    Winner { driver: u8, team_color: Rgb },
+    FastestLap {
+        driver: u8,
+        team_color: Rgb,
+    },
+    PitStop {
+        driver: u8,
+        team_color: Rgb,
+    },
+    Overtake {
+        driver: u8,
+        team_color: Rgb,
+    },
+    Winner {
+        driver: u8,
+        team_color: Rgb,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

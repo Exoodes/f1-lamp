@@ -217,7 +217,14 @@ impl Controller {
         while let Some(item) = self.delayed.pop_ready(now) {
             match item {
                 Delayed::Race(event) => self.apply_race_event(event, now),
-                Delayed::Phase(phase) => self.layers.phase = phase,
+                Delayed::Phase(phase) => {
+                    self.layers.phase = phase;
+                    // A flag belongs to the live session it came from; the
+                    // next session must not start with it.
+                    if phase != SessionPhase::Live {
+                        self.layers.flag = None;
+                    }
+                }
             }
         }
     }
@@ -229,6 +236,7 @@ impl Controller {
         }
         match event {
             RaceEvent::TrackFlag(flag) => stamp(&mut self.layers.flag, flag, now),
+            RaceEvent::FlagCleared => self.layers.flag = None,
             RaceEvent::Winner { team_color, .. } => {
                 self.layers.winner = Some(WinnerScene {
                     scene: Scene {
@@ -378,6 +386,45 @@ mod tests {
         c.tick(now);
         let (layer, scene) = c.arbitrate();
         (layer, scene.effect)
+    }
+
+    #[test]
+    fn flag_cleared_gives_the_lamp_back() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(flag(TrackFlag::SafetyCar, t0), t0);
+        assert_eq!(winner_at(&mut c, t0).0, "live track");
+        c.apply(race(RaceEvent::FlagCleared, t0 + ms(10)), t0 + ms(10));
+        assert_eq!(winner_at(&mut c, t0 + ms(10)), ("lamp", default_lamp()));
+    }
+
+    #[test]
+    fn the_next_session_does_not_start_with_the_last_flag() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(flag(TrackFlag::Red, t0), t0);
+        c.apply(Input::Phase(SessionPhase::Idle), t0 + ms(10));
+        c.apply(Input::Phase(SessionPhase::PreSession), t0 + ms(20));
+        c.apply(Input::Phase(SessionPhase::Live), t0 + ms(30));
+        assert_eq!(winner_at(&mut c, t0 + ms(30)), ("lamp", default_lamp()));
+    }
+
+    #[test]
+    fn a_delayed_flag_cleared_waits_behind_the_chequered_flag() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(
+            Input::Settings(Settings {
+                tv_delay_ms: 5000,
+                ..Settings::default()
+            }),
+            t0,
+        );
+        c.apply(flag(TrackFlag::SafetyCar, t0), t0);
+        c.apply(race(RaceEvent::FlagCleared, t0 + ms(100)), t0 + ms(100));
+        // Still the safety car until the TV shows the finish.
+        assert_eq!(winner_at(&mut c, t0 + ms(5050)).0, "live track");
+        assert_eq!(winner_at(&mut c, t0 + ms(5100)), ("lamp", default_lamp()));
     }
 
     #[test]

@@ -88,9 +88,7 @@ impl TrackState {
 
         let new = self.derive();
         if new != self.shown {
-            if let Some(flag) = new {
-                events.push(RaceEvent::TrackFlag(flag));
-            }
+            events.push(new.map_or(RaceEvent::FlagCleared, RaceEvent::TrackFlag));
             self.shown = new;
         }
 
@@ -163,6 +161,25 @@ mod tests {
         s.apply(track("1"));
         s.apply(session(SessionState::Started));
         s
+    }
+
+    #[test]
+    fn finishing_under_a_safety_car_clears_the_flag() {
+        let mut s = racing();
+        assert_eq!(s.apply(track("4")), flag(TrackFlag::SafetyCar));
+        assert_eq!(
+            s.apply(session(SessionState::Finished)),
+            [RaceEvent::FlagCleared]
+        );
+        assert_eq!(s.flag(), None);
+    }
+
+    #[test]
+    fn a_cleared_flag_is_reported_once() {
+        let mut s = racing();
+        s.apply(session(SessionState::Finished));
+        assert!(s.apply(session(SessionState::Finalised)).is_empty());
+        assert!(s.apply(track("1")).is_empty());
     }
 
     #[test]
