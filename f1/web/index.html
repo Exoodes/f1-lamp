@@ -204,7 +204,7 @@
   .token-state.warn { color: var(--warn); }
   .token-state.bad { color: var(--err); }
 
-  /* ---- Live log: only polled while its tab is open ---- */
+  /* ---- Live log: collected from page load, shown in its tab ---- */
   .log-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
   .log-head button { padding: 6px 12px; }
   #log {
@@ -382,7 +382,7 @@
         <h2>Live log</h2>
         <button id="log-clear">Clear</button>
       </div>
-      <p class="hint">New lines only, from when you open this tab. Nothing is kept on the lamp.</p>
+      <p class="hint">New lines only, from when you opened the page. Nothing is kept on the lamp.</p>
       <div id="log"></div>
     </section>
   </div>
@@ -702,13 +702,11 @@ async function sendToken(text, label) {
   }
 }
 
-// ---- Live log (polled once a second, only while its tab is open) ----
+// ---- Live log (polled once a second from page load, whichever tab shows) ----
 
 const LOG_KEEP = 500;   // lines kept on the page; older ones are dropped
 let logNext = null;     // sequence number to ask from; null = not started
-let logTimer = null;
 let logBusy = false;    // a request is on its way: don't send another
-let logOpen = false;
 
 function addLogLine(text, cls) {
   const box = $("log");
@@ -748,16 +746,12 @@ async function pollLog() {
   }
 }
 
-// Called whenever the tab changes; opening the log starts fresh.
-function setLogOpen(open) {
-  if (open === logOpen) return;
-  logOpen = open;
-  clearInterval(logTimer);
-  if (open) {
-    logNext = null;
-    pollLog();
-    logTimer = setInterval(pollLog, 1000);
-  }
+// Started once with the page: the log starts empty then and keeps collecting
+// in every tab, so switching to the Log tab shows what happened meanwhile.
+function startLog() {
+  logNext = null;
+  pollLog();
+  setInterval(pollLog, 1000);
 }
 
 // ---- Tabs ----
@@ -778,7 +772,6 @@ function showTab(name) {
   for (const p of document.querySelectorAll(".panel")) {
     p.classList.toggle("active", p.dataset.tab === name);
   }
-  setLogOpen(name === "log");
   // Remembered per browser; storage may be blocked, which is fine.
   try { localStorage.setItem("tab", name); } catch {}
 }
@@ -805,6 +798,7 @@ function startTabs() {
 async function start() {
   $("host").textContent = location.host;
   startTabs();
+  startLog();
 
   for (const id of SLIDERS) {
     $(id).addEventListener("input", () => showPercent(id));
