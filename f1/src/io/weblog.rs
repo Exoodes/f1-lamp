@@ -1,5 +1,5 @@
-//! Sends every Rust log line to the serial port as before, and also keeps the
-//! last few for the web page's live log (`GET /api/log`).
+//! The logger: every Rust log line goes to the serial port, and the last few
+//! are also kept for the web page's live log (`GET /api/log`).
 //!
 //! Only `log` crate lines are caught (`f1::...`); ESP-IDF's own C messages
 //! (`wifi:`, `esp-tls`) take another path and reach the serial port only.
@@ -59,7 +59,8 @@ impl Log for TeeLogger {
     fn flush(&self) {}
 }
 
-/// Replaces `EspLogger::initialize_default()`: same output, plus the buffer.
+/// Installs the logger. Call instead of `EspLogger::initialize_default()`:
+/// the serial output is the same.
 pub fn init() {
     if log::set_logger(&LOGGER).is_ok() {
         LOGGER.serial.filter().initialize();

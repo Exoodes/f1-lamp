@@ -1,14 +1,14 @@
-# Rust often needs a bit of an extra main task stack size compared to C (the default is 3K)
-# You might have to increase this further if you allocate large stack variables in the main task
+# The main task is the render loop: the controller, serialising the snapshot
+# to JSON and logging it. The default 3 KB is too small for that.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 
-# Increase a bit these stack sizes as they are also a bit too small by default
+# Above their defaults, as in esp-idf-template; never measured lower.
 CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
 CONFIG_FREERTOS_IDLE_TASK_STACKSIZE=4096
 
-# You might have to increase this further if you spawn your own Rust threads 
-# that allocate large stack variables; or better yet - use 
-# `std::thread::Builder::new().stack_size(XXX)` for spawning
+# Threads spawned without a stack size: only small helpers (the restart
+# after an update, crash-test). The firmware's own threads set theirs, see
+# `config::stack` in src/config.rs.
 CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=4096
 
 # The WebSocket upgrade request is built in this buffer; the default 1 KB

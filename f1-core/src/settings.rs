@@ -17,9 +17,9 @@ pub struct Settings {
     pub night_end: Option<u16>,
     pub night_brightness: f32,
     pub tv_delay_ms: u32,
-    /// Drivers whose pit stops and overtakes the lamp shows. Replaces the
-    /// old single `favourite_driver`, which saved settings may still contain;
-    /// it's ignored, so the list starts empty.
+    /// Drivers whose pit stops and overtakes the lamp shows. Settings saved
+    /// by older firmware may hold a single `favourite_driver` instead; like
+    /// any unknown key it's ignored, so the list then starts empty.
     pub followed_drivers: DriverSet,
     /// Pit stops and overtakes of every driver, whatever the list says: for
     /// the showcase, or to see everything (a race has hundreds of overtakes).

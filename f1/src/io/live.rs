@@ -39,10 +39,11 @@ use crate::{
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
-/// One SignalR message at most. The state we use arrives as about 12 KB
-/// after a race. The race control history (45 KB) is larger on purpose: the
-/// splitter skips it without buffering, which logs one "frame larger than"
-/// warning per connection. A single 45 KB block is often not available.
+/// One SignalR message at most. The state the lamp uses arrives as about
+/// 12 KB after a race. The race control history (about 45 KB) is meant to
+/// exceed it: the splitter skips it without buffering, which logs one "frame
+/// larger than" warning per connection. Buffering it would need a single
+/// 45 KB block, which the heap often doesn't have.
 const MAX_FRAME: usize = 24 * 1024;
 /// How often to look again while the feed isn't wanted.
 const IDLE: Duration = Duration::from_secs(1);

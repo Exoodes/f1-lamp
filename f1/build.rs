@@ -30,14 +30,15 @@ fn main() {
 
 /// Reads `cfg.toml`.
 ///
-/// This replaces `toml-cfg`: it finds `cfg.toml` through rustc's `--out-dir`
-/// argument, but on Windows our rustc command line is too long, Cargo passes
-/// the arguments in a file instead, and `toml-cfg` silently used its defaults.
+/// Read here rather than with the `toml-cfg` crate, which finds the file
+/// through rustc's `--out-dir` argument: on Windows our rustc command line is
+/// too long, Cargo passes the arguments in a file instead, and `toml-cfg`
+/// silently used its defaults (an empty SSID).
 fn read_cfg() -> toml::Table {
     // Error messages never quote the file's contents: they could show the password.
     let text = std::fs::read_to_string("cfg.toml").unwrap_or_else(|_| {
         panic!(
-            "can't read f1/cfg.toml: create it with an [f1] table holding wifi_ssid and wifi_psk"
+            "can't read f1/cfg.toml: create it with an [f1] table holding wifi_ssid, wifi_psk and ota_key"
         )
     });
     text.parse()

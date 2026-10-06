@@ -13,8 +13,10 @@ harness = false # do not use the built-in cargo test harness -> resolve rust-ana
 [profile.release]
 opt-level = "s"
 
+# Only for `cargo check` and the editor: a debug build doesn't fit an app
+# slot, so the lamp always gets `--release`.
 [profile.dev]
-debug = true    # Symbols are nice, and they don't increase the size on Flash
+debug = true
 opt-level = "z"
 
 [dependencies]
@@ -51,8 +53,8 @@ player = []
 [[package.metadata.esp-idf-sys.extra_components]]
 remote_component = { name = "espressif/mdns", version = "1.2" }
 
-# The WebSocket client for F1's live feed (stage 6); since ESP-IDF 5 it is a
-# separate component. After changing these, touch sdkconfig.defaults so
+# The WebSocket client for F1's live feed; since ESP-IDF 5 it is a separate
+# component. After changing these, touch sdkconfig.defaults so
 # ESP-IDF is rebuilt.
 [[package.metadata.esp-idf-sys.extra_components]]
 remote_component = { name = "espressif/esp_websocket_client", version = "1.2" }
