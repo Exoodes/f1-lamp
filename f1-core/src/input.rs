@@ -60,10 +60,19 @@ pub enum NetStatus {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Input {
-    Race { event: RaceEvent, received: Instant },
+    Race {
+        event: RaceEvent,
+        received: Instant,
+    },
     Phase(SessionPhase),
     Net(NetStatus),
+    /// From the live thread: the feed keeps failing (`true`) or works again.
+    /// Kept apart from `Net`, which is WiFi's: two senders of one status
+    /// would undo each other. The controller shows it as `ApiError`.
+    FeedFailing(bool),
     Override(Option<Effect>),
     Settings(Settings),
-    Clock { minute_of_day: u16 },
+    Clock {
+        minute_of_day: u16,
+    },
 }

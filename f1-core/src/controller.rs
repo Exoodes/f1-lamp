@@ -62,7 +62,10 @@ struct LayerState {
     override_effect: Option<Stamped<Effect>>,
     flag: Option<Stamped<TrackFlag>>,
     winner: Option<WinnerScene>,
+    /// WiFi's status, from the net thread.
     net: Stamped<NetStatus>,
+    /// Since when the live feed keeps failing; `None` while it works.
+    feed_failing: Option<Instant>,
     phase: SessionPhase,
     ever_online: bool,
     settings: Settings,
@@ -100,6 +103,7 @@ impl Controller {
                 flag: None,
                 winner: None,
                 net: Stamped::new(NetStatus::Connecting, now),
+                feed_failing: None,
                 phase: SessionPhase::Idle,
                 ever_online: false,
                 settings: Settings::default(),
@@ -123,6 +127,10 @@ impl Controller {
                 self.layers.net.update(status, now);
                 self.layers.ever_online |= status == NetStatus::Online;
             }
+            Input::FeedFailing(true) => {
+                self.layers.feed_failing.get_or_insert(now);
+            }
+            Input::FeedFailing(false) => self.layers.feed_failing = None,
             Input::Override(Some(effect)) => stamp(&mut self.layers.override_effect, effect, now),
             Input::Override(None) => self.layers.override_effect = None,
             Input::Settings(settings) => self.layers.settings = settings,
@@ -270,7 +278,7 @@ impl Controller {
 
     fn live_track_layer(&self) -> Option<Scene> {
         let layers = &self.layers;
-        if layers.phase != SessionPhase::Live || layers.net.value != NetStatus::Online {
+        if layers.phase != SessionPhase::Live || self.net_status().value != NetStatus::Online {
             return None;
         }
         layers.flag.map(|f| Scene {
@@ -290,10 +298,23 @@ impl Controller {
         if layers.ever_online && !session_needs_network {
             return None;
         }
-        net_effect(layers.net.value).map(|effect| Scene {
+        let net = self.net_status();
+        net_effect(net.value).map(|effect| Scene {
             effect,
-            started: layers.net.since,
+            started: net.since,
         })
+    }
+
+    /// WiFi's status, unless WiFi is up and the live feed keeps failing: then
+    /// `ApiError`. A dead WiFi explains a dead feed, so it comes first.
+    fn net_status(&self) -> Stamped<NetStatus> {
+        match self.layers.feed_failing {
+            Some(since) if self.layers.net.value == NetStatus::Online => Stamped {
+                value: NetStatus::ApiError,
+                since,
+            },
+            _ => self.layers.net,
+        }
     }
 
     fn lamp_scene(&self) -> Scene {
@@ -310,7 +331,7 @@ impl Controller {
         Snapshot {
             layer: self.arbitrate().0,
             phase: self.layers.phase,
-            net: self.layers.net.value,
+            net: self.net_status().value,
             override_active: self.layers.override_effect.is_some(),
             settings: self.layers.settings,
         }
@@ -386,6 +407,58 @@ mod tests {
         c.tick(now);
         let (layer, scene) = c.arbitrate();
         (layer, scene.effect)
+    }
+
+    #[test]
+    fn a_failing_feed_shows_the_error_instead_of_a_stale_flag() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(flag(TrackFlag::Yellow, t0), t0);
+        c.apply(Input::FeedFailing(true), t0 + ms(10));
+        let error = net_effect(NetStatus::ApiError).unwrap();
+        assert_eq!(winner_at(&mut c, t0 + ms(10)), ("status", error));
+        assert_eq!(c.snapshot().net, NetStatus::ApiError);
+    }
+
+    #[test]
+    fn a_working_feed_again_brings_the_flag_back() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(flag(TrackFlag::Yellow, t0), t0);
+        c.apply(Input::FeedFailing(true), t0 + ms(10));
+        c.apply(Input::FeedFailing(false), t0 + ms(20));
+        assert_eq!(winner_at(&mut c, t0 + ms(20)).0, "live track");
+        assert_eq!(c.snapshot().net, NetStatus::Online);
+    }
+
+    #[test]
+    fn wifi_down_is_shown_before_a_failing_feed() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(Input::FeedFailing(true), t0);
+        c.apply(Input::Net(NetStatus::Connecting), t0 + ms(10));
+        let connecting = net_effect(NetStatus::Connecting).unwrap();
+        assert_eq!(winner_at(&mut c, t0 + ms(10)), ("status", connecting));
+    }
+
+    #[test]
+    fn a_failing_feed_between_sessions_leaves_the_lamp_alone() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(Input::Phase(SessionPhase::Idle), t0);
+        c.apply(Input::FeedFailing(true), t0 + ms(10));
+        assert_eq!(winner_at(&mut c, t0 + ms(10)), ("lamp", default_lamp()));
+    }
+
+    #[test]
+    fn the_error_blinks_from_when_the_feed_started_failing() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(Input::FeedFailing(true), t0 + ms(100));
+        // A repeat doesn't restart the blinking.
+        c.apply(Input::FeedFailing(true), t0 + ms(900));
+        c.tick(t0 + ms(900));
+        assert_eq!(c.arbitrate().1.started, t0 + ms(100));
     }
 
     #[test]

@@ -7,6 +7,7 @@ pub mod delay;
 pub mod drivers;
 pub mod effect;
 pub mod feed;
+pub mod feed_health;
 pub mod frame;
 pub mod heartbeat;
 pub mod input;

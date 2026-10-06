@@ -18,6 +18,7 @@ use std::{
 use anyhow::{bail, Context};
 use esp_idf_svc::http::Method;
 use f1_core::{
+    feed_health::FeedHealth,
     heartbeat::Heartbeat,
     input::{Input, RaceEvent},
     live::LiveSession,
@@ -101,23 +102,45 @@ pub fn spawn(
 /// thread check in main restarts the chip.
 fn run(tx: &SyncSender<Input>, control: &LiveControl, tokens: &TokenKeeper, heartbeat: &Heartbeat) {
     let mut retry = FIRST_RETRY;
+    let mut health = FeedHealth::default();
     loop {
         heartbeat.beat(Instant::now());
         if !control.wanted() {
             retry = FIRST_RETRY;
+            if tell(tx, health.not_wanted()).is_err() {
+                return;
+            }
             thread::sleep(IDLE);
             continue;
         }
-        match session(tx, control, tokens, heartbeat) {
+        match session(tx, control, tokens, heartbeat, &mut health) {
             Ok(()) => retry = FIRST_RETRY,
             Err(e) => {
                 log::warn!("live: {e:#}; again in {} s", retry.as_secs());
+                if tell(tx, health.failed()).is_err() {
+                    return;
+                }
                 heartbeat.beat(Instant::now());
                 thread::sleep(retry);
                 retry = (retry * 2).min(MAX_RETRY);
             }
         }
     }
+}
+
+/// Tells the render loop when the feed starts or stops failing, so the lamp
+/// blinks red instead of showing a flag that may be stale.
+fn tell(tx: &SyncSender<Input>, change: Option<bool>) -> anyhow::Result<()> {
+    let Some(failing) = change else {
+        return Ok(());
+    };
+    if failing {
+        log::warn!("live: the feed keeps failing; the lamp shows the error");
+    } else {
+        log::info!("live: the feed works again");
+    }
+    tx.send(Input::FeedFailing(failing))
+        .context("render loop is gone")
 }
 
 #[derive(Deserialize)]
@@ -173,6 +196,7 @@ fn session(
     control: &LiveControl,
     tokens: &TokenKeeper,
     heartbeat: &Heartbeat,
+    health: &mut FeedHealth,
 ) -> anyhow::Result<()> {
     // Without a usable token, the public streams: the lamp works either way.
     // `auth` holds the token: never log it or `headers`.
@@ -264,6 +288,7 @@ fn session(
         }
         if received.subscribed {
             drop(tls.take());
+            tell(tx, health.working())?;
             let (free, largest) = heap();
             log::info!(
                 "live: subscribed (session {:?}); heap {free} B free, largest block {largest} B",

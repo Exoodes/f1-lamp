@@ -26,7 +26,7 @@ Rust: the course*, with some extras of its own.
 | Fastest lap | three purple flashes |
 | Pit stop | two flashes in the team colour (followed drivers) |
 | Overtake | one flash in the team colour (followed drivers, needs F1TV) |
-| No network | breathing blue (connecting) or blinking red (error), only around a session |
+| No network | breathing blue (WiFi connecting) or blinking red (the live feed failed 3 times in a row), only around a session |
 
 Practice, qualifying, sprint and race are all followed. A TV delay setting
 holds everything back so the lamp changes when your TV does, not when the
