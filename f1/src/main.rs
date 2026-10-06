@@ -1,16 +1,18 @@
 use std::{
-    sync::{mpsc, Arc, Mutex},
+    sync::{
+        mpsc::{self, Receiver, SyncSender},
+        Arc, Mutex,
+    },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
-use esp_idf_svc::hal::peripherals::Peripherals;
-#[allow(deprecated)]
-use esp_idf_svc::hal::rmt::{config::TransmitConfig, TxRmtDriver};
+use esp_idf_svc::hal::{modem::Modem, peripherals::Peripherals};
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
-use f1_core::{controller::Controller, frame::Frame, heartbeat::Heartbeat, input::Input};
-use io::led::LedOutput;
-use ws2812_esp32_rmt_driver::Ws2812Esp32Rmt;
+use f1_core::{
+    controller::Controller, frame::Frame, heartbeat::Heartbeat, input::Input, snapshot::Snapshot,
+};
+use io::{led::LedOutput, storage::SettingsStore};
 
 mod config;
 mod io;
@@ -35,7 +37,7 @@ fn main() -> anyhow::Result<()> {
     esp_idf_svc::sys::link_patches();
     let booted = Instant::now();
 
-    // The serial log as before, plus the last lines for the web page.
+    // The serial log, plus the last lines for the web page.
     io::weblog::init();
     if WIFI_SSID.is_empty() {
         log::warn!("WiFi SSID is empty: set wifi_ssid in f1/cfg.toml");
@@ -47,51 +49,73 @@ fn main() -> anyhow::Result<()> {
     let nvs = EspDefaultNvsPartition::take()?;
     // Before anything that could crash: a new firmware on trial is counted
     // here, and switched back after three boots that never got healthy
-    // (a crash, or no health within `HEALTHY_WITHIN`, see the render loop).
+    // (a crash, or no health within `HEALTHY_WITHIN`, see `supervise`).
     io::ota::check_boot(nvs.clone())?;
     #[cfg(feature = "crash-test")]
     crash_test();
 
-    let mut storage = io::storage::SettingsStore::new(nvs.clone())?;
-
-    // ws2812-esp32-rmt-driver 0.14 only supports the legacy RMT API. The
-    // values and why: `config::led`.
+    let storage = SettingsStore::new(nvs.clone())?;
+    // The legacy RMT channel: the only API ws2812-esp32-rmt-driver 0.14 takes.
     #[allow(deprecated)]
-    let driver = {
-        let config = TransmitConfig::new()
-            .clock_divider(config::led::RMT_CLOCK_DIVIDER)
-            .mem_block_num(config::led::RMT_MEM_BLOCKS);
-        let tx = TxRmtDriver::new(peripherals.rmt.channel0, peripherals.pins.gpio2, &config)?;
-        Ws2812Esp32Rmt::new_with_rmt_driver(tx)?
-    };
-
-    let mut leds = LedOutput::new(driver);
+    let mut leds = LedOutput::new(peripherals.rmt.channel0, peripherals.pins.gpio2)?;
     leds.write(&Frame::new())?;
 
     let mut controller = Controller::new(Instant::now());
     controller.apply(Input::Settings(storage.load()), Instant::now());
     // Written by the render loop, read by the web server.
     let snapshot = Arc::new(Mutex::new(controller.snapshot()));
-    let mut last_snapshot = controller.snapshot();
 
     let (tx, rx) = mpsc::sync_channel::<Input>(config::INPUT_QUEUE);
+    let threads = spawn_threads(peripherals.modem, sys_loop, nvs, &tx, &snapshot)?;
+
+    let mut lamp = Lamp {
+        last_snapshot: controller.snapshot(),
+        controller,
+        leds,
+        storage,
+        frame: Frame::new(),
+        snapshot,
+    };
+    let mut next_check = Instant::now() + THREAD_CHECK_EVERY;
+    loop {
+        let now = Instant::now();
+        if now >= next_check {
+            supervise(&threads, booted, now);
+            next_check = now + THREAD_CHECK_EVERY;
+        }
+        lamp.take_inputs(&rx, now);
+        lamp.show(now);
+        lamp.publish_snapshot();
+        lamp.storage.save_if_due(now);
+        thread::sleep(FRAME_INTERVAL);
+    }
+}
+
+/// Starts the net thread and the live-feed (or replay) thread, with what
+/// they share, each watched by `supervise` through its heartbeat.
+fn spawn_threads(
+    modem: Modem<'static>,
+    sys_loop: EspSystemEventLoop,
+    nvs: EspDefaultNvsPartition,
+    tx: &SyncSender<Input>,
+    snapshot: &Arc<Mutex<Snapshot>>,
+) -> anyhow::Result<[Watched; 2]> {
     // Set by the net thread, read by the live-feed thread.
     let live = Arc::new(io::live::LiveControl::default());
     // Set from the web page, read by the live-feed thread.
     let tokens = Arc::new(io::token_store::TokenKeeper::new(nvs.clone())?);
     let net_beat = Arc::new(Heartbeat::new(Instant::now()));
     let feed_beat = Arc::new(Heartbeat::new(Instant::now()));
-    // Every spawned thread with its heartbeat, watched by `check_threads`.
-    let threads = [
+    Ok([
         Watched {
             name: "net",
             handle: net::spawn(
-                peripherals.modem,
-                sys_loop.clone(),
-                nvs.clone(),
+                modem,
+                sys_loop,
+                nvs,
                 tx.clone(),
                 net::Shared {
-                    snapshot: Arc::clone(&snapshot),
+                    snapshot: Arc::clone(snapshot),
                     live: Arc::clone(&live),
                     tokens: Arc::clone(&tokens),
                 },
@@ -103,12 +127,7 @@ fn main() -> anyhow::Result<()> {
         #[cfg(not(feature = "player"))]
         Watched {
             name: "live",
-            handle: io::live::spawn(
-                tx.clone(),
-                Arc::clone(&live),
-                Arc::clone(&tokens),
-                Arc::clone(&feed_beat),
-            )?,
+            handle: io::live::spawn(tx.clone(), live, tokens, Arc::clone(&feed_beat))?,
             heartbeat: feed_beat,
         },
         #[cfg(feature = "player")]
@@ -117,53 +136,69 @@ fn main() -> anyhow::Result<()> {
             handle: replay::spawn(tx.clone(), Arc::clone(&feed_beat))?,
             heartbeat: feed_beat,
         },
-    ];
+    ])
+}
 
-    let mut frame = Frame::new();
-    let mut next_thread_check = Instant::now() + THREAD_CHECK_EVERY;
+/// The once-a-second checks: every thread still running, and a new firmware
+/// on trial healthy in time. Restarts the chip when one fails. Here in the
+/// render loop, not in the net thread: that thread may be the one stuck.
+fn supervise(threads: &[Watched], booted: Instant, now: Instant) {
+    check_threads(threads, now);
+    if io::ota::trial_overdue(now.duration_since(booted)) {
+        log::error!(
+            "ota: new firmware not healthy {} s after boot, restarting",
+            now.duration_since(booted).as_secs()
+        );
+        restart();
+    }
+}
 
-    loop {
-        let now = Instant::now();
+/// What the render loop owns: the decisions, the LEDs, and the settings to
+/// save.
+struct Lamp {
+    controller: Controller,
+    leds: LedOutput<'static>,
+    storage: SettingsStore,
+    frame: Frame,
+    /// Shared with the web server.
+    snapshot: Arc<Mutex<Snapshot>>,
+    /// The last one shared, so only changes are copied and logged.
+    last_snapshot: Snapshot,
+}
 
-        if now >= next_thread_check {
-            check_threads(&threads, now);
-            // Here, not in the net thread: that thread may be the one stuck.
-            if io::ota::trial_overdue(now.duration_since(booted)) {
-                log::error!(
-                    "ota: new firmware not healthy {} s after boot, restarting",
-                    now.duration_since(booted).as_secs()
-                );
-                restart();
-            }
-            next_thread_check = now + THREAD_CHECK_EVERY;
-        }
-
+impl Lamp {
+    /// Applies every input waiting; new settings are also saved, later.
+    fn take_inputs(&mut self, rx: &Receiver<Input>, now: Instant) {
         while let Ok(input) = rx.try_recv() {
             log::info!("input: {input:?}");
-            controller.apply(input, now);
+            self.controller.apply(input, now);
             if let Input::Settings(s) = input {
-                storage.changed(s);
+                self.storage.changed(s);
             }
         }
+    }
 
-        controller.render(now, &mut frame);
-        if let Err(e) = leds.write(&frame) {
+    /// Renders a frame and sends it to the LEDs.
+    fn show(&mut self, now: Instant) {
+        self.controller.render(now, &mut self.frame);
+        if let Err(e) = self.leds.write(&self.frame) {
             log::warn!("{e}");
         }
+    }
 
-        // After render, which ticks, so expired overlays don't show.
-        let snap = controller.snapshot();
-        if snap != last_snapshot {
-            *snapshot.lock().unwrap() = snap;
-            match serde_json::to_string(&snap) {
-                Ok(json) => log::info!("snapshot: {json}"),
-                Err(e) => log::warn!("snapshot not serialisable: {e}"),
-            }
-            last_snapshot = snap;
+    /// Shares the snapshot with the web server when it changed. After
+    /// `show`, which ticks, so expired overlays don't show.
+    fn publish_snapshot(&mut self) {
+        let snap = self.controller.snapshot();
+        if snap == self.last_snapshot {
+            return;
         }
-
-        storage.save_if_due(now);
-        thread::sleep(FRAME_INTERVAL);
+        *self.snapshot.lock().unwrap() = snap;
+        match serde_json::to_string(&snap) {
+            Ok(json) => log::info!("snapshot: {json}"),
+            Err(e) => log::warn!("snapshot not serialisable: {e}"),
+        }
+        self.last_snapshot = snap;
     }
 }
 

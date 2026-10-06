@@ -14,6 +14,7 @@ use f1_core::{
     command::OverrideRequest, input::Input, settings::Settings, snapshot::Snapshot,
     token::TokenStatus,
 };
+use serde::de::DeserializeOwned;
 
 use crate::io::{clock, ota, token_store::TokenKeeper, weblog};
 
@@ -49,7 +50,23 @@ pub fn start(
     };
 
     let mut server = EspHttpServer::new(&config)?;
+    page_routes(&mut server, snapshot)?;
+    command_routes(&mut server, tx)?;
+    token_routes(&mut server, tokens)?;
+    ota_route(&mut server)?;
+    #[cfg(feature = "player")]
+    replay_routes(&mut server)?;
 
+    log::info!("web server started");
+    Ok(server)
+}
+
+/// The page itself, `GET /api/state` (what the lamp shows) and
+/// `GET /api/log` (its latest log lines).
+fn page_routes(
+    server: &mut EspHttpServer<'static>,
+    snapshot: Arc<Mutex<Snapshot>>,
+) -> anyhow::Result<()> {
     server.fn_handler::<anyhow::Error, _>("/", Method::Get, |req| {
         reply(req, 200, HTML, INDEX_HTML.as_bytes())
     })?;
@@ -60,43 +77,40 @@ pub fn start(
         reply(req, 200, JSON, &serde_json::to_vec(&state)?)
     })?;
 
+    // `?after=<n>`: the lines after number n; without it, only where to start.
+    // Logs nothing itself, or every poll would add a line.
+    server.fn_handler::<anyhow::Error, _>("/api/log", Method::Get, |req| {
+        let after = query_number(req.uri(), "after");
+        reply(req, 200, JSON, &serde_json::to_vec(&weblog::page(after))?)
+    })?;
+    Ok(())
+}
+
+/// `POST /api/settings` (the whole `Settings`) and `POST /api/override` (a
+/// flag or colour by hand), both handed to the render loop.
+fn command_routes(
+    server: &mut EspHttpServer<'static>,
+    tx: SyncSender<Input>,
+) -> anyhow::Result<()> {
     let settings_tx = tx.clone();
-    server.fn_handler::<anyhow::Error, _>("/api/settings", Method::Post, move |mut req| {
-        if !from_page(&req) {
-            return refuse(req);
-        }
-        let Some(body) = read_body(&mut req, MAX_BODY)? else {
-            return reply(req, 413, TEXT, b"body too large");
-        };
-        match serde_json::from_slice::<Settings>(&body) {
-            Ok(settings) => send(req, &settings_tx, Input::Settings(settings)),
-            Err(e) => {
-                log::warn!("rejected settings: {e}");
-                reply(req, 400, TEXT, format!("bad settings: {e}").as_bytes())
-            }
-        }
+    server.fn_handler::<anyhow::Error, _>("/api/settings", Method::Post, move |req| {
+        post_json(req, "settings", |req, settings: Settings| {
+            send(req, &settings_tx, Input::Settings(settings))
+        })
     })?;
 
-    server.fn_handler::<anyhow::Error, _>("/api/override", Method::Post, move |mut req| {
-        if !from_page(&req) {
-            return refuse(req);
-        }
-        let Some(body) = read_body(&mut req, MAX_BODY)? else {
-            return reply(req, 413, TEXT, b"body too large");
-        };
-        match serde_json::from_slice::<OverrideRequest>(&body) {
-            Ok(request) => send(req, &tx, request.into_input()),
-            Err(e) => {
-                log::warn!("rejected override: {e}");
-                reply(req, 400, TEXT, format!("bad override: {e}").as_bytes())
-            }
-        }
+    server.fn_handler::<anyhow::Error, _>("/api/override", Method::Post, move |req| {
+        post_json(req, "override", |req, request: OverrideRequest| {
+            send(req, &tx, request.into_input())
+        })
     })?;
+    Ok(())
+}
 
-    token_routes(&mut server, tokens)?;
-
-    // In every build, replay and showcase included: whatever runs must be
-    // able to receive the next firmware, or the way back needs the cable.
+/// `POST /api/ota`: a firmware image, with the update key. In every build,
+/// replay and showcase included: whatever runs must be able to receive the
+/// next firmware, or the way back needs the cable.
+fn ota_route(server: &mut EspHttpServer<'static>) -> anyhow::Result<()> {
     server.fn_handler::<anyhow::Error, _>("/api/ota", Method::Post, |mut req| {
         if !from_page(&req) {
             return refuse(req);
@@ -127,19 +141,7 @@ pub fn start(
             }
         }
     })?;
-
-    // `?after=<n>`: the lines after number n; without it, only where to start.
-    // Logs nothing itself, or every poll would add a line.
-    server.fn_handler::<anyhow::Error, _>("/api/log", Method::Get, |req| {
-        let after = query_number(req.uri(), "after");
-        reply(req, 200, JSON, &serde_json::to_vec(&weblog::page(after))?)
-    })?;
-
-    #[cfg(feature = "player")]
-    replay_routes(&mut server)?;
-
-    log::info!("web server started");
-    Ok(server)
+    Ok(())
 }
 
 /// `GET /api/replay` (status) and `POST /api/replay` (a command). Without a
@@ -163,31 +165,14 @@ fn replay_routes(server: &mut EspHttpServer<'static>) -> anyhow::Result<()> {
         reply(req, 200, JSON, &serde_json::to_vec(&body)?)
     })?;
 
-    server.fn_handler::<anyhow::Error, _>("/api/replay", Method::Post, |mut req| {
-        if !from_page(&req) {
-            return refuse(req);
-        }
-        let Some(replay) = crate::replay::handle() else {
-            return reply(req, 404, TEXT, b"no replay");
-        };
-        let Some(body) = read_body(&mut req, MAX_BODY)? else {
-            return reply(req, 413, TEXT, b"body too large");
-        };
-        match serde_json::from_slice::<ReplayCommand>(&body) {
-            Ok(command) => {
-                replay.send(command)?;
-                reply(req, 204, TEXT, b"")
-            }
-            Err(e) => {
-                log::warn!("rejected replay command: {e}");
-                reply(
-                    req,
-                    400,
-                    TEXT,
-                    format!("bad replay command: {e}").as_bytes(),
-                )
-            }
-        }
+    server.fn_handler::<anyhow::Error, _>("/api/replay", Method::Post, |req| {
+        post_json(req, "replay command", |req, command: ReplayCommand| {
+            let Some(replay) = crate::replay::handle() else {
+                return reply(req, 404, TEXT, b"no replay");
+            };
+            replay.send(command)?;
+            reply(req, 204, TEXT, b"")
+        })
     })?;
     Ok(())
 }
@@ -232,6 +217,30 @@ fn query_number(uri: &str, name: &str) -> Option<u64> {
         .filter_map(|pair| pair.split_once('='))
         .find(|(key, _)| *key == name)
         .and_then(|(_, value)| value.parse().ok())
+}
+
+/// What every JSON POST checks first: the page header (else 403), a body of
+/// at most `MAX_BODY` bytes (else 413), and JSON that reads as `T` (else a
+/// log line and 400, both naming `what`). Then `act` gets the request and the
+/// value, and answers.
+fn post_json<'r, 'c, T: DeserializeOwned>(
+    mut req: Request<&'r mut EspHttpConnection<'c>>,
+    what: &str,
+    act: impl FnOnce(Request<&'r mut EspHttpConnection<'c>>, T) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    if !from_page(&req) {
+        return refuse(req);
+    }
+    let Some(body) = read_body(&mut req, MAX_BODY)? else {
+        return reply(req, 413, TEXT, b"body too large");
+    };
+    match serde_json::from_slice::<T>(&body) {
+        Ok(value) => act(req, value),
+        Err(e) => {
+            log::warn!("rejected {what}: {e}");
+            reply(req, 400, TEXT, format!("bad {what}: {e}").as_bytes())
+        }
+    }
 }
 
 /// Whether a POST carries `PAGE_HEADER`, as the lamp's own page and ota.ps1 do.

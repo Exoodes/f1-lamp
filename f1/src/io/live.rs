@@ -8,8 +8,8 @@
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, RecvTimeoutError, SyncSender},
-        Arc, Mutex,
+        mpsc::{self, Receiver, RecvTimeoutError, SyncSender},
+        Arc, Mutex, MutexGuard,
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -22,7 +22,7 @@ use f1_core::{
     feed_health::FeedHealth,
     heartbeat::Heartbeat,
     input::{Input, RaceEvent},
-    live::LiveSession,
+    live::{LiveSession, Received},
     signalr::PING,
 };
 use serde::Deserialize;
@@ -202,43 +202,8 @@ fn session(
     heartbeat: &Heartbeat,
     health: &mut FeedHealth,
 ) -> anyhow::Result<()> {
-    // Without a usable token, the public streams: the lamp works either way.
-    // `auth` holds the token: never log it or `headers`.
-    let auth = tokens.bearer_if_usable(clock::unix_now());
-    log::info!(
-        "live: connecting {} F1TV token",
-        if auth.is_some() { "with" } else { "without" }
-    );
-    let (cookie, token) = negotiate(auth.as_deref())?;
-    heartbeat.beat(Instant::now());
-    let mut headers = cookie.map_or(String::new(), |c| format!("Cookie: {c}\r\n"));
-    if let Some(auth) = &auth {
-        headers.push_str(&format!("Authorization: {auth}\r\n"));
-    }
-
-    // No HTTPS request while the handshake and the large first answer need
-    // the heap; released once subscribed, or after `TLS_HOLD_MAX` at most.
-    let mut tls = Some(http::TLS.lock().unwrap_or_else(|e| e.into_inner()));
-    let (events_tx, events) = mpsc::channel();
-    let ws = WebSocket::connect(&format!("{HUB}?id={token}"), &headers, events_tx)?;
-
-    match events.recv_timeout(CONNECT_TIMEOUT) {
-        Ok(WsEvent::Connected) => {}
-        Ok(other) => bail!("WebSocket didn't open: {other:?}"),
-        Err(_) => bail!(
-            "WebSocket didn't open within {} s",
-            CONNECT_TIMEOUT.as_secs()
-        ),
-    }
-    for frame in LiveSession::opening_frames(auth.is_some()) {
-        ws.send_text(&frame, SEND_TIMEOUT)?;
-    }
-    log::info!("live: connected, subscribing");
-
+    let mut conn = Connection::open(tokens, heartbeat)?;
     let mut live = LiveSession::new(MAX_FRAME);
-    let mut last_data = Instant::now();
-    let mut next_ping = Instant::now() + PING_EVERY;
-    let release_tls_at = Instant::now() + TLS_HOLD_MAX;
     loop {
         if !control.wanted() {
             log::info!("live: closing, feed not wanted");
@@ -246,74 +211,178 @@ fn session(
         }
         let now = Instant::now();
         heartbeat.beat(now);
-        if tls.is_some() && now >= release_tls_at {
-            drop(tls.take());
+        conn.tick(now)?;
+        let Some(data) = conn.next_data(now)? else {
+            continue;
+        };
+        if data.offset == 0 {
+            live.expect(data.frame_len);
+        }
+        let received = live.receive(&data.bytes);
+        handle(received, &mut conn, tx, control, health)?;
+    }
+}
+
+/// An open WebSocket to the feed, subscribed or about to be.
+struct Connection {
+    /// Declared first, so it's dropped (closed) before `events` and `tls`.
+    ws: WebSocket,
+    events: Receiver<WsEvent>,
+    /// No HTTPS request while the handshake and the large first answer need
+    /// the heap; released once subscribed, or after `TLS_HOLD_MAX` at most.
+    tls: Option<MutexGuard<'static, ()>>,
+    release_tls_at: Instant,
+    next_ping: Instant,
+    last_data: Instant,
+}
+
+/// A piece of a WebSocket frame: `frame_len` is the whole frame's length and
+/// `offset` where this piece starts in it.
+struct Data {
+    bytes: Vec<u8>,
+    frame_len: usize,
+    offset: usize,
+}
+
+impl Connection {
+    /// Negotiates, opens the WebSocket and sends the handshake and the
+    /// subscriptions.
+    fn open(tokens: &TokenKeeper, heartbeat: &Heartbeat) -> anyhow::Result<Self> {
+        // Without a usable token, the public streams: the lamp works either way.
+        // `auth` holds the token: never log it or `headers`.
+        let auth = tokens.bearer_if_usable(clock::unix_now());
+        log::info!(
+            "live: connecting {} F1TV token",
+            if auth.is_some() { "with" } else { "without" }
+        );
+        let (cookie, token) = negotiate(auth.as_deref())?;
+        heartbeat.beat(Instant::now());
+        let mut headers = cookie.map_or(String::new(), |c| format!("Cookie: {c}\r\n"));
+        if let Some(auth) = &auth {
+            headers.push_str(&format!("Authorization: {auth}\r\n"));
+        }
+
+        let tls = Some(http::TLS.lock().unwrap_or_else(|e| e.into_inner()));
+        let (events_tx, events) = mpsc::channel();
+        let ws = WebSocket::connect(&format!("{HUB}?id={token}"), &headers, events_tx)?;
+
+        match events.recv_timeout(CONNECT_TIMEOUT) {
+            Ok(WsEvent::Connected) => {}
+            Ok(other) => bail!("WebSocket didn't open: {other:?}"),
+            Err(_) => bail!(
+                "WebSocket didn't open within {} s",
+                CONNECT_TIMEOUT.as_secs()
+            ),
+        }
+        for frame in LiveSession::opening_frames(auth.is_some()) {
+            ws.send_text(&frame, SEND_TIMEOUT)?;
+        }
+        log::info!("live: connected, subscribing");
+
+        let now = Instant::now();
+        Ok(Connection {
+            ws,
+            events,
+            tls,
+            release_tls_at: now + TLS_HOLD_MAX,
+            next_ping: now + PING_EVERY,
+            last_data: now,
+        })
+    }
+
+    /// The time-driven part: let go of the TLS lock when it's been held too
+    /// long, ping when it's due, give up when nothing has come for too long.
+    fn tick(&mut self, now: Instant) -> anyhow::Result<()> {
+        if self.tls.is_some() && now >= self.release_tls_at {
+            drop(self.tls.take());
             log::warn!(
                 "live: no answer to Subscribe within {} s; letting HTTPS requests run",
                 TLS_HOLD_MAX.as_secs()
             );
         }
-        if now >= next_ping {
-            ws.send_text(PING, SEND_TIMEOUT)?;
-            next_ping = now + PING_EVERY;
+        if now >= self.next_ping {
+            self.ws.send_text(PING, SEND_TIMEOUT)?;
+            self.next_ping = now + PING_EVERY;
         }
-        if now.duration_since(last_data) > SILENCE_LIMIT {
+        if now.duration_since(self.last_data) > SILENCE_LIMIT {
             bail!("nothing received for {} s", SILENCE_LIMIT.as_secs());
         }
+        Ok(())
+    }
 
-        let wake = if tls.is_some() {
-            next_ping.min(release_tls_at)
+    /// Waits for the next piece of data until something in `tick` is due.
+    /// `None` when that time came first, or for an event without data.
+    fn next_data(&mut self, now: Instant) -> anyhow::Result<Option<Data>> {
+        let wake = if self.tls.is_some() {
+            self.next_ping.min(self.release_tls_at)
         } else {
-            next_ping
+            self.next_ping
         };
-        let event = match events.recv_timeout(wake.saturating_duration_since(now)) {
+        let event = match self
+            .events
+            .recv_timeout(wake.saturating_duration_since(now))
+        {
             Ok(event) => event,
-            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Timeout) => return Ok(None),
             Err(RecvTimeoutError::Disconnected) => bail!("WebSocket task gone"),
         };
-        let (bytes, frame_len, offset) = match event {
+        match event {
             WsEvent::Data {
                 bytes,
                 frame_len,
                 offset,
-            } => (bytes, frame_len, offset),
-            WsEvent::Connected => continue,
+            } => {
+                self.last_data = Instant::now();
+                Ok(Some(Data {
+                    bytes,
+                    frame_len,
+                    offset,
+                }))
+            }
+            WsEvent::Connected => Ok(None),
             WsEvent::Disconnected => bail!("connection closed"),
             WsEvent::Error => bail!("WebSocket error"),
-        };
-        last_data = Instant::now();
-        if offset == 0 {
-            live.expect(frame_len);
-        }
-
-        let received = live.receive(&bytes);
-        for problem in &received.problems {
-            log::warn!("live: {problem}");
-        }
-        if received.subscribed {
-            drop(tls.take());
-            tell(tx, health.working())?;
-            let (free, largest) = heap();
-            log::info!(
-                "live: subscribed (session {:?}); heap {free} B free, largest block {largest} B",
-                received.session_key
-            );
-        }
-        for event in received.events {
-            log::info!("live: {event:?}");
-            if matches!(event, RaceEvent::Winner { .. }) {
-                *control.winner_shown.lock().unwrap() = received.session_key;
-            }
-            tx.send(Input::Race {
-                event,
-                received: Instant::now(),
-            })
-            .context("render loop is gone")?;
-        }
-        if let Some(reason) = received.closed {
-            bail!("server closed the connection: {reason}");
         }
     }
+}
+
+/// Acts on what a batch of received bytes produced: logs problems, lets the
+/// TLS lock go once subscribed, and passes race events on to the render loop.
+/// An error when the server closes the connection.
+fn handle(
+    received: Received,
+    conn: &mut Connection,
+    tx: &SyncSender<Input>,
+    control: &LiveControl,
+    health: &mut FeedHealth,
+) -> anyhow::Result<()> {
+    for problem in &received.problems {
+        log::warn!("live: {problem}");
+    }
+    if received.subscribed {
+        drop(conn.tls.take());
+        tell(tx, health.working())?;
+        let (free, largest) = heap();
+        log::info!(
+            "live: subscribed (session {:?}); heap {free} B free, largest block {largest} B",
+            received.session_key
+        );
+    }
+    for event in received.events {
+        log::info!("live: {event:?}");
+        if matches!(event, RaceEvent::Winner { .. }) {
+            *control.winner_shown.lock().unwrap() = received.session_key;
+        }
+        tx.send(Input::Race {
+            event,
+            received: Instant::now(),
+        })
+        .context("render loop is gone")?;
+    }
+    if let Some(reason) = received.closed {
+        bail!("server closed the connection: {reason}");
+    }
+    Ok(())
 }
 
 /// Free heap and the largest block that could still be allocated, in bytes.

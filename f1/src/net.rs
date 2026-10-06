@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::Context;
 use esp_idf_svc::{
-    eventloop::EspSystemEventLoop, hal::modem::Modem, http::server::EspHttpServer,
+    eventloop::EspSystemEventLoop, hal::modem::Modem, http::server::EspHttpServer, mdns::EspMdns,
     nvs::EspDefaultNvsPartition, sntp::EspSntp,
 };
 use f1_core::{
@@ -116,15 +116,57 @@ impl Deadlines {
     }
 }
 
-/// What the scheduler knows: the sessions and the phase it last sent.
+impl Deadlines {
+    /// Every job due at once.
+    fn all(now: Instant) -> Self {
+        Deadlines {
+            wifi_check: now,
+            heap_log: now,
+            clock: now,
+            calendar: now,
+            phase: now,
+            winner: now,
+        }
+    }
+}
+
+/// What the scheduler knows: the sessions, the copy of them in flash, and
+/// the phase it last sent.
 struct Schedule {
     sessions: Vec<Session>,
+    store: ScheduleStore,
+    /// What `store` holds, so an unchanged list isn't written again.
+    saved: Vec<Session>,
     sent_phase: Option<SessionPhase>,
 }
 
 impl Schedule {
-    /// Swaps in a freshly downloaded list.
-    fn replace(&mut self, sessions: Vec<Session>) {
+    /// The sessions saved in flash: a reboot during a session (when OpenF1
+    /// refuses free requests) still knows what's on.
+    fn load(store: ScheduleStore) -> Self {
+        let sessions = store.load();
+        Schedule {
+            saved: sessions.clone(),
+            sessions,
+            store,
+            sent_phase: None,
+        }
+    }
+
+    /// Swaps in a freshly downloaded list, and saves the part of it that
+    /// still matters if that changed.
+    fn replace(&mut self, sessions: Vec<Session>, now_unix: i64) {
+        let relevant = schedule::still_relevant(&sessions, now_unix, CACHED_SESSIONS);
+        if relevant != self.saved {
+            match self.store.save(&relevant) {
+                Ok(()) => {
+                    log::info!("schedule saved: {} sessions", relevant.len());
+                    self.saved = relevant;
+                }
+                // Not fatal: the next download tries again.
+                Err(e) => log::warn!("{e:#}"),
+            }
+        }
         self.sessions = sessions;
     }
 
@@ -157,172 +199,233 @@ fn run(
     shared: Shared,
     heartbeat: &Heartbeat,
 ) -> anyhow::Result<()> {
-    let Shared {
-        snapshot,
-        live,
-        tokens,
-    } = shared;
-    let mut status = None;
-    report(tx, &mut status, NetStatus::Connecting)?;
-    let mut schedule_store = ScheduleStore::new(nvs.clone())?;
-    let mut schedule = Schedule {
-        sessions: schedule_store.load(),
-        sent_phase: None,
-    };
-    let mut saved = schedule.sessions.clone();
-    let mut wifi = wifi::create(modem, sys_loop, nvs, WIFI_SSID, WIFI_PSK)?;
-    let _mdns = mdns::start().context("start mDNS")?;
-    clock::set_timezone();
-    // Kept alive here: time only syncs while this exists. Started once WiFi is up.
-    let mut sntp: Option<EspSntp<'static>> = None;
-    // Same here: dropping it stops the server. Started once WiFi is up, as the
-    // TCP/IP stack doesn't exist before WiFi is created.
-    let mut server: Option<EspHttpServer<'static>> = None;
-    // When the web server started; a new firmware is healthy once it has
-    // served for `HEALTHY_AFTER`, and can then take the next update.
-    let mut server_since: Option<Instant> = None;
-    let mut healthy = false;
-
-    let mut wifi_retry = Backoff::new(FIRST_RETRY_WAIT, MAX_RETRY_WAIT);
-    let mut calendar_retry = Backoff::new(FIRST_CALENDAR_RETRY, MAX_CALENDAR_RETRY);
-    // The session whose winner was sent, so each race is shown once.
-    let mut winner_sent: Option<u32> = None;
-    let now = Instant::now();
-    let mut due = Deadlines {
-        wifi_check: now,
-        heap_log: now,
-        clock: now,
-        calendar: now,
-        phase: now,
-        winner: now,
-    };
-
+    let mut net = Net::start(modem, sys_loop, nvs, tx, shared)?;
     loop {
         let now = Instant::now();
         heartbeat.beat(now);
-
-        if now >= due.wifi_check {
-            due.wifi_check = check_wifi(&mut wifi, tx, &mut status, &mut wifi_retry)?;
-        }
-        if sntp.is_none() && wifi.is_up().unwrap_or(false) {
-            sntp = Some(EspSntp::new_default().context("start SNTP")?);
-            log::info!("SNTP started");
-        }
-        if server.is_none() && wifi.is_up().unwrap_or(false) {
-            server = Some(
-                web::start(Arc::clone(&snapshot), tx.clone(), Arc::clone(&tokens))
-                    .context("start web server")?,
-            );
-            server_since = Some(now);
-        }
-        if !healthy && server_since.is_some_and(|t| now.duration_since(t) >= HEALTHY_AFTER) {
-            ota::mark_healthy();
-            healthy = true;
-        }
-        if now >= due.clock {
-            due.clock = match clock::minute_of_day() {
-                // Until the first sync nothing is sent, so the core keeps "not night".
-                None => now + CLOCK_WAITING_EVERY,
-                Some(minute_of_day) => {
-                    log::info!("clock: {:02}:{:02}", minute_of_day / 60, minute_of_day % 60);
-                    tx.send(Input::Clock { minute_of_day })
-                        .context("render loop is gone")?;
-                    now + CLOCK_EVERY
-                }
-            };
-        }
-        if now >= due.calendar {
-            due.calendar = match (clock::unix_now(), wifi.is_up().unwrap_or(false)) {
-                (Some(unix), true) => match fetch_calendar(unix) {
-                    Ok(sessions) => {
-                        let relevant = schedule::still_relevant(&sessions, unix, CACHED_SESSIONS);
-                        if relevant != saved {
-                            match schedule_store.save(&relevant) {
-                                Ok(()) => {
-                                    log::info!("schedule saved: {} sessions", relevant.len());
-                                    saved = relevant;
-                                }
-                                // Not fatal: the next download tries again.
-                                Err(e) => log::warn!("{e:#}"),
-                            }
-                        }
-                        log_calendar(&sessions, unix);
-                        schedule.replace(sessions);
-                        // Work out the phase straight away with the new list.
-                        due.phase = now;
-                        calendar_retry.reset();
-                        now + CALENDAR_EVERY
-                    }
-                    // Not fatal: the lamp works without a calendar, so log and retry.
-                    Err(e) => {
-                        let wait = calendar_retry.next_wait();
-                        log::warn!("calendar: {e:#}; retrying in {} s", wait.as_secs());
-                        now + wait
-                    }
-                },
-                _ => now + CALENDAR_WAITING_EVERY,
-            };
-        }
-        if now >= due.phase {
-            due.phase = match clock::unix_now() {
-                Some(unix) => {
-                    let phase = schedule.update_phase(unix, tx)?;
-                    // The live feed is needed just before and during a session.
-                    live.set_wanted(
-                        cfg!(feature = "live-now")
-                            || matches!(phase, SessionPhase::PreSession | SessionPhase::Live),
-                    );
-                    let to_boundary = schedule::next_change(&schedule.sessions, unix)
-                        .and_then(|at| u64::try_from(at - unix).ok())
-                        .map(|secs| Duration::from_secs(secs) + BOUNDARY_MARGIN);
-                    now + to_boundary.map_or(PHASE_EVERY, |d| d.min(PHASE_EVERY))
-                }
-                // No valid time yet: the schedule can't be read without it.
-                None => now + PHASE_WAITING_EVERY,
-            };
-        }
-        if now >= due.winner {
-            if let (Some(unix), true) = (clock::unix_now(), wifi.is_up().unwrap_or(false)) {
-                check_winner(&schedule.sessions, unix, &mut winner_sent, &live, tx)?;
-            }
-            due.winner = now + WINNER_EVERY;
-        }
-        if now >= due.heap_log {
-            let (free, min_free) = heap();
-            log::info!("heap: {free} B free, {min_free} B lowest since boot");
-            due.heap_log = now + HEAP_LOG_EVERY;
-        }
-
-        thread::sleep(due.earliest().saturating_duration_since(Instant::now()));
+        net.round(now)?;
+        thread::sleep(net.due.earliest().saturating_duration_since(Instant::now()));
     }
 }
 
-/// Reconnects if WiFi is down. Returns when the next check is due: soon when
-/// all is well, after a wait that doubles with each failure when it isn't.
-fn check_wifi(
-    wifi: &mut wifi::Wifi,
-    tx: &SyncSender<Input>,
-    status: &mut Option<NetStatus>,
-    retry: &mut Backoff,
-) -> anyhow::Result<Instant> {
-    if wifi.is_up().unwrap_or(false) {
-        report(tx, status, NetStatus::Online)?;
-        return Ok(Instant::now() + WIFI_CHECK_EVERY);
+/// The net thread's state from one round of its loop to the next.
+struct Net<'a> {
+    tx: &'a SyncSender<Input>,
+    shared: Shared,
+    wifi: wifi::Wifi,
+    /// The status last sent, so each change is sent once.
+    status: Option<NetStatus>,
+    wifi_retry: Backoff,
+    /// Dropping it stops mDNS.
+    _mdns: EspMdns,
+    /// Kept alive here: time only syncs while this exists. Started once WiFi
+    /// is up.
+    sntp: Option<EspSntp<'static>>,
+    /// Same here: dropping it stops the server. Started once WiFi is up, as
+    /// the TCP/IP stack doesn't exist before WiFi is created.
+    server: Option<EspHttpServer<'static>>,
+    /// When the web server started; a new firmware is healthy once it has
+    /// served for `HEALTHY_AFTER`, and can then take the next update.
+    server_since: Option<Instant>,
+    healthy: bool,
+    schedule: Schedule,
+    calendar_retry: Backoff,
+    /// The session whose winner was sent, so each race is shown once.
+    winner_sent: Option<u32>,
+    due: Deadlines,
+}
+
+impl<'a> Net<'a> {
+    /// Loads the cached schedule and starts WiFi (not yet connected) and
+    /// mDNS.
+    fn start(
+        modem: Modem<'static>,
+        sys_loop: EspSystemEventLoop,
+        nvs: EspDefaultNvsPartition,
+        tx: &'a SyncSender<Input>,
+        shared: Shared,
+    ) -> anyhow::Result<Self> {
+        let mut status = None;
+        report(tx, &mut status, NetStatus::Connecting)?;
+        let schedule = Schedule::load(ScheduleStore::new(nvs.clone())?);
+        let wifi = wifi::create(modem, sys_loop, nvs, WIFI_SSID, WIFI_PSK)?;
+        let mdns = mdns::start().context("start mDNS")?;
+        clock::set_timezone();
+        Ok(Net {
+            tx,
+            shared,
+            wifi,
+            status,
+            wifi_retry: Backoff::new(FIRST_RETRY_WAIT, MAX_RETRY_WAIT),
+            _mdns: mdns,
+            sntp: None,
+            server: None,
+            server_since: None,
+            healthy: false,
+            schedule,
+            calendar_retry: Backoff::new(FIRST_CALENDAR_RETRY, MAX_CALENDAR_RETRY),
+            winner_sent: None,
+            due: Deadlines::all(Instant::now()),
+        })
     }
 
-    report(tx, status, NetStatus::Connecting)?;
-    log::info!("connecting to {WIFI_SSID}");
-    match wifi::connect(wifi) {
-        Ok(()) => {
-            report(tx, status, NetStatus::Online)?;
-            retry.reset();
-            Ok(Instant::now() + WIFI_CHECK_EVERY)
+    /// Runs every job that is due at `now`.
+    fn round(&mut self, now: Instant) -> anyhow::Result<()> {
+        if now >= self.due.wifi_check {
+            self.due.wifi_check = self.check_wifi()?;
         }
-        Err(e) => {
-            let wait = retry.next_wait();
-            log::warn!("wifi: {e:#}; retrying in {} s", wait.as_secs());
-            Ok(Instant::now() + wait)
+        self.start_services(now)?;
+        self.check_trial(now);
+        if now >= self.due.clock {
+            self.due.clock = self.send_clock(now)?;
         }
+        // Before the phase: a new calendar makes the phase due at once.
+        if now >= self.due.calendar {
+            self.due.calendar = self.update_calendar(now);
+        }
+        if now >= self.due.phase {
+            self.due.phase = self.update_phase(now)?;
+        }
+        if now >= self.due.winner {
+            self.look_for_winner()?;
+            self.due.winner = now + WINNER_EVERY;
+        }
+        if now >= self.due.heap_log {
+            let (free, min_free) = heap();
+            log::info!("heap: {free} B free, {min_free} B lowest since boot");
+            self.due.heap_log = now + HEAP_LOG_EVERY;
+        }
+        Ok(())
+    }
+
+    fn wifi_up(&self) -> bool {
+        self.wifi.is_up().unwrap_or(false)
+    }
+
+    /// Reconnects if WiFi is down. Returns when the next check is due: soon
+    /// when all is well, after a wait that doubles with each failure when it
+    /// isn't.
+    fn check_wifi(&mut self) -> anyhow::Result<Instant> {
+        if self.wifi_up() {
+            report(self.tx, &mut self.status, NetStatus::Online)?;
+            return Ok(Instant::now() + WIFI_CHECK_EVERY);
+        }
+
+        report(self.tx, &mut self.status, NetStatus::Connecting)?;
+        log::info!("connecting to {WIFI_SSID}");
+        match wifi::connect(&mut self.wifi) {
+            Ok(()) => {
+                report(self.tx, &mut self.status, NetStatus::Online)?;
+                self.wifi_retry.reset();
+                Ok(Instant::now() + WIFI_CHECK_EVERY)
+            }
+            Err(e) => {
+                let wait = self.wifi_retry.next_wait();
+                log::warn!("wifi: {e:#}; retrying in {} s", wait.as_secs());
+                Ok(Instant::now() + wait)
+            }
+        }
+    }
+
+    /// SNTP and the web server, the first time WiFi is up.
+    fn start_services(&mut self, now: Instant) -> anyhow::Result<()> {
+        if self.sntp.is_none() && self.wifi_up() {
+            self.sntp = Some(EspSntp::new_default().context("start SNTP")?);
+            log::info!("SNTP started");
+        }
+        if self.server.is_none() && self.wifi_up() {
+            let Shared {
+                snapshot, tokens, ..
+            } = &self.shared;
+            self.server = Some(
+                web::start(Arc::clone(snapshot), self.tx.clone(), Arc::clone(tokens))
+                    .context("start web server")?,
+            );
+            self.server_since = Some(now);
+        }
+        Ok(())
+    }
+
+    /// Ends a new firmware's trial once its web server has run long enough.
+    fn check_trial(&mut self, now: Instant) {
+        let served_long_enough = self
+            .server_since
+            .is_some_and(|t| now.duration_since(t) >= HEALTHY_AFTER);
+        if !self.healthy && served_long_enough {
+            ota::mark_healthy();
+            self.healthy = true;
+        }
+    }
+
+    /// Sends the local time once the clock is set. Returns when it's next due.
+    fn send_clock(&self, now: Instant) -> anyhow::Result<Instant> {
+        Ok(match clock::minute_of_day() {
+            // Until the first sync nothing is sent, so the core keeps "not night".
+            None => now + CLOCK_WAITING_EVERY,
+            Some(minute_of_day) => {
+                log::info!("clock: {:02}:{:02}", minute_of_day / 60, minute_of_day % 60);
+                self.tx
+                    .send(Input::Clock { minute_of_day })
+                    .context("render loop is gone")?;
+                now + CLOCK_EVERY
+            }
+        })
+    }
+
+    /// Downloads the calendar once WiFi and the clock are ready. Returns when
+    /// it's next due. Never fails: the lamp works without a calendar.
+    fn update_calendar(&mut self, now: Instant) -> Instant {
+        let (Some(unix), true) = (clock::unix_now(), self.wifi_up()) else {
+            return now + CALENDAR_WAITING_EVERY;
+        };
+        match fetch_calendar(unix) {
+            Ok(sessions) => {
+                self.schedule.replace(sessions, unix);
+                log_calendar(&self.schedule.sessions, unix);
+                // Work out the phase straight away with the new list.
+                self.due.phase = now;
+                self.calendar_retry.reset();
+                now + CALENDAR_EVERY
+            }
+            Err(e) => {
+                let wait = self.calendar_retry.next_wait();
+                log::warn!("calendar: {e:#}; retrying in {} s", wait.as_secs());
+                now + wait
+            }
+        }
+    }
+
+    /// Sends the phase if it changed and says whether the live feed is
+    /// wanted. Returns when it's next due: at the next boundary, or sooner.
+    fn update_phase(&mut self, now: Instant) -> anyhow::Result<Instant> {
+        // No valid time yet: the schedule can't be read without it.
+        let Some(unix) = clock::unix_now() else {
+            return Ok(now + PHASE_WAITING_EVERY);
+        };
+        let phase = self.schedule.update_phase(unix, self.tx)?;
+        // The live feed is needed just before and during a session.
+        self.shared.live.set_wanted(
+            cfg!(feature = "live-now")
+                || matches!(phase, SessionPhase::PreSession | SessionPhase::Live),
+        );
+        let to_boundary = schedule::next_change(&self.schedule.sessions, unix)
+            .and_then(|at| u64::try_from(at - unix).ok())
+            .map(|secs| Duration::from_secs(secs) + BOUNDARY_MARGIN);
+        Ok(now + to_boundary.map_or(PHASE_EVERY, |d| d.min(PHASE_EVERY)))
+    }
+
+    /// The OpenF1 winner lookup, once WiFi and the clock are ready.
+    fn look_for_winner(&mut self) -> anyhow::Result<()> {
+        if let (Some(unix), true) = (clock::unix_now(), self.wifi_up()) {
+            check_winner(
+                &self.schedule.sessions,
+                unix,
+                &mut self.winner_sent,
+                &self.shared.live,
+                self.tx,
+            )?;
+        }
+        Ok(())
     }
 }
 
