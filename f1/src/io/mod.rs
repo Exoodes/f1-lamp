@@ -7,6 +7,7 @@ pub mod live;
 pub mod mdns;
 pub mod ota;
 pub mod storage;
+pub mod system;
 pub mod token_store;
 pub mod weblog;
 pub mod wifi;

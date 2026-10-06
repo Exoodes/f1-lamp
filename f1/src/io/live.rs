@@ -30,7 +30,7 @@ use serde::Deserialize;
 use crate::{
     config,
     io::{
-        clock, http,
+        clock, http, system,
         token_store::TokenKeeper,
         ws::{WebSocket, WsEvent},
     },
@@ -362,10 +362,12 @@ fn handle(
     if received.subscribed {
         drop(conn.tls.take());
         tell(tx, health.working())?;
-        let (free, largest) = heap();
+        let heap = system::heap();
         log::info!(
-            "live: subscribed (session {:?}); heap {free} B free, largest block {largest} B",
-            received.session_key
+            "live: subscribed (session {:?}); heap {} B free, largest block {} B",
+            received.session_key,
+            heap.free,
+            heap.largest_block
         );
     }
     for event in received.events {
@@ -383,15 +385,4 @@ fn handle(
         bail!("server closed the connection: {reason}");
     }
     Ok(())
-}
-
-/// Free heap and the largest block that could still be allocated, in bytes.
-fn heap() -> (u32, usize) {
-    // SAFETY: both only read ESP-IDF's heap counters.
-    unsafe {
-        (
-            esp_idf_svc::sys::esp_get_free_heap_size(),
-            esp_idf_svc::sys::heap_caps_get_largest_free_block(esp_idf_svc::sys::MALLOC_CAP_8BIT),
-        )
-    }
 }

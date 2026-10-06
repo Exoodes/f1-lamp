@@ -22,7 +22,7 @@ use f1_core::{
 use crate::{
     config,
     io::{
-        clock, http, live::LiveControl, mdns, ota, storage::ScheduleStore,
+        clock, http, live::LiveControl, mdns, ota, storage::ScheduleStore, system,
         token_store::TokenKeeper, wifi,
     },
     web, WIFI_PSK, WIFI_SSID,
@@ -291,8 +291,12 @@ impl<'a> Net<'a> {
             self.due.winner = now + WINNER_EVERY;
         }
         if now >= self.due.heap_log {
-            let (free, min_free) = heap();
-            log::info!("heap: {free} B free, {min_free} B lowest since boot");
+            let heap = system::heap();
+            log::info!(
+                "heap: {} B free, {} B lowest since boot",
+                heap.free,
+                heap.lowest
+            );
             self.due.heap_log = now + HEAP_LOG_EVERY;
         }
         Ok(())
@@ -553,16 +557,4 @@ fn report(
     tx.send(Input::Net(new)).context("render loop is gone")?;
     *last = Some(new);
     Ok(())
-}
-
-/// Free heap now, and the lowest it has been since boot, in bytes.
-fn heap() -> (u32, u32) {
-    // SAFETY: both functions only read ESP-IDF's heap counters; they take no
-    // arguments and have no preconditions.
-    unsafe {
-        (
-            esp_idf_svc::sys::esp_get_free_heap_size(),
-            esp_idf_svc::sys::esp_get_minimum_free_heap_size(),
-        )
-    }
 }

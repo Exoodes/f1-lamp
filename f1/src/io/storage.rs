@@ -6,6 +6,7 @@ use f1_core::{
     schedule::{self, Session},
     settings::{self, Settings},
 };
+use serde::de::DeserializeOwned;
 
 use crate::config::nvs::{NAMESPACE, SCHEDULE, SETTINGS};
 
@@ -32,22 +33,9 @@ impl SettingsStore {
     /// The saved settings, or the defaults when none are saved or they can't be read.
     pub fn load(&self) -> Settings {
         let mut buf = [0u8; settings::MAX_JSON];
-        match self.nvs.get_str(SETTINGS, &mut buf) {
-            Ok(Some(json)) => serde_json::from_str(json)
-                .inspect(|settings| log::info!("settings loaded: {settings:?}"))
-                .unwrap_or_else(|e| {
-                    log::warn!("saved settings are broken ({e}), using defaults");
-                    Settings::default()
-                }),
-            Ok(None) => {
-                log::info!("no saved settings, using defaults");
-                Settings::default()
-            }
-            Err(e) => {
-                log::warn!("can't read saved settings ({e}), using defaults");
-                Settings::default()
-            }
-        }
+        load_json(&self.nvs, SETTINGS, &mut buf, "settings", "using defaults")
+            .inspect(|settings: &Settings| log::info!("settings loaded: {settings:?}"))
+            .unwrap_or_default()
     }
 
     /// Remembers `settings` to be saved by the next due `save_if_due`.
@@ -96,24 +84,11 @@ impl ScheduleStore {
     /// The saved sessions; empty if none are saved or they can't be read.
     pub fn load(&self) -> Vec<Session> {
         let mut buf = [0u8; schedule::MAX_JSON];
-        match self.nvs.get_str(SCHEDULE, &mut buf) {
-            Ok(Some(json)) => serde_json::from_str(json)
-                .inspect(|sessions: &Vec<Session>| {
-                    log::info!("schedule loaded: {} sessions", sessions.len())
-                })
-                .unwrap_or_else(|e| {
-                    log::warn!("saved schedule is broken ({e}), starting empty");
-                    Vec::new()
-                }),
-            Ok(None) => {
-                log::info!("no saved schedule");
-                Vec::new()
-            }
-            Err(e) => {
-                log::warn!("can't read saved schedule ({e}), starting empty");
-                Vec::new()
-            }
-        }
+        load_json(&self.nvs, SCHEDULE, &mut buf, "schedule", "starting empty")
+            .inspect(|sessions: &Vec<Session>| {
+                log::info!("schedule loaded: {} sessions", sessions.len());
+            })
+            .unwrap_or_default()
     }
 
     /// Saves `sessions`, replacing what was saved before. Not throttled: the
@@ -124,5 +99,31 @@ impl ScheduleStore {
             .set_str(SCHEDULE, &json)
             .context("write schedule")?;
         Ok(())
+    }
+}
+
+/// The JSON saved under `key`, read as `T`. `buf` must hold the longest
+/// entry. `None` when nothing is saved, or what is saved can't be read or
+/// parsed; the log line names `what` and says what happens instead
+/// (`fallback`).
+fn load_json<T: DeserializeOwned>(
+    nvs: &EspNvs<NvsDefault>,
+    key: &str,
+    buf: &mut [u8],
+    what: &str,
+    fallback: &str,
+) -> Option<T> {
+    match nvs.get_str(key, buf) {
+        Ok(Some(json)) => serde_json::from_str(json)
+            .inspect_err(|e| log::warn!("saved {what} is broken ({e}), {fallback}"))
+            .ok(),
+        Ok(None) => {
+            log::info!("no saved {what}, {fallback}");
+            None
+        }
+        Err(e) => {
+            log::warn!("can't read saved {what} ({e}), {fallback}");
+            None
+        }
     }
 }
