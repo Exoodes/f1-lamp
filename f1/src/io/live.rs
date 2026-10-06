@@ -18,6 +18,7 @@ use std::{
 use anyhow::{bail, Context};
 use esp_idf_svc::http::Method;
 use f1_core::{
+    backoff::Backoff,
     feed_health::FeedHealth,
     heartbeat::Heartbeat,
     input::{Input, RaceEvent},
@@ -26,10 +27,13 @@ use f1_core::{
 };
 use serde::Deserialize;
 
-use crate::io::{
-    clock, http,
-    token_store::TokenKeeper,
-    ws::{WebSocket, WsEvent},
+use crate::{
+    config,
+    io::{
+        clock, http,
+        token_store::TokenKeeper,
+        ws::{WebSocket, WsEvent},
+    },
 };
 
 const NEGOTIATE: &str = "https://livetiming.formula1.com/signalrcore/negotiate";
@@ -93,7 +97,7 @@ pub fn spawn(
 ) -> anyhow::Result<JoinHandle<()>> {
     let handle = thread::Builder::new()
         .name("live".into())
-        .stack_size(12 * 1024)
+        .stack_size(config::stack::LIVE)
         .spawn(move || run(&tx, &control, &tokens, &heartbeat))?;
     Ok(handle)
 }
@@ -101,12 +105,12 @@ pub fn spawn(
 /// Never returns. Without the render loop the lamp is dead anyway, and the
 /// thread check in main restarts the chip.
 fn run(tx: &SyncSender<Input>, control: &LiveControl, tokens: &TokenKeeper, heartbeat: &Heartbeat) {
-    let mut retry = FIRST_RETRY;
+    let mut retry = Backoff::new(FIRST_RETRY, MAX_RETRY);
     let mut health = FeedHealth::default();
     loop {
         heartbeat.beat(Instant::now());
         if !control.wanted() {
-            retry = FIRST_RETRY;
+            retry.reset();
             if tell(tx, health.not_wanted()).is_err() {
                 return;
             }
@@ -114,15 +118,15 @@ fn run(tx: &SyncSender<Input>, control: &LiveControl, tokens: &TokenKeeper, hear
             continue;
         }
         match session(tx, control, tokens, heartbeat, &mut health) {
-            Ok(()) => retry = FIRST_RETRY,
+            Ok(()) => retry.reset(),
             Err(e) => {
-                log::warn!("live: {e:#}; again in {} s", retry.as_secs());
+                let wait = retry.next_wait();
+                log::warn!("live: {e:#}; again in {} s", wait.as_secs());
                 if tell(tx, health.failed()).is_err() {
                     return;
                 }
                 heartbeat.beat(Instant::now());
-                thread::sleep(retry);
-                retry = (retry * 2).min(MAX_RETRY);
+                thread::sleep(wait);
             }
         }
     }

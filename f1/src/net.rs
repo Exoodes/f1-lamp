@@ -10,6 +10,7 @@ use esp_idf_svc::{
     nvs::EspDefaultNvsPartition, sntp::EspSntp,
 };
 use f1_core::{
+    backoff::Backoff,
     color::Rgb,
     heartbeat::Heartbeat,
     input::{Input, NetStatus, RaceEvent, SessionPhase},
@@ -19,6 +20,7 @@ use f1_core::{
 };
 
 use crate::{
+    config,
     io::{
         clock, http, live::LiveControl, mdns, ota, storage::ScheduleStore,
         token_store::TokenKeeper, wifi,
@@ -48,7 +50,7 @@ pub fn spawn(
 ) -> anyhow::Result<JoinHandle<()>> {
     let handle = thread::Builder::new()
         .name("net".into())
-        .stack_size(16 * 1024)
+        .stack_size(config::stack::NET)
         .spawn(move || {
             if let Err(e) = run(modem, sys_loop, nvs, &tx, shared, &heartbeat) {
                 log::error!("network thread stopped: {e:#}");
@@ -181,8 +183,8 @@ fn run(
     let mut server_since: Option<Instant> = None;
     let mut healthy = false;
 
-    let mut retry_wait = FIRST_RETRY_WAIT;
-    let mut calendar_retry = FIRST_CALENDAR_RETRY;
+    let mut wifi_retry = Backoff::new(FIRST_RETRY_WAIT, MAX_RETRY_WAIT);
+    let mut calendar_retry = Backoff::new(FIRST_CALENDAR_RETRY, MAX_CALENDAR_RETRY);
     // The session whose winner was sent, so each race is shown once.
     let mut winner_sent: Option<u32> = None;
     let now = Instant::now();
@@ -200,7 +202,7 @@ fn run(
         heartbeat.beat(now);
 
         if now >= due.wifi_check {
-            due.wifi_check = check_wifi(&mut wifi, tx, &mut status, &mut retry_wait)?;
+            due.wifi_check = check_wifi(&mut wifi, tx, &mut status, &mut wifi_retry)?;
         }
         if sntp.is_none() && wifi.is_up().unwrap_or(false) {
             sntp = Some(EspSntp::new_default().context("start SNTP")?);
@@ -248,18 +250,14 @@ fn run(
                         schedule.replace(sessions);
                         // Work out the phase straight away with the new list.
                         due.phase = now;
-                        calendar_retry = FIRST_CALENDAR_RETRY;
+                        calendar_retry.reset();
                         now + CALENDAR_EVERY
                     }
                     // Not fatal: the lamp works without a calendar, so log and retry.
                     Err(e) => {
-                        log::warn!(
-                            "calendar: {e:#}; retrying in {} s",
-                            calendar_retry.as_secs()
-                        );
-                        let next = now + calendar_retry;
-                        calendar_retry = (calendar_retry * 2).min(MAX_CALENDAR_RETRY);
-                        next
+                        let wait = calendar_retry.next_wait();
+                        log::warn!("calendar: {e:#}; retrying in {} s", wait.as_secs());
+                        now + wait
                     }
                 },
                 _ => now + CALENDAR_WAITING_EVERY,
@@ -305,7 +303,7 @@ fn check_wifi(
     wifi: &mut wifi::Wifi,
     tx: &SyncSender<Input>,
     status: &mut Option<NetStatus>,
-    retry_wait: &mut Duration,
+    retry: &mut Backoff,
 ) -> anyhow::Result<Instant> {
     if wifi.is_up().unwrap_or(false) {
         report(tx, status, NetStatus::Online)?;
@@ -317,14 +315,13 @@ fn check_wifi(
     match wifi::connect(wifi) {
         Ok(()) => {
             report(tx, status, NetStatus::Online)?;
-            *retry_wait = FIRST_RETRY_WAIT;
+            retry.reset();
             Ok(Instant::now() + WIFI_CHECK_EVERY)
         }
         Err(e) => {
-            log::warn!("wifi: {e:#}; retrying in {} s", retry_wait.as_secs());
-            let next = Instant::now() + *retry_wait;
-            *retry_wait = (*retry_wait * 2).min(MAX_RETRY_WAIT);
-            Ok(next)
+            let wait = retry.next_wait();
+            log::warn!("wifi: {e:#}; retrying in {} s", wait.as_secs());
+            Ok(Instant::now() + wait)
         }
     }
 }

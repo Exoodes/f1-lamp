@@ -18,7 +18,6 @@ use f1_core::{
 use crate::io::{clock, ota, token_store::TokenKeeper, weblog};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
-const STACK_SIZE: usize = 10 * 1024;
 /// Larger request bodies are refused, so a client can't exhaust the heap.
 const MAX_BODY: usize = 2048;
 /// A pasted F1TV token, or the whole `loginSession` cookie holding one.
@@ -45,7 +44,7 @@ pub fn start(
     tokens: Arc<TokenKeeper>,
 ) -> anyhow::Result<EspHttpServer<'static>> {
     let config = Configuration {
-        stack_size: STACK_SIZE,
+        stack_size: crate::config::stack::WEB,
         ..Default::default()
     };
 

@@ -12,6 +12,7 @@ use f1_core::{controller::Controller, frame::Frame, heartbeat::Heartbeat, input:
 use io::led::LedOutput;
 use ws2812_esp32_rmt_driver::Ws2812Esp32Rmt;
 
+mod config;
 mod io;
 mod net;
 #[cfg(feature = "player")]
@@ -53,16 +54,13 @@ fn main() -> anyhow::Result<()> {
 
     let mut storage = io::storage::SettingsStore::new(nvs.clone())?;
 
-    // ws2812-esp32-rmt-driver 0.14 only supports the legacy RMT API.
-    // One RMT memory block holds just 2 LEDs' worth of signal, so the driver
-    // refills it ~20 times per frame; WiFi can delay a refill, which breaks
-    // the frame and makes LEDs flicker. Channel 0 borrows the blocks of the
-    // unused channels 1-3, giving each refill 4x more time.
+    // ws2812-esp32-rmt-driver 0.14 only supports the legacy RMT API. The
+    // values and why: `config::led`.
     #[allow(deprecated)]
     let driver = {
         let config = TransmitConfig::new()
-            .clock_divider(1) // required by the ws2812 driver
-            .mem_block_num(4);
+            .clock_divider(config::led::RMT_CLOCK_DIVIDER)
+            .mem_block_num(config::led::RMT_MEM_BLOCKS);
         let tx = TxRmtDriver::new(peripherals.rmt.channel0, peripherals.pins.gpio2, &config)?;
         Ws2812Esp32Rmt::new_with_rmt_driver(tx)?
     };
@@ -76,7 +74,7 @@ fn main() -> anyhow::Result<()> {
     let snapshot = Arc::new(Mutex::new(controller.snapshot()));
     let mut last_snapshot = controller.snapshot();
 
-    let (tx, rx) = mpsc::sync_channel::<Input>(32);
+    let (tx, rx) = mpsc::sync_channel::<Input>(config::INPUT_QUEUE);
     // Set by the net thread, read by the live-feed thread.
     let live = Arc::new(io::live::LiveControl::default());
     // Set from the web page, read by the live-feed thread.

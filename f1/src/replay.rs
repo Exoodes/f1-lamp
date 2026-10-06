@@ -105,7 +105,7 @@ pub fn spawn(tx: SyncSender<Input>, heartbeat: Arc<Heartbeat>) -> anyhow::Result
 
     let thread = thread::Builder::new()
         .name("replay".into())
-        .stack_size(8 * 1024)
+        .stack_size(crate::config::stack::REPLAY)
         .spawn(move || {
             run(&rx, &tx, &heartbeat);
             log::warn!("render loop is gone, stopping the replay");

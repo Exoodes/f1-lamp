@@ -3,14 +3,12 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
 use f1_core::{
-    schedule::Session,
+    schedule::{self, Session},
     settings::{self, Settings},
 };
 
-/// NVS namespace and keys; NVS limits each to 15 characters.
-const NAMESPACE: &str = "f1";
-const KEY: &str = "settings";
-const SCHEDULE_KEY: &str = "schedule";
+use crate::config::nvs::{NAMESPACE, SCHEDULE, SETTINGS};
+
 /// Flash wears out with writes, so changes are saved at most this often.
 const SAVE_EVERY: Duration = Duration::from_secs(5);
 
@@ -34,7 +32,7 @@ impl SettingsStore {
     /// The saved settings, or the defaults when none are saved or they can't be read.
     pub fn load(&self) -> Settings {
         let mut buf = [0u8; settings::MAX_JSON];
-        match self.nvs.get_str(KEY, &mut buf) {
+        match self.nvs.get_str(SETTINGS, &mut buf) {
             Ok(Some(json)) => serde_json::from_str(json)
                 .inspect(|settings| log::info!("settings loaded: {settings:?}"))
                 .unwrap_or_else(|e| {
@@ -68,7 +66,7 @@ impl SettingsStore {
 
         let saved = serde_json::to_string(&settings)
             .context("serialize settings")
-            .and_then(|json| self.nvs.set_str(KEY, &json).context("write settings"));
+            .and_then(|json| self.nvs.set_str(SETTINGS, &json).context("write settings"));
         match saved {
             Ok(()) => {
                 self.last_saved = now;
@@ -97,8 +95,8 @@ impl ScheduleStore {
 
     /// The saved sessions; empty if none are saved or they can't be read.
     pub fn load(&self) -> Vec<Session> {
-        let mut buf = [0u8; 2048];
-        match self.nvs.get_str(SCHEDULE_KEY, &mut buf) {
+        let mut buf = [0u8; schedule::MAX_JSON];
+        match self.nvs.get_str(SCHEDULE, &mut buf) {
             Ok(Some(json)) => serde_json::from_str(json)
                 .inspect(|sessions: &Vec<Session>| {
                     log::info!("schedule loaded: {} sessions", sessions.len())
@@ -123,7 +121,7 @@ impl ScheduleStore {
     pub fn save(&mut self, sessions: &[Session]) -> anyhow::Result<()> {
         let json = serde_json::to_string(sessions).context("serialize schedule")?;
         self.nvs
-            .set_str(SCHEDULE_KEY, &json)
+            .set_str(SCHEDULE, &json)
             .context("write schedule")?;
         Ok(())
     }

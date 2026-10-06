@@ -10,6 +10,10 @@ pub const LIVE_GRACE: i64 = 30 * 60;
 pub const POST_SESSION: i64 = 60 * 60;
 /// How many sessions the cache keeps; NVS entries have size limits.
 pub const CACHED_SESSIONS: usize = 12;
+/// The most bytes the cached schedule's JSON may take: the firmware reads it
+/// into a buffer this big, and a longer entry couldn't be read back. A test
+/// below checks that `CACHED_SESSIONS` sessions fit with room to spare.
+pub const MAX_JSON: usize = 2048;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionKind {
@@ -436,7 +440,7 @@ mod tests {
 
     #[test]
     fn a_full_cache_fits_comfortably_in_nvs() {
-        // Realistic keys and times; the firmware reads it into a 2 KB buffer.
+        // Realistic keys and times, and the longest kind name.
         let sessions: Vec<Session> = (0..CACHED_SESSIONS as u32)
             .map(|i| Session {
                 key: 11_379 + i,
@@ -446,7 +450,7 @@ mod tests {
             })
             .collect();
         let json = serde_json::to_string(&sessions).unwrap();
-        assert!(json.len() < 1500, "{} bytes", json.len());
+        assert!(json.len() < MAX_JSON * 3 / 4, "{} bytes", json.len());
     }
 
     // ---- Winner window ----

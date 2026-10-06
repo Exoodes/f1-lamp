@@ -28,12 +28,7 @@ use esp_idf_svc::{
 };
 use f1_core::ota_trial::{on_boot, BootDecision, HEALTHY_WITHIN};
 
-/// NVS limits names to 15 characters.
-const NAMESPACE: &str = "f1";
-/// How often the firmware on trial has started; absent when none is.
-const TRIAL_KEY: &str = "ota_trial";
-/// Set before switching back, so the firmware that runs next can say why.
-const FELL_BACK_KEY: &str = "ota_fell_back";
+use crate::config::nvs::{NAMESPACE, OTA_FELL_BACK, OTA_TRIAL};
 
 /// Opened at boot by `check_boot`, used by `receive` and `mark_healthy`.
 static TRIAL: OnceLock<Mutex<EspNvs<NvsDefault>>> = OnceLock::new();
@@ -45,24 +40,24 @@ static ON_TRIAL: AtomicBool = AtomicBool::new(false);
 /// three of them. Never returns when it switches back.
 pub fn check_boot(partition: EspDefaultNvsPartition) -> anyhow::Result<()> {
     let nvs = EspNvs::new(partition, NAMESPACE, true).context("open NVS namespace")?;
-    if nvs.remove(FELL_BACK_KEY).unwrap_or(false) {
+    if nvs.remove(OTA_FELL_BACK).unwrap_or(false) {
         log::warn!("ota: the last update kept restarting; this is the firmware from before it");
     }
 
-    match on_boot(nvs.get_u8(TRIAL_KEY).ok().flatten()) {
+    match on_boot(nvs.get_u8(OTA_TRIAL).ok().flatten()) {
         BootDecision::Normal => {}
         BootDecision::Trial { boot } => {
-            nvs.set_u8(TRIAL_KEY, boot)
+            nvs.set_u8(OTA_TRIAL, boot)
                 .context("count the trial boot")?;
             log::info!("ota: new firmware on trial, boot {boot}");
             ON_TRIAL.store(true, Ordering::Relaxed);
         }
         BootDecision::FallBack => {
             // Cleared first: whatever happens next, no endless switching.
-            nvs.remove(TRIAL_KEY).context("end the trial")?;
+            nvs.remove(OTA_TRIAL).context("end the trial")?;
             match switch_to_other_slot() {
                 Ok(()) => {
-                    let _ = nvs.set_u8(FELL_BACK_KEY, 1);
+                    let _ = nvs.set_u8(OTA_FELL_BACK, 1);
                     log::error!(
                         "ota: new firmware never got healthy; going back to the previous one"
                     );
@@ -84,7 +79,7 @@ pub fn mark_healthy() {
     ON_TRIAL.store(false, Ordering::Relaxed);
     let Some(nvs) = TRIAL.get() else { return };
     let nvs = nvs.lock().unwrap_or_else(|e| e.into_inner());
-    if nvs.remove(TRIAL_KEY).unwrap_or(false) {
+    if nvs.remove(OTA_TRIAL).unwrap_or(false) {
         log::info!("ota: new firmware is healthy, trial passed");
     }
 }
@@ -155,7 +150,7 @@ pub fn receive(req: &mut Request<&mut EspHttpConnection<'_>>, len: usize) -> any
     // The new firmware starts on trial.
     if let Some(nvs) = TRIAL.get() {
         let nvs = nvs.lock().unwrap_or_else(|e| e.into_inner());
-        nvs.set_u8(TRIAL_KEY, 0).context("start the trial")?;
+        nvs.set_u8(OTA_TRIAL, 0).context("start the trial")?;
     }
     log::info!("ota: done, {received} bytes; restarting into the new firmware");
     Ok(())

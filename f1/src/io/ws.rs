@@ -32,8 +32,6 @@ use esp_idf_svc::{
 
 /// Bytes the client reads at a time; larger frames come in several chunks.
 const BUFFER_SIZE: i32 = 4096;
-/// The client's own task only copies bytes into a channel.
-const TASK_STACK: i32 = 6 * 1024;
 const NETWORK_TIMEOUT_MS: i32 = 10_000;
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -79,7 +77,7 @@ impl WebSocket {
             headers: headers.as_ptr(),
             crt_bundle_attach: Some(esp_crt_bundle_attach),
             buffer_size: BUFFER_SIZE,
-            task_stack: TASK_STACK,
+            task_stack: crate::config::stack::WS_TASK,
             network_timeout_ms: NETWORK_TIMEOUT_MS,
             // Reconnecting needs a fresh negotiate, so live.rs does it.
             disable_auto_reconnect: true,

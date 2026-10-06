@@ -11,9 +11,8 @@ use anyhow::Context;
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
 use f1_core::token::{F1tvToken, TokenStatus};
 
-/// NVS limits names to 15 characters.
-const NAMESPACE: &str = "f1";
-const KEY: &str = "f1tv_token";
+use crate::config::nvs::{F1TV_TOKEN, NAMESPACE};
+
 /// A JWT is 1-2 KB; stored as a blob, which has no string length limit.
 const MAX_STORED: usize = 4096;
 
@@ -33,7 +32,7 @@ impl TokenKeeper {
     pub fn new(partition: EspDefaultNvsPartition) -> anyhow::Result<Self> {
         let nvs = EspNvs::new(partition, NAMESPACE, true).context("open NVS namespace")?;
         let mut buf = vec![0u8; MAX_STORED];
-        let token = match nvs.get_blob(KEY, &mut buf) {
+        let token = match nvs.get_blob(F1TV_TOKEN, &mut buf) {
             Ok(Some(bytes)) => match std::str::from_utf8(bytes).map(F1tvToken::parse) {
                 Ok(Ok(token)) => {
                     log::info!("F1TV token loaded, expires {}", token.expires());
@@ -90,14 +89,14 @@ impl TokenKeeper {
             if pasted.trim().is_empty() {
                 inner.token = None;
                 inner.rejected = None;
-                inner.nvs.remove(KEY).context("remove F1TV token")?;
+                inner.nvs.remove(F1TV_TOKEN).context("remove F1TV token")?;
                 log::info!("F1TV token removed");
             } else {
                 match F1tvToken::parse(pasted) {
                     Ok(token) => {
                         inner
                             .nvs
-                            .set_blob(KEY, token.to_stored().as_bytes())
+                            .set_blob(F1TV_TOKEN, token.to_stored().as_bytes())
                             .context("save F1TV token")?;
                         log::info!("F1TV token saved, expires {}", token.expires());
                         inner.token = Some(token);
@@ -108,7 +107,7 @@ impl TokenKeeper {
                         log::warn!("F1TV token rejected: {e}");
                         inner.token = None;
                         inner.rejected = Some(e.to_string());
-                        inner.nvs.remove(KEY).context("remove F1TV token")?;
+                        inner.nvs.remove(F1TV_TOKEN).context("remove F1TV token")?;
                     }
                 }
             }
