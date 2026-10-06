@@ -1,3 +1,5 @@
 [toolchain]
-channel = "nightly"
+# Pinned: a plain "nightly" changes under the build. To move on, install a
+# newer nightly, build and test, then change the date here.
+channel = "nightly-2026-09-22"
 components = ["rust-src"]
