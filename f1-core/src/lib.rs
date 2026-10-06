@@ -15,7 +15,7 @@ pub mod logbuf;
 pub mod openf1;
 pub mod ota_trial;
 pub mod overlays;
-pub mod playback;/
+pub mod playback;
 pub mod post;
 pub mod replay;
 pub mod schedule;
