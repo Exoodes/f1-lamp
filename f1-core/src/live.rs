@@ -141,7 +141,8 @@ impl LiveSession {
             Message::Completion { error: Some(e), .. } => {
                 out.problems.push(format!("Subscribe refused: {e}"));
             }
-            // The answer to the race-control call is only history: ignored.
+            // Invocation ids are strings in SignalR's JSON (`subscribe` sends
+            // "1"), so the number is compared as text.
             Message::Completion {
                 invocation_id,
                 result: Some(result),
@@ -160,6 +161,8 @@ impl LiveSession {
             Message::Close { error } => {
                 out.closed = Some(error.clone().unwrap_or_else(|| "no reason".to_owned()));
             }
+            // Among these: the answers to the other `Subscribe` calls, which
+            // are only history (race control, pit stops, overtakes so far).
             Message::Handshake { error: None }
             | Message::Completion { .. }
             | Message::Ping

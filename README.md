@@ -35,9 +35,16 @@ feed does.
 ## Hardware
 
 - Seeed Studio XIAO ESP32-C3 (4 MB flash).
-- 23 WS2812 LEDs, data on GPIO2.
-- USB-C for power. Flash only over the XIAO's own USB cable, never with a
-  separate power-only adapter connected at the same time.
+- 23 WS2812 LEDs in three chained strips (11 + 7 + 5). Data from GPIO2 (the
+  XIAO's pad D0) through a 470 Ω resistor.
+- Power: a 5 V / 2 A adapter into a USB-C breakout, which feeds the LEDs'
+  +5 V directly and the XIAO's 5 V pin in parallel. All LEDs at full white
+  draw about 1.4 A, the XIAO up to about 0.35 A with WiFi: within the 2 A.
+  The firmware doesn't limit the brightness.
+- Flash over USB only through the XIAO's own USB cable, never with the
+  adapter connected at the same time. On that cable the LEDs draw through
+  the PC's port (0.5-0.9 A), so keep the brightness low while flashing, or
+  update over WiFi with `cargo ota`.
 
 ## The repository
 

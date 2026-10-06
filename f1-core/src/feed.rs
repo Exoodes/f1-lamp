@@ -11,6 +11,11 @@ use std::{
     str::FromStr,
 };
 
+/// A JSON object whose keys are numbers, read as a map sorted by them. The
+/// feed sends lists this way so that an update can patch single items:
+/// `{"Messages":{"40":{...}}}` adds or changes message 40 only. Driver lists
+/// are keyed by car number (`{"81":{...}}`). Keys that aren't numbers are
+/// skipped, such as the `_kf` marker in the live feed's first answer.
 #[derive(Debug)]
 pub struct Numbered<K, V>(pub BTreeMap<K, V>);
 
@@ -98,6 +103,11 @@ pub struct TrackStatus {
 }
 
 impl TrackStatus {
+    /// What `Status` says; `Message` repeats it in words ("SCDeployed") and
+    /// isn't read. The codes: 1 all clear, 2 yellow, 4 safety car, 5 red, 6
+    /// virtual safety car, 7 virtual safety car ending. 3 has never been seen
+    /// in the feed; it and any new code read as `Unknown`, which `TrackState`
+    /// ignores, so the last flag stays.
     pub fn code(&self) -> Option<TrackCode> {
         self.status.as_deref().map(|s| match s {
             "1" => TrackCode::AllClear,

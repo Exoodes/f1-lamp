@@ -131,6 +131,7 @@ impl Tracker {
             let Some(number) = line.racing_number.as_deref().and_then(|n| n.parse().ok()) else {
                 continue;
             };
+            // Line 0 is P1; updates name only the lines that changed.
             if index == 0 {
                 self.leader = Some(number);
             }

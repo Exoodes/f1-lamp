@@ -37,7 +37,9 @@ impl TrackState {
     pub fn apply(&mut self, msg: FeedMessage) -> Vec<RaceEvent> {
         let own = match msg {
             FeedMessage::Track(t) => {
-                if let Some(code) = t.code() {
+                // A code the lamp doesn't know changes nothing: better the
+                // last flag than a green that may be wrong.
+                if let Some(code) = t.code().filter(|&c| c != TrackCode::Unknown) {
                     self.track = Some(code);
                 }
                 None
@@ -110,6 +112,11 @@ impl TrackState {
         self.shown
     }
 
+    /// The flag the session's state and the track status mean together. A
+    /// suspended session (`Aborted`) is red whatever the track status says.
+    /// While the session runs the track status decides, a yellow becoming a
+    /// double yellow while any sector has one. Before the start and after
+    /// the finish there is no flag.
     fn derive(&self) -> Option<TrackFlag> {
         use SessionState::{Aborted, Started};
 
@@ -172,6 +179,30 @@ mod tests {
         s.apply(track("1"));
         s.apply(session(SessionState::Started));
         s
+    }
+
+    #[test]
+    fn an_unknown_track_code_keeps_the_last_flag() {
+        let mut s = racing();
+        s.apply(track("4"));
+        assert!(s.apply(track("3")).is_empty());
+        assert!(s.apply(track("9")).is_empty());
+        assert_eq!(s.flag(), Some(TrackFlag::SafetyCar));
+        // A known code afterwards still counts.
+        assert_eq!(s.apply(track("1")), flag(TrackFlag::Green));
+    }
+
+    #[test]
+    fn an_unknown_track_code_before_any_other_still_starts_green() {
+        let mut s = TrackState::default();
+        s.apply(track("3"));
+        assert_eq!(
+            s.apply(session(SessionState::Started)),
+            [
+                RaceEvent::StartLights,
+                RaceEvent::TrackFlag(TrackFlag::Green)
+            ]
+        );
     }
 
     #[test]
@@ -254,10 +285,11 @@ mod tests {
     }
 
     #[test]
-    fn unknown_track_code_shows_green() {
+    fn unknown_track_code_keeps_a_yellow() {
         let mut s = racing();
         s.apply(track("2"));
-        assert_eq!(s.apply(track("3")), flag(TrackFlag::Green));
+        assert!(s.apply(track("3")).is_empty());
+        assert_eq!(s.flag(), Some(TrackFlag::Yellow));
     }
 
     #[test]

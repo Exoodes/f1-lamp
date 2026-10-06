@@ -187,6 +187,8 @@ fn lights_out_ms(hold_ms: u32) -> u64 {
     (START_LIGHTS as u64 - 1) * START_LIGHT_INTERVAL_MS + u64::from(hold_ms)
 }
 
+/// Which of the five start lights LED `i` belongs to: the ring is cut into
+/// five arcs of 4 or 5 LEDs (23 / 5), and the lights come on arc by arc.
 fn segment_of(i: usize) -> usize {
     i * START_LIGHTS / NUM_LEDS
 }

@@ -7,9 +7,10 @@ use crate::{
     settings::Settings,
 };
 
+/// The LEDs' light grows linearly with the value sent, but eyes see dark
+/// steps as larger than bright ones. Correcting with gamma 2.2 makes the
+/// effects' fades and dim colours look even.
 const GAMMA: f32 = 2.2;
-
-pub const MAX_BRIGHTNESS: f32 = 0.6;
 
 fn gamma_table() -> &'static [f32; 256] {
     static TABLE: OnceLock<[f32; 256]> = OnceLock::new();
@@ -18,7 +19,10 @@ fn gamma_table() -> &'static [f32; 256] {
 
 pub fn correct(color: Rgb, brightness: f32) -> Rgb {
     let table = gamma_table();
-    let brightness = brightness.clamp(0.0, MAX_BRIGHTNESS);
+    // No cap below full: the LEDs are fed straight from the 5 V / 2 A
+    // adapter, and all 23 at full white draw about 1.4 A (see the README's
+    // hardware notes for the one case where that's too much).
+    let brightness = brightness.clamp(0.0, 1.0);
     let channel = |c: u8| to_channel(table[usize::from(c)] * brightness);
     Rgb::new(channel(color.r), channel(color.g), channel(color.b))
 }
@@ -118,7 +122,7 @@ mod tests {
 
     #[test]
     fn black_stays_black() {
-        assert_eq!(correct(Rgb::OFF, MAX_BRIGHTNESS), Rgb::OFF);
+        assert_eq!(correct(Rgb::OFF, 1.0), Rgb::OFF);
     }
 
     #[test]
@@ -137,11 +141,9 @@ mod tests {
     }
 
     #[test]
-    fn brightness_is_capped_at_max() {
-        assert_eq!(
-            correct(Rgb::WHITE, 1.0),
-            correct(Rgb::WHITE, MAX_BRIGHTNESS)
-        );
+    fn full_brightness_is_full_white_and_more_is_the_same() {
+        assert_eq!(correct(Rgb::WHITE, 1.0), Rgb::WHITE);
+        assert_eq!(correct(Rgb::WHITE, 2.0), Rgb::WHITE);
     }
 
     #[test]

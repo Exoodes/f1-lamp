@@ -2,6 +2,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use esp_idf_svc::sys;
 
+/// Central European time as a POSIX TZ string: UTC+1 (CET), and UTC+2 (CEST)
+/// from 02:00 on the last Sunday of March (`M3.5.0`) to 03:00 on the last
+/// Sunday of October (`M10.5.0/3`). Only night mode and the log's times are
+/// local; the schedule and the feed work in UTC.
 const TIMEZONE: &str = "CET-1CEST,M3.5.0,M10.5.0/3";
 
 const FIRST_VALID_YEAR: i32 = 2025;
