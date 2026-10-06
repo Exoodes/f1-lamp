@@ -31,3 +31,26 @@ pub fn minute_of_day() -> Option<u16> {
 
     u16::try_from(tm.tm_hour * 60 + tm.tm_min).ok()
 }
+
+/// The time of day for log lines on the web page: local `07:31:02` once
+/// SNTP has set the clock, before that the time since boot (`+3.2s`).
+pub fn log_stamp() -> String {
+    let local = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|d| sys::time_t::try_from(d.as_secs()).ok())
+        .and_then(|c_sec| {
+            let mut tm = sys::tm::default();
+            // SAFETY: both pointers are to valid locals for the call.
+            let result = unsafe { sys::localtime_r(&c_sec, &mut tm) };
+            (!result.is_null() && tm.tm_year + 1900 >= FIRST_VALID_YEAR).then_some(tm)
+        });
+    match local {
+        Some(tm) => format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec),
+        None => {
+            // SAFETY: reads the microseconds since boot; no preconditions.
+            let micros = unsafe { sys::esp_timer_get_time() };
+            format!("+{:.1}s", micros as f64 / 1e6)
+        }
+    }
+}

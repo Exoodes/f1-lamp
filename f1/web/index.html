@@ -736,7 +736,9 @@ async function pollLog() {
     if (page.restarted) addLogLine("— lamp restarted —", "gap");
     if (page.missed > 0) addLogLine(`… ${page.missed} lines missed`, "gap");
     for (const line of page.lines) {
-      addLogLine(line, line.startsWith("E ") ? "e" : line.startsWith("W ") ? "w" : "");
+      // "07:31:02 W f1::live: ...": the level letter follows the time.
+      const level = line.split(" ", 2)[1];
+      addLogLine(line, level === "E" ? "e" : level === "W" ? "w" : "");
     }
     logNext = page.next;
   } catch {

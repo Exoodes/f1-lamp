@@ -10,6 +10,8 @@ use esp_idf_svc::log::{EspIdfLogFilter, EspLogger};
 use f1_core::logbuf::{LogBuffer, LogPage};
 use log::{Log, Metadata, Record};
 
+use crate::io::clock;
+
 /// Enough to bridge the page's one-second polls, even when a burst of lines
 /// (a reconnect, a replay jump) comes in between.
 const LINES: usize = 40;
@@ -37,8 +39,11 @@ impl Log for TeeLogger {
             return;
         }
         // Formatted before taking the lock, which is held only to push.
+        // The time is taken now, when the line is logged: the page may only
+        // fetch it a second (or, from a background tab, much) later.
         let line = format!(
-            "{} {}: {}",
+            "{} {} {}: {}",
+            clock::log_stamp(),
             record.level().as_str().chars().next().unwrap_or('?'),
             record.target(),
             record.args()
