@@ -6,7 +6,7 @@ safety car, VSC and red flag, waves the chequered flag and ends a race in the
 winner's team colour. Between sessions it's a normal lamp.
 
 It reads F1's own live timing feed (the one behind the live timing on
-formula1.com), runs on a Seeed XIAO ESP32-C3 with a ring of 23 WS2812 LEDs,
+formula1.com), runs on a Seeed XIAO ESP32-C3 with 23 WS2812 LEDs,
 and is written in Rust. It was built step by step following *F1 Lightbox in
 Rust: the course*, with some extras of its own.
 
@@ -60,15 +60,26 @@ BACKLOG.md  Ideas for later.
 ```
 
 The firmware is a set of threads that only send `Input` messages to one
-render loop: the network thread (WiFi, clock, OpenF1 calendar and winner,
-web server), the live-feed thread, and in replay builds the replay. The
-render loop owns the `Controller` (f1-core), which decides what the 23 LEDs
-show 50 times a second.
+render loop: the network thread (WiFi, clock, OpenF1 calendar and winner; it
+also starts the web server, which runs on its own task), the live-feed
+thread, and in replay builds the replay. The render loop owns the
+`Controller` (f1-core), which decides what the 23 LEDs show 50 times a
+second. It runs at a higher priority than the network work, so a TLS
+handshake doesn't stall the LEDs, and once a second it checks the threads:
+one that has ended or hasn't reported for 3 minutes restarts the chip.
+`f1/src/config.rs` lists the threads' stacks, the LED settings and the flash
+keys.
 
 ## Setting up
 
-You need the ESP Rust toolchain (`espup`), `ldproxy` and `espflash` 4. See
-the course's stage 0 for the details.
+You need:
+
+- Rust with `rustup`. `f1/rust-toolchain.toml` pins the nightly and its
+  `rust-src`, and rustup installs them on the first build. The ESP32-C3 is
+  RISC-V, so `espup` (the Xtensa toolchain) isn't needed.
+- `cargo install ldproxy espflash` (espflash 4).
+- git and Python 3: the first build downloads ESP-IDF v5.2 and builds it,
+  which takes a while; later builds reuse it.
 
 Create `f1/cfg.toml` (it's in `.gitignore`, keep it out of git):
 
@@ -96,8 +107,14 @@ cargo ota                    # over WiFi: build, upload, wait for the lamp
 ```
 
 The first USB flash writes the partition table (`partitions.csv`): two app
-slots for updates over WiFi. Settings, WiFi and the F1TV token live in NVS,
-which no flash or update touches.
+slots for updates over WiFi. Settings, the F1TV token and the cached
+schedule live in NVS, which no flash or update touches. A USB flash always
+writes the first slot and makes it the one to boot, so it's also the way
+back when updates over WiFi don't work any more.
+
+The WiFi name and password are built into the firmware from `cfg.toml`. To
+change them, edit `cfg.toml` and send a new build: with `cargo ota` while
+the lamp can still reach your network, otherwise over USB.
 
 `cargo ota` is an alias (`f1/.cargo/config.toml`) that builds like
 `cargo run --release` and hands the result to `ota.ps1`, which uploads it to
@@ -109,6 +126,9 @@ so the upload that brings a changed key still needs the old one: after changing
 ```powershell
 $env:F1_LAMP = "192.168.1.53"; cargo ota; Remove-Item Env:F1_LAMP
 ```
+
+The router may give the lamp a new address after it restarts; a DHCP
+reservation in the router keeps it fixed.
 
 A new firmware runs on trial: if it restarts three times without its web
 server running for a minute, the lamp switches back to the previous one on
@@ -137,8 +157,8 @@ only the lines the lamp uses, so a whole race fits in the firmware.
 `http://f1-lightbox.local` (same network only):
 
 - what the lamp shows, the session phase and the network state;
-- lamp colour and brightness, night mode, TV delay, how long green and the
-  winner show;
+- lamp colour and brightness, night mode (in Central European time), TV
+  delay, how long green and the winner show;
 - which events show, and the followed drivers (or all of them);
 - forcing a flag or a colour by hand;
 - the F1TV token (see below);
@@ -151,6 +171,18 @@ Every POST to the lamp must carry the header `X-F1-Lamp` (any value), which
 the page sends; other websites can't, so they can't change the lamp through a
 browser on your network. Scripts must add it too, e.g.
 `curl -H "X-F1-Lamp: 1" -d '{"kind":"release"}' http://f1-lightbox.local/api/override`.
+
+The page uses these, and scripts can too:
+
+| Request | What it does |
+|---|---|
+| `GET /api/state` | What the lamp shows: layer, phase, network, override, settings (JSON) |
+| `POST /api/settings` | All the settings as JSON: get them from `/api/state`, change, send back |
+| `POST /api/override` | `{"kind":"flag","flag":"red"}`, `{"kind":"color","color":"#ff8800"}` or `{"kind":"release"}` |
+| `GET /api/token`, `POST /api/token` | The F1TV token's state; post a token (plain text) to set it, an empty one to remove it |
+| `GET /api/log?after=<n>` | The log lines after number `n` |
+| `POST /api/ota` | A firmware image; also needs `X-F1-Key` (see `cargo ota`) |
+| `GET /api/replay`, `POST /api/replay` | Replay builds only: the position, and `{"action":"play"}`, `pause`, `{"action":"speed","speed":60}`, `lights_out`, `{"action":"seek","position_ms":4000000}` |
 
 ## F1TV (optional)
 
