@@ -1,3 +1,6 @@
+//! [`DriverSet`]: the followed drivers by car number, as a bit set that stays
+//! `Copy`.
+
 use core::fmt;
 
 use serde::{Deserialize, Serialize};

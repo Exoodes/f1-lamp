@@ -1,3 +1,14 @@
+//! What the lamp shows, decided from the inputs the threads send.
+//!
+//! The picture comes from layers, highest first: a flag or colour forced from
+//! the page, a short overlay (start lights, chequered flag, flashes), the
+//! winner, the track flag (only in a live session with the network up), the
+//! network status (around a session, or before the first connection), and
+//! otherwise the lamp's own colour. Race events and phase changes wait for the
+//! TV delay first; settings, overrides, the clock and the network status act
+//! at once. [`Controller::render`] draws the winning layer into a frame and
+//! applies the brightness.
+
 use std::time::{Duration, Instant};
 
 use crate::{

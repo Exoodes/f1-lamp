@@ -1,3 +1,5 @@
+//! Settings and the cached schedule in flash (NVS), as JSON.
+
 use std::time::{Duration, Instant};
 
 use anyhow::Context;

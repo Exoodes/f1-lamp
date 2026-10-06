@@ -1,3 +1,7 @@
+//! What's set on the web page: colours, brightness, night mode, TV delay, and
+//! which events show for which drivers. Saved in flash as JSON; missing fields
+//! take their defaults, so settings saved by older firmware still load.
+
 use serde::{Deserialize, Serialize};
 
 use crate::{color::Rgb, drivers::DriverSet, input::RaceEvent, theme::LAMP};

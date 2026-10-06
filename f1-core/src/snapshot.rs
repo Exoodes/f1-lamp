@@ -1,3 +1,5 @@
+//! [`Snapshot`]: what the web page shows about the lamp (`GET /api/state`).
+
 use serde::Serialize;
 
 use crate::{

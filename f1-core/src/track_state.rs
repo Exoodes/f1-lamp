@@ -1,3 +1,8 @@
+//! Which track flag is out, from the feed's session status, track status and
+//! race control messages. Reports each change as a [`RaceEvent`], plus the
+//! start lights and the chequered flag. [`FeedMessage`] is one parsed message
+//! of any stream.
+
 use std::collections::HashSet;
 
 use crate::{

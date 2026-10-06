@@ -1,3 +1,5 @@
+//! WiFi in station mode: set up once, connect again whenever it's down.
+
 use anyhow::Context;
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,

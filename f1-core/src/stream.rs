@@ -1,3 +1,6 @@
+//! One line of an archived `.jsonStream` file: the time since the stream began
+//! (`HH:MM:SS.mmm`), then one JSON message.
+
 use core::{fmt, str::FromStr, time::Duration};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

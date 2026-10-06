@@ -1,3 +1,7 @@
+//! OpenF1 (`api.openf1.org`): the request URLs and the answers' shapes for the
+//! session calendar and a race's result and team colours. The firmware makes
+//! the requests; this turns the answers into [`Session`]s and a winner.
+
 use std::collections::HashMap;
 
 use chrono::{DateTime, Datelike, Utc};

@@ -1,3 +1,21 @@
+//! Everything the F1 Lightbox decides, without hardware: it builds and tests on
+//! the PC, and the firmware (`f1/`) only moves bytes in and LED colours out.
+//!
+//! - The live feed: [`negotiate`] (before the WebSocket), [`signalr`] (frames
+//!   and messages), [`live`] (one connection: bytes in, race events out),
+//!   [`live_timers`] (pings, silence, the TLS lock) and [`feed_health`].
+//! - What the feed says: [`feed`] (the streams' JSON), [`track_state`] (which
+//!   flag is out) and [`tracker`] (winner, pit stops, fastest laps, overtakes).
+//! - Archived sessions: [`stream`] (one line), [`timeline`] (the streams merged
+//!   by time), [`replay`] and [`playback`] (its clock).
+//! - The lamp: [`input`] (what the threads send), [`controller`] (what to
+//!   show), [`effect`], [`theme`], [`overlays`], [`delay`] (the TV delay),
+//!   [`post`] (brightness), [`frame`], [`color`], [`snapshot`], [`command`],
+//!   [`settings`] and [`drivers`].
+//! - Around it: [`schedule`] and [`openf1`] (when sessions are), [`token`]
+//!   (F1TV), [`ota_trial`], [`heartbeat`], [`backoff`], [`frame_stats`] and
+//!   [`logbuf`].
+
 #![forbid(unsafe_code)]
 
 pub mod backoff;

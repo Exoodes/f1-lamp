@@ -1,3 +1,7 @@
+//! Which effect and colour each event and state gets: the flags, the overlays
+//! (start lights, chequered flag, flashes), the winner and the network status.
+//! The lamp's look is changed here.
+
 use crate::{
     color::Rgb,
     effect::Effect,

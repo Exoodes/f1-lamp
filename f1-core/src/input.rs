@@ -1,3 +1,6 @@
+//! What the threads send the render loop ([`Input`]), and the race events and
+//! statuses in it.
+
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};

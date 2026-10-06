@@ -1,3 +1,5 @@
+//! [`OverrideRequest`]: forcing a flag or a colour from the web page, as JSON.
+
 use serde::Deserialize;
 
 use crate::{

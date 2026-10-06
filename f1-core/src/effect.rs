@@ -1,3 +1,8 @@
+//! The LED animations: solid, blinking, a chase around the LEDs, breathing,
+//! the chequered pattern and the start lights. Each draws a frame from the time
+//! since it began, so it keeps no state and can't drift. Which effect means
+//! what is in [`theme`](crate::theme).
+
 use std::f32::consts::TAU;
 use std::time::Duration;
 

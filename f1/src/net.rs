@@ -1,3 +1,8 @@
+//! The network thread: WiFi (and reconnecting), SNTP, mDNS, starting the web
+//! server, the OpenF1 calendar and winner, the session phase, and whether the
+//! live feed is wanted. One loop of jobs, each with its own deadline
+//! (`Net::round`).
+
 use std::{
     sync::{mpsc::SyncSender, Arc, Mutex},
     thread::{self, JoinHandle},

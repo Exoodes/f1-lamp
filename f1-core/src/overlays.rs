@@ -1,3 +1,7 @@
+//! Short effects that play once over everything but a forced flag or colour:
+//! start lights, chequered flag, flashes. They play one after another; at most
+//! [`MAX_OVERLAYS`] wait, and more are dropped.
+
 use std::{collections::VecDeque, time::Instant};
 
 use crate::effect::Effect;

@@ -1,3 +1,6 @@
+//! [`Rgb`]: a colour, read and written as `"#rrggbb"`, with scaling and
+//! blending for the effects.
+
 use core::fmt;
 use core::str::FromStr;
 use serde::{Deserialize, Serialize};

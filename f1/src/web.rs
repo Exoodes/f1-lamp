@@ -1,3 +1,7 @@
+//! The web server: the page, the API it uses (the README has the list), and
+//! firmware updates. Every POST needs the `X-F1-Lamp` header; an upload also
+//! needs the update key.
+
 use std::sync::{
     mpsc::{SyncSender, TrySendError},
     Arc, Mutex,

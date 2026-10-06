@@ -1,3 +1,5 @@
+//! [`Frame`]: one picture for the 23 LEDs.
+
 use crate::color::Rgb;
 
 pub const NUM_LEDS: usize = 23;

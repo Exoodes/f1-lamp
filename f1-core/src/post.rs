@@ -1,3 +1,6 @@
+//! The last step before the LEDs: the brightness (night mode outside live
+//! sessions) and the gamma correction.
+
 use std::{cmp::Ordering, sync::OnceLock};
 
 use crate::{

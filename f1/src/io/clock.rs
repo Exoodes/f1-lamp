@@ -1,3 +1,6 @@
+//! The wall clock once SNTP has set it: Unix time, the local minute of the day
+//! for night mode, and the log's time stamps.
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use esp_idf_svc::sys;

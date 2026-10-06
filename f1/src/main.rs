@@ -1,3 +1,8 @@
+//! The firmware's start and its render loop. At boot: the update trial, the
+//! LEDs, the settings, then the threads (`spawn_threads`). From then on the main
+//! task is the render loop: inputs in, a frame out every 20 ms, the snapshot
+//! for the web page, and once a second `supervise`.
+
 use std::{
     sync::{
         mpsc::{self, Receiver, SyncSender},

@@ -1,3 +1,5 @@
+//! The LED output: frames to the WS2812s over RMT.
+
 #[allow(deprecated)]
 use esp_idf_svc::hal::{
     gpio::OutputPin,

@@ -1,3 +1,7 @@
+//! Hands `cfg.toml`'s WiFi credentials and update key to the compiler. For
+//! replay builds it also finds the session's streams, keeps only the lines the
+//! lamp uses, and hands their paths over for `include_str!`.
+
 use std::path::{Path, PathBuf};
 
 /// The streams a replay embeds, with the variable that hands each file's path

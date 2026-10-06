@@ -1,3 +1,7 @@
+//! The JSON of F1's live timing streams as typed structs: only the fields the
+//! lamp uses, all optional, because an update carries only what changed. The
+//! live feed and the archive use the same ones.
+
 use crate::color::Rgb;
 use serde::{
     de::{IgnoredAny, MapAccess, Visitor},

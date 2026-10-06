@@ -1,3 +1,7 @@
+//! HTTPS requests (OpenF1, the live feed's negotiate), each read whole and
+//! capped in size, and the lock that keeps two TLS handshakes from running at
+//! once.
+
 use std::{sync::Mutex, time::Duration};
 
 use anyhow::Context;

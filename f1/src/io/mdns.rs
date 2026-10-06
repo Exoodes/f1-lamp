@@ -1,3 +1,5 @@
+//! mDNS: the lamp answers as `f1-lightbox.local`.
+
 use esp_idf_svc::mdns::EspMdns;
 
 pub const HOSTNAME: &str = "f1-lightbox";

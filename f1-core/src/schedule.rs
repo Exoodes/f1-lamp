@@ -1,3 +1,8 @@
+//! When sessions are, and what that means for the lamp: its phase (idle,
+//! pre-session, live, post-session) at any moment, when that next changes,
+//! whether the live feed is wanted, and when to look up a race's winner. Times
+//! are Unix seconds (UTC); the sessions come from [`openf1`](crate::openf1).
+
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
