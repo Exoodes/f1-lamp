@@ -32,67 +32,78 @@ pub struct TrackState {
 }
 
 impl TrackState {
+    /// Reads one message; returns the events it causes: at most one of its
+    /// own (start lights, chequered flag), then a change of flag.
     pub fn apply(&mut self, msg: FeedMessage) -> Vec<RaceEvent> {
-        let mut events = Vec::new();
-
-        match msg {
+        let own = match msg {
             FeedMessage::Track(t) => {
                 if let Some(code) = t.code() {
                     self.track = Some(code);
                 }
+                None
             }
-            FeedMessage::Session(s) => {
-                if let Some(state) = s.status {
-                    self.session = Some(state);
-                    if state == SessionState::Started && !self.started {
-                        if self.is_race != Some(false) {
-                            events.push(RaceEvent::StartLights);
-                        }
-                        self.started = true;
-                    }
-                }
-            }
-            FeedMessage::RaceControl(m) => {
-                let key = (m.category.as_deref(), m.flag.as_deref(), m.scope.as_deref());
-                match key {
-                    (Some("Flag"), Some("DOUBLE YELLOW"), Some("Sector")) => {
-                        if let Some(sector) = m.sector {
-                            self.double_yellow.insert(sector);
-                        }
-                    }
-                    (Some("Flag"), Some("YELLOW" | "CLEAR"), Some("Sector")) => {
-                        if let Some(sector) = m.sector {
-                            self.double_yellow.remove(&sector);
-                        }
-                    }
-                    (Some("Flag"), Some("CLEAR" | "GREEN"), Some("Track")) => {
-                        self.double_yellow.clear();
-                    }
-                    (Some("Flag"), Some("CHEQUERED"), _) => {
-                        events.push(RaceEvent::ChequeredFlag);
-                    }
-                    _ => {}
-                }
-            }
+            FeedMessage::Session(s) => self.apply_session(&s),
+            FeedMessage::RaceControl(m) => self.apply_race_control(&m),
             FeedMessage::SessionInfo(info) => {
                 if let Some(is_race) = info.is_race() {
                     self.is_race = Some(is_race);
                 }
+                None
             }
             FeedMessage::DriverList(_)
             | FeedMessage::TopThree(_)
             | FeedMessage::PitLane(_)
             | FeedMessage::TimingStats(_)
-            | FeedMessage::Overtakes(_) => {}
-        }
+            | FeedMessage::Overtakes(_) => None,
+        };
+        own.into_iter().chain(self.flag_change()).collect()
+    }
 
+    /// The session's status. Its first `Started` is the start: the start
+    /// lights, unless it's known not to be a race.
+    fn apply_session(&mut self, s: &SessionStatus) -> Option<RaceEvent> {
+        let state = s.status?;
+        self.session = Some(state);
+        if state != SessionState::Started || self.started {
+            return None;
+        }
+        self.started = true;
+        (self.is_race != Some(false)).then_some(RaceEvent::StartLights)
+    }
+
+    /// Race control's flags: double yellows by sector (shown while any sector
+    /// has one), and the chequered flag.
+    fn apply_race_control(&mut self, m: &RcMessage) -> Option<RaceEvent> {
+        let key = (m.category.as_deref(), m.flag.as_deref(), m.scope.as_deref());
+        match key {
+            (Some("Flag"), Some("DOUBLE YELLOW"), Some("Sector")) => {
+                if let Some(sector) = m.sector {
+                    self.double_yellow.insert(sector);
+                }
+            }
+            (Some("Flag"), Some("YELLOW" | "CLEAR"), Some("Sector")) => {
+                if let Some(sector) = m.sector {
+                    self.double_yellow.remove(&sector);
+                }
+            }
+            (Some("Flag"), Some("CLEAR" | "GREEN"), Some("Track")) => {
+                self.double_yellow.clear();
+            }
+            (Some("Flag"), Some("CHEQUERED"), _) => return Some(RaceEvent::ChequeredFlag),
+            _ => {}
+        }
+        None
+    }
+
+    /// The flag to show now, if it differs from the one shown: the flag, or
+    /// `FlagCleared` when there is none any more.
+    fn flag_change(&mut self) -> Option<RaceEvent> {
         let new = self.derive();
-        if new != self.shown {
-            events.push(new.map_or(RaceEvent::FlagCleared, RaceEvent::TrackFlag));
-            self.shown = new;
+        if new == self.shown {
+            return None;
         }
-
-        events
+        self.shown = new;
+        Some(new.map_or(RaceEvent::FlagCleared, RaceEvent::TrackFlag))
     }
 
     pub fn flag(&self) -> Option<TrackFlag> {
