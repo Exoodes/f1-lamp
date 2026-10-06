@@ -23,6 +23,7 @@ use f1_core::{
     heartbeat::Heartbeat,
     input::{Input, RaceEvent},
     live::{LiveSession, Received},
+    live_timers::{LiveTimers, SILENCE_LIMIT, TLS_HOLD_MAX},
     negotiate,
     signalr::PING,
 };
@@ -36,18 +37,8 @@ use crate::{
     },
 };
 
-/// The server drops clients that stay quiet for about 30 s.
-const PING_EVERY: Duration = Duration::from_secs(15);
-/// Heartbeat and pings arrive every few seconds; this long without anything
-/// means the connection is dead even if nobody said so.
-const SILENCE_LIMIT: Duration = Duration::from_secs(60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
-/// The longest the TLS lock is kept after the WebSocket opens, waiting for
-/// the answer to `Subscribe`. It normally comes within a second; if it never
-/// does (refused, or too large and skipped), holding on would block every
-/// HTTPS request of the net thread for the whole session.
-const TLS_HOLD_MAX: Duration = Duration::from_secs(15);
 /// One SignalR message at most. The state we use arrives as about 12 KB
 /// after a race. The race control history (45 KB) is larger on purpose: the
 /// splitter skips it without buffering, which logs one "frame larger than"
@@ -212,11 +203,9 @@ struct Connection {
     ws: WebSocket,
     events: Receiver<WsEvent>,
     /// No HTTPS request while the handshake and the large first answer need
-    /// the heap; released once subscribed, or after `TLS_HOLD_MAX` at most.
+    /// the heap; released once subscribed, or when `timers` says so.
     tls: Option<MutexGuard<'static, ()>>,
-    release_tls_at: Instant,
-    next_ping: Instant,
-    last_data: Instant,
+    timers: LiveTimers,
 }
 
 /// A piece of a WebSocket frame: `frame_len` is the whole frame's length and
@@ -262,49 +251,45 @@ impl Connection {
         }
         log::info!("live: connected, subscribing");
 
-        let now = Instant::now();
         Ok(Connection {
             ws,
             events,
             tls,
-            release_tls_at: now + TLS_HOLD_MAX,
-            next_ping: now + PING_EVERY,
-            last_data: now,
+            timers: LiveTimers::new(Instant::now()),
         })
     }
 
-    /// The time-driven part: let go of the TLS lock when it's been held too
-    /// long, ping when it's due, give up when nothing has come for too long.
+    /// Does what `timers` says is due: let go of the TLS lock, ping, or give
+    /// up on a silent connection.
     fn tick(&mut self, now: Instant) -> anyhow::Result<()> {
-        if self.tls.is_some() && now >= self.release_tls_at {
+        let due = self.timers.tick(now);
+        if due.release_tls {
             drop(self.tls.take());
             log::warn!(
                 "live: no answer to Subscribe within {} s; letting HTTPS requests run",
                 TLS_HOLD_MAX.as_secs()
             );
         }
-        if now >= self.next_ping {
+        if due.ping {
             self.ws.send_text(PING, SEND_TIMEOUT)?;
-            self.next_ping = now + PING_EVERY;
         }
-        if now.duration_since(self.last_data) > SILENCE_LIMIT {
+        if due.dead {
             bail!("nothing received for {} s", SILENCE_LIMIT.as_secs());
         }
         Ok(())
     }
 
+    /// The answer to `Subscribe` came: the TLS lock can go.
+    fn subscribed(&mut self) {
+        drop(self.tls.take());
+        self.timers.subscribed();
+    }
+
     /// Waits for the next piece of data until something in `tick` is due.
     /// `None` when that time came first, or for an event without data.
     fn next_data(&mut self, now: Instant) -> anyhow::Result<Option<Data>> {
-        let wake = if self.tls.is_some() {
-            self.next_ping.min(self.release_tls_at)
-        } else {
-            self.next_ping
-        };
-        let event = match self
-            .events
-            .recv_timeout(wake.saturating_duration_since(now))
-        {
+        let wait = self.timers.wake_at().saturating_duration_since(now);
+        let event = match self.events.recv_timeout(wait) {
             Ok(event) => event,
             Err(RecvTimeoutError::Timeout) => return Ok(None),
             Err(RecvTimeoutError::Disconnected) => bail!("WebSocket task gone"),
@@ -315,7 +300,7 @@ impl Connection {
                 frame_len,
                 offset,
             } => {
-                self.last_data = Instant::now();
+                self.timers.data(Instant::now());
                 Ok(Some(Data {
                     bytes,
                     frame_len,
@@ -343,7 +328,7 @@ fn handle(
         log::warn!("live: {problem}");
     }
     if received.subscribed {
-        drop(conn.tls.take());
+        conn.subscribed();
         tell(tx, health.working())?;
         let heap = system::heap();
         log::info!(
