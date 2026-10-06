@@ -18,6 +18,7 @@ use std::{
 use anyhow::{bail, Context};
 use esp_idf_svc::http::Method;
 use f1_core::{
+    heartbeat::Heartbeat,
     input::{Input, RaceEvent},
     live::LiveSession,
     signalr::PING,
@@ -40,6 +41,11 @@ const PING_EVERY: Duration = Duration::from_secs(15);
 const SILENCE_LIMIT: Duration = Duration::from_secs(60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
+/// The longest the TLS lock is kept after the WebSocket opens, waiting for
+/// the answer to `Subscribe`. It normally comes within a second; if it never
+/// does (refused, or too large and skipped), holding on would block every
+/// HTTPS request of the net thread for the whole session.
+const TLS_HOLD_MAX: Duration = Duration::from_secs(15);
 /// One SignalR message at most. The state we use arrives as about 12 KB
 /// after a race. The race control history (45 KB) is larger on purpose: the
 /// splitter skips it without buffering, which logs one "frame larger than"
@@ -82,28 +88,31 @@ pub fn spawn(
     tx: SyncSender<Input>,
     control: Arc<LiveControl>,
     tokens: Arc<TokenKeeper>,
+    heartbeat: Arc<Heartbeat>,
 ) -> anyhow::Result<JoinHandle<()>> {
     let handle = thread::Builder::new()
         .name("live".into())
         .stack_size(12 * 1024)
-        .spawn(move || run(&tx, &control, &tokens))?;
+        .spawn(move || run(&tx, &control, &tokens, &heartbeat))?;
     Ok(handle)
 }
 
 /// Never returns. Without the render loop the lamp is dead anyway, and the
 /// thread check in main restarts the chip.
-fn run(tx: &SyncSender<Input>, control: &LiveControl, tokens: &TokenKeeper) {
+fn run(tx: &SyncSender<Input>, control: &LiveControl, tokens: &TokenKeeper, heartbeat: &Heartbeat) {
     let mut retry = FIRST_RETRY;
     loop {
+        heartbeat.beat(Instant::now());
         if !control.wanted() {
             retry = FIRST_RETRY;
             thread::sleep(IDLE);
             continue;
         }
-        match session(tx, control, tokens) {
+        match session(tx, control, tokens, heartbeat) {
             Ok(()) => retry = FIRST_RETRY,
             Err(e) => {
                 log::warn!("live: {e:#}; again in {} s", retry.as_secs());
+                heartbeat.beat(Instant::now());
                 thread::sleep(retry);
                 retry = (retry * 2).min(MAX_RETRY);
             }
@@ -163,6 +172,7 @@ fn session(
     tx: &SyncSender<Input>,
     control: &LiveControl,
     tokens: &TokenKeeper,
+    heartbeat: &Heartbeat,
 ) -> anyhow::Result<()> {
     // Without a usable token, the public streams: the lamp works either way.
     // `auth` holds the token: never log it or `headers`.
@@ -172,13 +182,14 @@ fn session(
         if auth.is_some() { "with" } else { "without" }
     );
     let (cookie, token) = negotiate(auth.as_deref())?;
+    heartbeat.beat(Instant::now());
     let mut headers = cookie.map_or(String::new(), |c| format!("Cookie: {c}\r\n"));
     if let Some(auth) = &auth {
         headers.push_str(&format!("Authorization: {auth}\r\n"));
     }
 
     // No HTTPS request while the handshake and the large first answer need
-    // the heap; released once subscribed.
+    // the heap; released once subscribed, or after `TLS_HOLD_MAX` at most.
     let mut tls = Some(http::TLS.lock().unwrap_or_else(|e| e.into_inner()));
     let (events_tx, events) = mpsc::channel();
     let ws = WebSocket::connect(&format!("{HUB}?id={token}"), &headers, events_tx)?;
@@ -199,12 +210,21 @@ fn session(
     let mut live = LiveSession::new(MAX_FRAME);
     let mut last_data = Instant::now();
     let mut next_ping = Instant::now() + PING_EVERY;
+    let release_tls_at = Instant::now() + TLS_HOLD_MAX;
     loop {
         if !control.wanted() {
             log::info!("live: closing, feed not wanted");
             return Ok(());
         }
         let now = Instant::now();
+        heartbeat.beat(now);
+        if tls.is_some() && now >= release_tls_at {
+            drop(tls.take());
+            log::warn!(
+                "live: no answer to Subscribe within {} s; letting HTTPS requests run",
+                TLS_HOLD_MAX.as_secs()
+            );
+        }
         if now >= next_ping {
             ws.send_text(PING, SEND_TIMEOUT)?;
             next_ping = now + PING_EVERY;
@@ -213,7 +233,12 @@ fn session(
             bail!("nothing received for {} s", SILENCE_LIMIT.as_secs());
         }
 
-        let event = match events.recv_timeout(next_ping.saturating_duration_since(now)) {
+        let wake = if tls.is_some() {
+            next_ping.min(release_tls_at)
+        } else {
+            next_ping
+        };
+        let event = match events.recv_timeout(wake.saturating_duration_since(now)) {
             Ok(event) => event,
             Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => bail!("WebSocket task gone"),

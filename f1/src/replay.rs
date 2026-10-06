@@ -9,13 +9,14 @@
 use std::{
     sync::{
         mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender},
-        Mutex, OnceLock,
+        Arc, Mutex, OnceLock,
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
 use f1_core::{
+    heartbeat::Heartbeat,
     input::Input,
     replay::{ReplayCommand, ReplayStatus, Replayer, Step},
     timeline::Stream,
@@ -92,7 +93,7 @@ pub fn handle() -> Option<&'static ReplayHandle> {
 /// lights out; the page's Play button starts it. Reading the session takes a
 /// moment, so it happens in the thread, not here: the render loop must not
 /// wait for it.
-pub fn spawn(tx: SyncSender<Input>) -> anyhow::Result<JoinHandle<()>> {
+pub fn spawn(tx: SyncSender<Input>, heartbeat: Arc<Heartbeat>) -> anyhow::Result<JoinHandle<()>> {
     let (commands, rx) = mpsc::channel();
     let handle = ReplayHandle {
         commands,
@@ -106,14 +107,14 @@ pub fn spawn(tx: SyncSender<Input>) -> anyhow::Result<JoinHandle<()>> {
         .name("replay".into())
         .stack_size(8 * 1024)
         .spawn(move || {
-            run(&rx, &tx);
+            run(&rx, &tx, &heartbeat);
             log::warn!("render loop is gone, stopping the replay");
         })?;
     Ok(thread)
 }
 
 /// Returns only when the render loop is gone.
-fn run(rx: &Receiver<ReplayCommand>, tx: &SyncSender<Input>) {
+fn run(rx: &Receiver<ReplayCommand>, tx: &SyncSender<Input>, heartbeat: &Heartbeat) {
     let handle = HANDLE.get().expect("set in spawn");
     let started = Instant::now();
     let mut replayer = Replayer::new(&FILES, SPEED, started);
@@ -128,6 +129,7 @@ fn run(rx: &Receiver<ReplayCommand>, tx: &SyncSender<Input>) {
 
     let mut finished_logged = false;
     loop {
+        heartbeat.beat(Instant::now());
         let wait = match replayer.step(Instant::now()) {
             Step::Send(inputs) => {
                 for input in inputs {

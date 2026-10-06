@@ -11,6 +11,7 @@ use esp_idf_svc::{
 };
 use f1_core::{
     color::Rgb,
+    heartbeat::Heartbeat,
     input::{Input, NetStatus, RaceEvent, SessionPhase},
     openf1::{self, DriverDto, ResultDto, SessionDto, CALENDAR_DAYS},
     schedule::{self, Session, CACHED_SESSIONS},
@@ -25,6 +26,16 @@ use crate::{
     web, WIFI_PSK, WIFI_SSID,
 };
 
+/// What the net thread shares with the other threads.
+pub struct Shared {
+    /// Written by the render loop, read by the web server.
+    pub snapshot: Arc<Mutex<Snapshot>>,
+    /// Set here, read by the live-feed thread.
+    pub live: Arc<LiveControl>,
+    /// Set from the web page, read by the live-feed thread.
+    pub tokens: Arc<TokenKeeper>,
+}
+
 /// Spawns the network thread, which owns WiFi and the web server and reports
 /// the network status.
 pub fn spawn(
@@ -32,15 +43,14 @@ pub fn spawn(
     sys_loop: EspSystemEventLoop,
     nvs: EspDefaultNvsPartition,
     tx: SyncSender<Input>,
-    snapshot: Arc<Mutex<Snapshot>>,
-    live: Arc<LiveControl>,
-    tokens: Arc<TokenKeeper>,
+    shared: Shared,
+    heartbeat: Arc<Heartbeat>,
 ) -> anyhow::Result<JoinHandle<()>> {
     let handle = thread::Builder::new()
         .name("net".into())
         .stack_size(16 * 1024)
         .spawn(move || {
-            if let Err(e) = run(modem, sys_loop, nvs, &tx, snapshot, &live, tokens) {
+            if let Err(e) = run(modem, sys_loop, nvs, &tx, shared, &heartbeat) {
                 log::error!("network thread stopped: {e:#}");
             }
         })?;
@@ -142,10 +152,14 @@ fn run(
     sys_loop: EspSystemEventLoop,
     nvs: EspDefaultNvsPartition,
     tx: &SyncSender<Input>,
-    snapshot: Arc<Mutex<Snapshot>>,
-    live: &LiveControl,
-    tokens: Arc<TokenKeeper>,
+    shared: Shared,
+    heartbeat: &Heartbeat,
 ) -> anyhow::Result<()> {
+    let Shared {
+        snapshot,
+        live,
+        tokens,
+    } = shared;
     let mut status = None;
     report(tx, &mut status, NetStatus::Connecting)?;
     let mut schedule_store = ScheduleStore::new(nvs.clone())?;
@@ -183,6 +197,7 @@ fn run(
 
     loop {
         let now = Instant::now();
+        heartbeat.beat(now);
 
         if now >= due.wifi_check {
             due.wifi_check = check_wifi(&mut wifi, tx, &mut status, &mut retry_wait)?;
@@ -270,7 +285,7 @@ fn run(
         }
         if now >= due.winner {
             if let (Some(unix), true) = (clock::unix_now(), wifi.is_up().unwrap_or(false)) {
-                check_winner(&schedule.sessions, unix, &mut winner_sent, live, tx)?;
+                check_winner(&schedule.sessions, unix, &mut winner_sent, &live, tx)?;
             }
             due.winner = now + WINNER_EVERY;
         }

@@ -8,7 +8,7 @@ use esp_idf_svc::hal::peripherals::Peripherals;
 #[allow(deprecated)]
 use esp_idf_svc::hal::rmt::{config::TransmitConfig, TxRmtDriver};
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
-use f1_core::{controller::Controller, frame::Frame, input::Input};
+use f1_core::{controller::Controller, frame::Frame, heartbeat::Heartbeat, input::Input};
 use io::led::LedOutput;
 use ws2812_esp32_rmt_driver::Ws2812Esp32Rmt;
 
@@ -21,6 +21,10 @@ mod web;
 const FRAME_INTERVAL: Duration = Duration::from_millis(20);
 /// How often the render loop checks that all threads are still running.
 const THREAD_CHECK_EVERY: Duration = Duration::from_secs(1);
+/// A thread that hasn't beaten for this long has hung. Well above the
+/// longest normal wait: two 15 s HTTPS requests plus the TLS lock, or the
+/// live thread's 60 s pause between reconnects.
+const THREAD_SILENCE_LIMIT: Duration = Duration::from_secs(180);
 
 // WiFi credentials from f1/cfg.toml, passed in by build.rs.
 const WIFI_SSID: &str = env!("WIFI_SSID");
@@ -75,28 +79,44 @@ fn main() -> anyhow::Result<()> {
     let live = Arc::new(io::live::LiveControl::default());
     // Set from the web page, read by the live-feed thread.
     let tokens = Arc::new(io::token_store::TokenKeeper::new(nvs.clone())?);
-    // Every spawned thread, watched by `check_threads`.
+    let net_beat = Arc::new(Heartbeat::new(Instant::now()));
+    let feed_beat = Arc::new(Heartbeat::new(Instant::now()));
+    // Every spawned thread with its heartbeat, watched by `check_threads`.
     let threads = [
-        (
-            "net",
-            net::spawn(
+        Watched {
+            name: "net",
+            handle: net::spawn(
                 peripherals.modem,
                 sys_loop.clone(),
                 nvs.clone(),
                 tx.clone(),
-                Arc::clone(&snapshot),
-                Arc::clone(&live),
-                Arc::clone(&tokens),
+                net::Shared {
+                    snapshot: Arc::clone(&snapshot),
+                    live: Arc::clone(&live),
+                    tokens: Arc::clone(&tokens),
+                },
+                Arc::clone(&net_beat),
             )?,
-        ),
+            heartbeat: net_beat,
+        },
         // A replay plays its own events; the live feed would mix in real ones.
         #[cfg(not(feature = "player"))]
-        (
-            "live",
-            io::live::spawn(tx.clone(), Arc::clone(&live), Arc::clone(&tokens))?,
-        ),
+        Watched {
+            name: "live",
+            handle: io::live::spawn(
+                tx.clone(),
+                Arc::clone(&live),
+                Arc::clone(&tokens),
+                Arc::clone(&feed_beat),
+            )?,
+            heartbeat: feed_beat,
+        },
         #[cfg(feature = "player")]
-        ("replay", replay::spawn(tx.clone())?),
+        Watched {
+            name: "replay",
+            handle: replay::spawn(tx.clone(), Arc::clone(&feed_beat))?,
+            heartbeat: feed_beat,
+        },
     ];
 
     let mut frame = Frame::new();
@@ -106,7 +126,7 @@ fn main() -> anyhow::Result<()> {
         let now = Instant::now();
 
         if now >= next_thread_check {
-            check_threads(&threads);
+            check_threads(&threads, now);
             next_thread_check = now + THREAD_CHECK_EVERY;
         }
 
@@ -139,13 +159,32 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-/// Restarts the chip if any thread has ended, for whatever reason: a panic,
-/// an error, or a normal return. The lamp can't work with a thread missing,
-/// and a fresh boot is the simplest way to get it back.
-fn check_threads(threads: &[(&str, JoinHandle<()>)]) {
-    if let Some((name, _)) = threads.iter().find(|(_, handle)| handle.is_finished()) {
-        log::error!("thread {name} stopped, restarting");
-        restart();
+/// A spawned thread and the heartbeat it keeps.
+struct Watched {
+    name: &'static str,
+    handle: JoinHandle<()>,
+    heartbeat: Arc<Heartbeat>,
+}
+
+/// Restarts the chip if any thread has ended, for whatever reason (a panic,
+/// an error, or a normal return), or has hung: no heartbeat for
+/// `THREAD_SILENCE_LIMIT`. The lamp can't work with a thread missing, and a
+/// fresh boot is the simplest way to get it back.
+fn check_threads(threads: &[Watched], now: Instant) {
+    for thread in threads {
+        if thread.handle.is_finished() {
+            log::error!("thread {} stopped, restarting", thread.name);
+            restart();
+        }
+        let silent = thread.heartbeat.silent_for(now);
+        if silent >= THREAD_SILENCE_LIMIT {
+            log::error!(
+                "thread {} silent for {} s, restarting",
+                thread.name,
+                silent.as_secs()
+            );
+            restart();
+        }
     }
 }
 
