@@ -15,7 +15,7 @@ use f1_core::{
     heartbeat::Heartbeat,
     input::{Input, NetStatus, RaceEvent, SessionPhase},
     openf1::{self, DriverDto, ResultDto, SessionDto, CALENDAR_DAYS},
-    schedule::{self, Session, CACHED_SESSIONS},
+    schedule::{self, Session, WinnerLookup, CACHED_SESSIONS},
     snapshot::Snapshot,
 };
 
@@ -83,12 +83,6 @@ const FIRST_CALENDAR_RETRY: Duration = Duration::from_secs(60);
 const MAX_CALENDAR_RETRY: Duration = Duration::from_secs(30 * 60);
 /// How often to check whether WiFi and the clock are ready for a download.
 const CALENDAR_WAITING_EVERY: Duration = Duration::from_secs(5);
-/// The phase job wakes at the next boundary (`schedule::next_change`); this
-/// is the longest it waits anyway, in case the calendar or the clock changed.
-const PHASE_EVERY: Duration = Duration::from_secs(30);
-/// Wake this long after a boundary: the clock counts whole seconds, so right
-/// on it the old phase could still be read.
-const BOUNDARY_MARGIN: Duration = Duration::from_millis(500);
 /// How often to check for a valid clock before the first phase.
 const PHASE_WAITING_EVERY: Duration = Duration::from_secs(1);
 /// How often to look for a race's winner while it's due; results can take a
@@ -407,15 +401,10 @@ impl<'a> Net<'a> {
             return Ok(now + PHASE_WAITING_EVERY);
         };
         let phase = self.schedule.update_phase(unix, self.tx)?;
-        // The live feed is needed just before and during a session.
-        self.shared.live.set_wanted(
-            cfg!(feature = "live-now")
-                || matches!(phase, SessionPhase::PreSession | SessionPhase::Live),
-        );
-        let to_boundary = schedule::next_change(&self.schedule.sessions, unix)
-            .and_then(|at| u64::try_from(at - unix).ok())
-            .map(|secs| Duration::from_secs(secs) + BOUNDARY_MARGIN);
-        Ok(now + to_boundary.map_or(PHASE_EVERY, |d| d.min(PHASE_EVERY)))
+        self.shared
+            .live
+            .set_wanted(cfg!(feature = "live-now") || schedule::feed_wanted(phase));
+        Ok(now + schedule::phase_wait(&self.schedule.sessions, unix))
     }
 
     /// The OpenF1 winner lookup, once WiFi and the clock are ready.
@@ -443,35 +432,28 @@ fn check_winner(
     live: &LiveControl,
     tx: &SyncSender<Input>,
 ) -> anyhow::Result<()> {
-    let Some(race) = schedule::awaiting_winner(sessions, now_unix) else {
-        return Ok(());
+    let key = match schedule::winner_lookup(sessions, now_unix, *sent, live.winner_shown()) {
+        WinnerLookup::Nothing => return Ok(()),
+        WinnerLookup::ShownByFeed(key) => {
+            log::info!("winner: session {key} already shown from the live feed");
+            *sent = Some(key);
+            return Ok(());
+        }
+        WinnerLookup::Fetch(key) => key,
     };
-    if *sent == Some(race.key) {
-        return Ok(());
-    }
-    // The live feed showed it at the flag; OpenF1 is only the fallback.
-    if live.winner_shown() == Some(race.key) {
-        log::info!(
-            "winner: session {} already shown from the live feed",
-            race.key
-        );
-        *sent = Some(race.key);
-        return Ok(());
-    }
 
-    match fetch_winner(race.key) {
+    match fetch_winner(key) {
         Ok(Some((driver, team_color))) => {
-            log::info!("winner: #{driver} ({team_color}), session {}", race.key);
+            log::info!("winner: #{driver} ({team_color}), session {key}");
             tx.send(Input::Race {
                 event: RaceEvent::Winner { driver, team_color },
                 received: Instant::now(),
             })
             .context("render loop is gone")?;
-            *sent = Some(race.key);
+            *sent = Some(key);
         }
         Ok(None) => log::info!(
-            "winner: session {} not published yet; retrying in {} s",
-            race.key,
+            "winner: session {key} not published yet; retrying in {} s",
             WINNER_EVERY.as_secs()
         ),
         Err(e) => log::warn!("winner: {e:#}; retrying in {} s", WINNER_EVERY.as_secs()),

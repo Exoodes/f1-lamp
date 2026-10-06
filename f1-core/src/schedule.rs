@@ -1,6 +1,16 @@
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 use crate::input::SessionPhase;
+
+/// The phase is checked at the next boundary (`next_change`); this is the
+/// longest it goes unchecked anyway, in case the calendar or the clock
+/// changed.
+pub const PHASE_EVERY: Duration = Duration::from_secs(30);
+/// Checked this long after a boundary: the clock counts whole seconds, so
+/// right on it the old phase could still be read.
+pub const BOUNDARY_MARGIN: Duration = Duration::from_millis(500);
 
 /// Pre-session starts this long before the scheduled start.
 pub const PRE_SESSION: i64 = 30 * 60;
@@ -91,8 +101,6 @@ pub fn phase_at(sessions: &[Session], now: i64) -> SessionPhase {
     current_session(sessions, now).map_or(SessionPhase::Idle, |(phase, _)| phase)
 }
 
-/// The first session that hasn't started yet. `sessions` must be
-/// sorted by start, as `openf1::usable_sessions` returns them.
 /// The next moment after `now` at which the phase can change: a session's
 /// pre-session start, start, end of live, or end of post-session.
 /// Waking up then makes phase changes exact instead of up to a polling
@@ -115,6 +123,54 @@ pub fn next_change(sessions: &[Session], now: i64) -> Option<i64> {
         .min()
 }
 
+/// How long the phase can go unchecked after `now`: until just past the next
+/// boundary (`next_change`), but never more than `PHASE_EVERY`, in case the
+/// calendar or the clock changed meanwhile.
+pub fn phase_wait(sessions: &[Session], now: i64) -> Duration {
+    next_change(sessions, now)
+        .and_then(|at| u64::try_from(at - now).ok())
+        .map(|secs| Duration::from_secs(secs) + BOUNDARY_MARGIN)
+        .map_or(PHASE_EVERY, |wait| wait.min(PHASE_EVERY))
+}
+
+/// Whether the live feed is needed in `phase`: just before and during a
+/// session. Between sessions it would only cost heap and traffic.
+pub fn feed_wanted(phase: SessionPhase) -> bool {
+    matches!(phase, SessionPhase::PreSession | SessionPhase::Live)
+}
+
+/// What to do about a race's winner at `now` (see [`winner_lookup`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WinnerLookup {
+    /// No race is in its winner window, or its winner was sent already.
+    Nothing,
+    /// The live feed showed the winner of this session at the flag: count it
+    /// as sent.
+    ShownByFeed(u32),
+    /// Ask OpenF1 for the winner of this session.
+    Fetch(u32),
+}
+
+/// Whether to look up a winner at `now`. `sent` is the session whose winner
+/// was last sent, `shown_by_feed` the one the live feed showed; OpenF1 is
+/// only the fallback for a race the feed missed (a reboot, a dropped
+/// connection at the flag).
+pub fn winner_lookup(
+    sessions: &[Session],
+    now: i64,
+    sent: Option<u32>,
+    shown_by_feed: Option<u32>,
+) -> WinnerLookup {
+    match awaiting_winner(sessions, now) {
+        None => WinnerLookup::Nothing,
+        Some(race) if sent == Some(race.key) => WinnerLookup::Nothing,
+        Some(race) if shown_by_feed == Some(race.key) => WinnerLookup::ShownByFeed(race.key),
+        Some(race) => WinnerLookup::Fetch(race.key),
+    }
+}
+
+/// The first session that hasn't started yet. `sessions` must be sorted by
+/// start, as `openf1::usable_sessions` returns them.
 pub fn next_session(sessions: &[Session], now: i64) -> Option<&Session> {
     sessions.iter().find(|s| s.start > now)
 }
@@ -576,6 +632,75 @@ mod tests {
         assert_eq!(
             next_change(&weekend, END + LIVE_GRACE),
             Some(START + 24 * HOUR - PRE_SESSION)
+        );
+    }
+
+    // ---- What the net thread does with it ----
+
+    #[test]
+    fn phase_wait_ends_just_past_a_near_boundary() {
+        let wait = phase_wait(&[race()], START - PRE_SESSION - 10);
+        assert_eq!(wait, Duration::from_secs(10) + BOUNDARY_MARGIN);
+    }
+
+    #[test]
+    fn phase_wait_is_capped_when_the_boundary_is_far() {
+        assert_eq!(phase_wait(&[race()], START - 2 * HOUR), PHASE_EVERY);
+    }
+
+    #[test]
+    fn phase_wait_without_sessions_is_the_cap() {
+        assert_eq!(phase_wait(&[], START), PHASE_EVERY);
+    }
+
+    #[test]
+    fn the_feed_is_wanted_before_and_during_a_session_only() {
+        assert!(!feed_wanted(SessionPhase::Idle));
+        assert!(feed_wanted(SessionPhase::PreSession));
+        assert!(feed_wanted(SessionPhase::Live));
+        assert!(!feed_wanted(SessionPhase::PostSession));
+    }
+
+    /// Ten minutes into the race's winner window.
+    const WINNER_TIME: i64 = END + LIVE_GRACE + 10 * MINUTE;
+
+    #[test]
+    fn no_winner_is_looked_up_outside_the_window() {
+        assert_eq!(
+            winner_lookup(&[race()], END, None, None),
+            WinnerLookup::Nothing
+        );
+    }
+
+    #[test]
+    fn a_winner_not_yet_sent_is_fetched() {
+        assert_eq!(
+            winner_lookup(&[race()], WINNER_TIME, None, None),
+            WinnerLookup::Fetch(1)
+        );
+    }
+
+    #[test]
+    fn a_winner_sent_already_is_not_fetched_again() {
+        assert_eq!(
+            winner_lookup(&[race()], WINNER_TIME, Some(1), None),
+            WinnerLookup::Nothing
+        );
+    }
+
+    #[test]
+    fn a_winner_the_feed_showed_is_not_fetched() {
+        assert_eq!(
+            winner_lookup(&[race()], WINNER_TIME, None, Some(1)),
+            WinnerLookup::ShownByFeed(1)
+        );
+    }
+
+    #[test]
+    fn the_feed_showing_another_sessions_winner_doesnt_count() {
+        assert_eq!(
+            winner_lookup(&[race()], WINNER_TIME, Some(7), Some(7)),
+            WinnerLookup::Fetch(1)
         );
     }
 }
