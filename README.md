@@ -204,9 +204,18 @@ cargo test        # unit tests plus the archived 2026 Italian GP and the showcas
 ```
 
 `f1-core` must be tested from its own folder: `f1/.cargo/config.toml` builds
-for the ESP32. Before calling a change done: `cargo test` in f1-core,
-`cargo build --release` in f1 (also with the features you touched), and
-`cargo fmt --all` from `f1/`, which formats f1-core too.
+for the ESP32. Before calling a change done, run every check at once (the
+same ones the CI in `.github/workflows/ci.yml` runs on each push):
+
+```
+powershell -ExecutionPolicy Bypass -File check.ps1          # all
+powershell -ExecutionPolicy Bypass -File check.ps1 -Part core
+```
+
+It runs formatting, clippy with warnings as errors, the f1-core tests, the
+probe, and the release builds (plain, showcase, replay of the archived race)
+with a check that each image stays under 95 % of an app slot.
+`cargo fmt --all` from `f1/` fixes formatting in f1 and f1-core.
 
 Watching a live session with the probe (on the PC):
 

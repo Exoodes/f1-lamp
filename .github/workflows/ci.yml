@@ -1,0 +1,92 @@
+# The checks in check.ps1, on every push and pull request. Two jobs, so the
+# quick one (f1-core and the probe) reports while the firmware still builds.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  core:
+    name: f1-core and f1-probe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # f1-core and the probe build with stable Rust.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            f1-core
+            f1-probe
+
+      # The probe talks TLS through native-tls, which is OpenSSL on Linux.
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Checks
+        shell: pwsh
+        run: ./check.ps1 -Part core
+
+  firmware:
+    name: firmware
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The nightly and rust-src pinned in f1/rust-toolchain.toml, plus the
+      # components the checks use.
+      - name: Rust toolchain
+        working-directory: f1
+        run: |
+          rustup toolchain install
+          rustup component add rustfmt clippy
+
+      # libudev for espflash.
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev
+
+      # The ESP-IDF build (embuild) looks for `python` on the PATH, which
+      # Ubuntu only has as `python3`.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-binstall
+
+      - name: ldproxy and espflash
+        run: cargo binstall --no-confirm ldproxy espflash@4
+
+      # ESP-IDF and its tools (~/.espressif) take ~10 minutes to set up;
+      # they only change with the ESP-IDF settings.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.espressif
+          key: espressif-${{ runner.os }}-${{ hashFiles('f1/.cargo/config.toml', 'f1/sdkconfig.defaults', 'f1/components_esp32c3.lock', 'f1/Cargo.lock') }}
+          restore-keys: espressif-${{ runner.os }}-
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: f1
+
+      # A stand-in for the real one, which holds secrets and stays out of
+      # git. The firmware only has to build.
+      - name: cfg.toml for CI
+        run: |
+          cat > f1/cfg.toml <<'EOF'
+          [f1]
+          wifi_ssid = "ci"
+          wifi_psk = "ci-password"
+          ota_key = "ci-only-not-a-real-key"
+          EOF
+
+      - name: Checks
+        shell: pwsh
+        run: ./check.ps1 -Part firmware

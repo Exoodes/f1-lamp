@@ -156,6 +156,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::clone_on_copy)] // calling `clone` is what this checks
     fn copy_and_clone_give_equal_values() {
         let c1 = Rgb::new(1, 2, 3);
         let c2 = c1;
