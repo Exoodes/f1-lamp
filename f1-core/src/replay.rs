@@ -183,33 +183,19 @@ impl<'a> Replayer<'a> {
         }
     }
 
+    /// Everything due at `now`, or what to do instead: wait, nothing (paused
+    /// or finished), or skip a bad line.
     pub fn step(&mut self, now: Instant) -> Step {
         let mut out = Vec::new();
-
-        if let Some(position) = self.sync_at.take() {
-            self.send_phase(self.phase_at(position), &mut out);
-            // Also when there's none: a jump back from a flag to before the
-            // start, or between qualifying parts, must not leave it showing.
-            let flag = self.state.flag();
-            out.push(race(
-                flag.map_or(RaceEvent::FlagCleared, RaceEvent::TrackFlag),
-                now,
-            ));
-        }
-
+        self.sync(now, &mut out);
         loop {
             let offset = match self.timeline.peek() {
                 None => {
-                    if !self.finished {
-                        self.finished = true;
-                        self.send_phase(SessionPhase::PostSession, &mut out);
-                    }
-                    return if out.is_empty() {
-                        Step::Finished
-                    } else {
-                        Step::Send(out)
-                    };
+                    self.finish(&mut out);
+                    return send_or(out, Step::Finished);
                 }
+                // Reported on its own: what's collected goes out first, and
+                // the bad line is taken on the next call.
                 Some(Err(_)) => {
                     if !out.is_empty() {
                         return Step::Send(out);
@@ -221,27 +207,48 @@ impl<'a> Replayer<'a> {
                 }
                 Some(Ok((offset, _))) => *offset,
             };
-
             match self.playback.wait_for(offset, now) {
-                Some(wait) if wait.is_zero() => {}
-                not_due => {
-                    if !out.is_empty() {
-                        return Step::Send(out);
-                    }
-                    return not_due.map_or(Step::Paused, Step::Wait);
-                }
+                Some(wait) if wait.is_zero() => self.play_next(now, &mut out),
+                not_due => return send_or(out, not_due.map_or(Step::Paused, Step::Wait)),
             }
+        }
+    }
 
-            if let Some(Ok((offset, msg))) = self.timeline.next() {
-                self.send_phase(self.phase_at(offset), &mut out);
-                for event in self.tracker.apply(&msg) {
-                    out.push(race(event, now));
-                }
-                for event in self.state.apply(msg) {
-                    out.push(race(event, now));
-                }
-                self.applied = Some(offset);
-            }
+    /// After a jump: the phase and the flag at the position jumped to.
+    fn sync(&mut self, now: Instant, out: &mut Vec<Input>) {
+        let Some(position) = self.sync_at.take() else {
+            return;
+        };
+        self.send_phase(self.phase_at(position), out);
+        // Also when there's none: a jump back from a flag to before the
+        // start, or between qualifying parts, must not leave it showing.
+        let flag = self.state.flag();
+        out.push(race(
+            flag.map_or(RaceEvent::FlagCleared, RaceEvent::TrackFlag),
+            now,
+        ));
+    }
+
+    /// Plays the next message: its phase, then the events it causes.
+    fn play_next(&mut self, now: Instant, out: &mut Vec<Input>) {
+        let Some(Ok((offset, msg))) = self.timeline.next() else {
+            return;
+        };
+        self.send_phase(self.phase_at(offset), out);
+        for event in self.tracker.apply(&msg) {
+            out.push(race(event, now));
+        }
+        for event in self.state.apply(msg) {
+            out.push(race(event, now));
+        }
+        self.applied = Some(offset);
+    }
+
+    /// The last message has played: post-session, once.
+    fn finish(&mut self, out: &mut Vec<Input>) {
+        if !self.finished {
+            self.finished = true;
+            self.send_phase(SessionPhase::PostSession, out);
         }
     }
 
@@ -284,6 +291,15 @@ fn scan(files: &[(Stream, &str)]) -> (Option<Duration>, Duration) {
         .max()
         .unwrap_or(Duration::ZERO);
     (lights_out, end)
+}
+
+/// What's collected if anything, else `otherwise`.
+fn send_or(out: Vec<Input>, otherwise: Step) -> Step {
+    if out.is_empty() {
+        otherwise
+    } else {
+        Step::Send(out)
+    }
 }
 
 fn race(event: RaceEvent, now: Instant) -> Input {
