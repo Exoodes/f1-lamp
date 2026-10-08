@@ -21,6 +21,10 @@ pub const BOUNDARY_MARGIN: Duration = Duration::from_millis(500);
 pub const PRE_SESSION: i64 = 30 * 60;
 /// Still live this long after the scheduled end: sessions overrun (red flags, delays).
 pub const LIVE_GRACE: i64 = 30 * 60;
+/// While the live feed says the session is still going on, live lasts up to
+/// this much longer: a suspended race may finish an hour after its scheduled
+/// end (the 3 h cap), and red flags make qualifying overrun too.
+pub const OVERRUN: i64 = 45 * 60;
 /// Post-session (the winner window) lasts this long after live ends.
 pub const POST_SESSION: i64 = 60 * 60;
 /// How many sessions the cache keeps; NVS entries have size limits.
@@ -62,17 +66,18 @@ impl SessionKind {
 ///
 /// Every kind of session is followed, practice too: flags and red flags
 /// happen there as well, and Friday practice is the first live test of a
-/// weekend.
-fn phase_of(session: &Session, now: i64) -> Option<SessionPhase> {
+/// weekend. `feed_running`: the live feed says the session still goes on.
+fn phase_of(session: &Session, now: i64, feed_running: bool) -> Option<SessionPhase> {
     let pre_start = session.start - PRE_SESSION;
     let live_end = session.end + LIVE_GRACE;
     let post_end = live_end + POST_SESSION;
+    let overrunning = feed_running && now < live_end + OVERRUN;
 
     if now < pre_start {
         None
     } else if now < session.start {
         Some(SessionPhase::PreSession)
-    } else if now < live_end {
+    } else if now < live_end || overrunning {
         Some(SessionPhase::Live)
     } else if now < post_end && session.kind.has_winner() {
         Some(SessionPhase::PostSession)
@@ -94,16 +99,20 @@ fn rank(phase: SessionPhase) -> u8 {
 /// The session that decides the lamp's phase at `now`, and that phase; `None`
 /// when the lamp is idle. On a tie the later session in the list wins, so
 /// with sorted sessions the newer one decides.
-pub fn current_session(sessions: &[Session], now: i64) -> Option<(SessionPhase, &Session)> {
+pub fn current_session(
+    sessions: &[Session],
+    now: i64,
+    feed_running: bool,
+) -> Option<(SessionPhase, &Session)> {
     sessions
         .iter()
-        .filter_map(|s| phase_of(s, now).map(|p| (p, s)))
+        .filter_map(|s| phase_of(s, now, feed_running).map(|p| (p, s)))
         .max_by_key(|(p, _)| rank(*p))
 }
 
 /// The lamp's phase at `now`.
-pub fn phase_at(sessions: &[Session], now: i64) -> SessionPhase {
-    current_session(sessions, now).map_or(SessionPhase::Idle, |(phase, _)| phase)
+pub fn phase_at(sessions: &[Session], now: i64, feed_running: bool) -> SessionPhase {
+    current_session(sessions, now, feed_running).map_or(SessionPhase::Idle, |(phase, _)| phase)
 }
 
 /// The next moment after `now` at which the phase can change: a session's
@@ -159,15 +168,18 @@ pub enum WinnerLookup {
 /// Whether to look up a winner at `now`. `sent` is the session whose winner
 /// was last sent, `shown_by_feed` the one the live feed showed; OpenF1 is
 /// only the fallback for a race the feed missed (a reboot, a dropped
-/// connection at the flag).
+/// connection at the flag), and not asked while the feed says the race still
+/// goes on (`feed_running`).
 pub fn winner_lookup(
     sessions: &[Session],
     now: i64,
     sent: Option<u32>,
     shown_by_feed: Option<u32>,
+    feed_running: bool,
 ) -> WinnerLookup {
     match awaiting_winner(sessions, now) {
         None => WinnerLookup::Nothing,
+        Some(_) if feed_running => WinnerLookup::Nothing,
         Some(race) if sent == Some(race.key) => WinnerLookup::Nothing,
         Some(race) if shown_by_feed == Some(race.key) => WinnerLookup::ShownByFeed(race.key),
         Some(race) => WinnerLookup::Fetch(race.key),
@@ -225,15 +237,15 @@ mod tests {
     }
 
     fn phase_of_race_at(now: i64) -> SessionPhase {
-        phase_at(&[race()], now)
+        phase_at(&[race()], now, false)
     }
 
     // ---- One session through its windows ----
 
     #[test]
     fn empty_list_is_idle() {
-        assert_eq!(phase_at(&[], START), SessionPhase::Idle);
-        assert_eq!(current_session(&[], START), None);
+        assert_eq!(phase_at(&[], START, false), SessionPhase::Idle);
+        assert_eq!(current_session(&[], START, false), None);
     }
 
     #[test]
@@ -298,7 +310,7 @@ mod tests {
     fn sprint_has_a_post_session() {
         let sprint = session(1, SessionKind::Sprint, START, END);
         assert_eq!(
-            phase_at(&[sprint], END + LIVE_GRACE),
+            phase_at(&[sprint], END + LIVE_GRACE, false),
             SessionPhase::PostSession
         );
     }
@@ -307,9 +319,13 @@ mod tests {
     fn qualifying_is_live_but_has_no_post_session() {
         for kind in [SessionKind::Qualifying, SessionKind::SprintQualifying] {
             let quali = [session(1, kind, START, END)];
-            assert_eq!(phase_at(&quali, START), SessionPhase::Live, "{kind:?}");
             assert_eq!(
-                phase_at(&quali, END + LIVE_GRACE),
+                phase_at(&quali, START, false),
+                SessionPhase::Live,
+                "{kind:?}"
+            );
+            assert_eq!(
+                phase_at(&quali, END + LIVE_GRACE, false),
                 SessionPhase::Idle,
                 "{kind:?}"
             );
@@ -319,9 +335,15 @@ mod tests {
     #[test]
     fn practice_is_followed_like_qualifying() {
         let practice = [session(1, SessionKind::Practice, START, END)];
-        assert_eq!(phase_at(&practice, START - 1), SessionPhase::PreSession);
-        assert_eq!(phase_at(&practice, START), SessionPhase::Live);
-        assert_eq!(phase_at(&practice, END + LIVE_GRACE), SessionPhase::Idle);
+        assert_eq!(
+            phase_at(&practice, START - 1, false),
+            SessionPhase::PreSession
+        );
+        assert_eq!(phase_at(&practice, START, false), SessionPhase::Live);
+        assert_eq!(
+            phase_at(&practice, END + LIVE_GRACE, false),
+            SessionPhase::Idle
+        );
     }
 
     #[test]
@@ -338,14 +360,14 @@ mod tests {
     #[test]
     fn current_session_reports_the_deciding_session() {
         let sessions = [race()];
-        let (phase, s) = current_session(&sessions, START).unwrap();
+        let (phase, s) = current_session(&sessions, START, false).unwrap();
         assert_eq!(phase, SessionPhase::Live);
         assert_eq!(s.key, 1);
     }
 
     #[test]
     fn idle_has_no_current_session() {
-        assert_eq!(current_session(&[race()], START - 2 * HOUR), None);
+        assert_eq!(current_session(&[race()], START - 2 * HOUR, false), None);
     }
 
     #[test]
@@ -356,7 +378,7 @@ mod tests {
             session(1, SessionKind::Qualifying, 10 * HOUR, 11 * HOUR),
             session(2, SessionKind::Race, 11 * HOUR + 15 * MINUTE, 13 * HOUR),
         ];
-        let (phase, s) = current_session(&sessions, 11 * HOUR + 5 * MINUTE).unwrap();
+        let (phase, s) = current_session(&sessions, 11 * HOUR + 5 * MINUTE, false).unwrap();
         assert_eq!(phase, SessionPhase::Live);
         assert_eq!(s.key, 1);
     }
@@ -369,7 +391,7 @@ mod tests {
             race(),
             session(2, SessionKind::Qualifying, 13 * HOUR, 14 * HOUR),
         ];
-        let (phase, s) = current_session(&sessions, 12 * HOUR + 45 * MINUTE).unwrap();
+        let (phase, s) = current_session(&sessions, 12 * HOUR + 45 * MINUTE, false).unwrap();
         assert_eq!(phase, SessionPhase::PreSession);
         assert_eq!(s.key, 2);
     }
@@ -382,7 +404,7 @@ mod tests {
             session(1, SessionKind::Qualifying, 10 * HOUR, 11 * HOUR),
             session(2, SessionKind::Race, 11 * HOUR + 15 * MINUTE, 13 * HOUR),
         ];
-        let (phase, s) = current_session(&sessions, 11 * HOUR + 20 * MINUTE).unwrap();
+        let (phase, s) = current_session(&sessions, 11 * HOUR + 20 * MINUTE, false).unwrap();
         assert_eq!(phase, SessionPhase::Live);
         assert_eq!(s.key, 2);
     }
@@ -394,7 +416,7 @@ mod tests {
             session(9, SessionKind::Practice, START - HOUR, START),
             race(),
         ];
-        let (phase, s) = current_session(&sessions, START - 10 * MINUTE).unwrap();
+        let (phase, s) = current_session(&sessions, START - 10 * MINUTE, false).unwrap();
         assert_eq!(phase, SessionPhase::Live);
         assert_eq!(s.key, 9);
     }
@@ -564,7 +586,7 @@ mod tests {
             session(2, SessionKind::Qualifying, 13 * HOUR, 14 * HOUR),
         ];
         let now = 12 * HOUR + 45 * MINUTE;
-        assert_eq!(phase_at(&sessions, now), SessionPhase::PreSession);
+        assert_eq!(phase_at(&sessions, now, false), SessionPhase::PreSession);
         assert_eq!(awaiting_key(&sessions, now), Some(1));
     }
 
@@ -590,14 +612,14 @@ mod tests {
     fn phase_really_changes_at_each_boundary() {
         let race = [session(1, SessionKind::Race, START, END)];
         let mut t = 0;
-        let mut phases = vec![phase_at(&race, t)];
+        let mut phases = vec![phase_at(&race, t, false)];
         while let Some(next) = next_change(&race, t) {
             assert_ne!(
-                phase_at(&race, next - 1),
-                phase_at(&race, next),
+                phase_at(&race, next - 1, false),
+                phase_at(&race, next, false),
                 "at {next}"
             );
-            phases.push(phase_at(&race, next));
+            phases.push(phase_at(&race, next, false));
             t = next;
         }
         assert_eq!(
@@ -672,7 +694,7 @@ mod tests {
     #[test]
     fn no_winner_is_looked_up_outside_the_window() {
         assert_eq!(
-            winner_lookup(&[race()], END, None, None),
+            winner_lookup(&[race()], END, None, None, false),
             WinnerLookup::Nothing
         );
     }
@@ -680,7 +702,7 @@ mod tests {
     #[test]
     fn a_winner_not_yet_sent_is_fetched() {
         assert_eq!(
-            winner_lookup(&[race()], WINNER_TIME, None, None),
+            winner_lookup(&[race()], WINNER_TIME, None, None, false),
             WinnerLookup::Fetch(1)
         );
     }
@@ -688,7 +710,7 @@ mod tests {
     #[test]
     fn a_winner_sent_already_is_not_fetched_again() {
         assert_eq!(
-            winner_lookup(&[race()], WINNER_TIME, Some(1), None),
+            winner_lookup(&[race()], WINNER_TIME, Some(1), None, false),
             WinnerLookup::Nothing
         );
     }
@@ -696,7 +718,7 @@ mod tests {
     #[test]
     fn a_winner_the_feed_showed_is_not_fetched() {
         assert_eq!(
-            winner_lookup(&[race()], WINNER_TIME, None, Some(1)),
+            winner_lookup(&[race()], WINNER_TIME, None, Some(1), false),
             WinnerLookup::ShownByFeed(1)
         );
     }
@@ -704,8 +726,58 @@ mod tests {
     #[test]
     fn the_feed_showing_another_sessions_winner_doesnt_count() {
         assert_eq!(
-            winner_lookup(&[race()], WINNER_TIME, Some(7), Some(7)),
+            winner_lookup(&[race()], WINNER_TIME, Some(7), Some(7), false),
             WinnerLookup::Fetch(1)
+        );
+    }
+
+    #[test]
+    fn no_winner_is_fetched_while_the_feed_says_the_race_still_runs() {
+        assert_eq!(
+            winner_lookup(&[race()], WINNER_TIME, None, None, true),
+            WinnerLookup::Nothing
+        );
+    }
+
+    // ---- Overruns ----
+
+    #[test]
+    fn a_race_the_feed_says_still_runs_stays_live_past_the_grace_period() {
+        assert_eq!(
+            phase_at(&[race()], END + LIVE_GRACE, true),
+            SessionPhase::Live
+        );
+        assert_eq!(
+            phase_at(&[race()], END + LIVE_GRACE + OVERRUN - 1, true),
+            SessionPhase::Live
+        );
+    }
+
+    #[test]
+    fn a_suspended_race_finishing_at_the_three_hour_cap_is_still_live() {
+        assert_eq!(
+            phase_at(&[race()], START + 3 * HOUR, true),
+            SessionPhase::Live
+        );
+    }
+
+    #[test]
+    fn an_overrun_ends_at_its_limit_even_if_the_feed_still_says_running() {
+        assert_eq!(
+            phase_at(&[race()], END + LIVE_GRACE + OVERRUN, true),
+            SessionPhase::PostSession
+        );
+    }
+
+    #[test]
+    fn a_running_feed_doesnt_start_a_session_early() {
+        assert_eq!(
+            phase_at(&[race()], START - 1, true),
+            SessionPhase::PreSession
+        );
+        assert_eq!(
+            phase_at(&[race()], START - PRE_SESSION - 1, true),
+            SessionPhase::Idle
         );
     }
 }

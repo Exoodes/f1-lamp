@@ -64,6 +64,9 @@ pub struct Received {
     pub closed: Option<String>,
     /// The session key from SessionInfo, once known.
     pub session_key: Option<u32>,
+    /// Whether the session still goes on, once the answer to `Subscribe`
+    /// has said where it stands.
+    pub running: Option<bool>,
 }
 
 pub struct LiveSession {
@@ -71,6 +74,7 @@ pub struct LiveSession {
     state: TrackState,
     tracker: Tracker,
     session_key: Option<u32>,
+    subscribed: bool,
 }
 
 impl LiveSession {
@@ -82,6 +86,7 @@ impl LiveSession {
             state: TrackState::default(),
             tracker: Tracker::default(),
             session_key: None,
+            subscribed: false,
         }
     }
 
@@ -125,6 +130,7 @@ impl LiveSession {
             }
         }
         out.session_key = self.session_key;
+        out.running = self.subscribed.then(|| self.state.session_running());
         out
     }
 
@@ -149,6 +155,7 @@ impl LiveSession {
                 ..
             } if invocation_id.as_deref() == Some(&STATE_CALL.to_string()) => {
                 self.initial_state(result, out);
+                self.subscribed = true;
                 out.subscribed = true;
             }
             Message::Invocation { .. } => {
@@ -419,6 +426,7 @@ mod tests {
             r,
             Received {
                 session_key: Some(11379),
+                running: Some(true),
                 ..Received::default()
             }
         );
@@ -433,6 +441,21 @@ mod tests {
         assert_eq!(r.problems.len(), 1);
         let r = live.receive(feed("TrackStatus", r#"{"Status":"5"}"#).as_bytes());
         assert_eq!(r.events, [RaceEvent::TrackFlag(TrackFlag::Red)]);
+    }
+
+    #[test]
+    fn whether_the_session_runs_is_unknown_until_subscribed() {
+        let mut live = LiveSession::new(1024);
+        let r = live.receive(format!("{{}}{RS}").as_bytes());
+        assert_eq!(r.running, None);
+    }
+
+    #[test]
+    fn a_race_runs_until_it_finishes() {
+        let (mut live, received) = racing();
+        assert_eq!(received.running, Some(true));
+        let r = live.receive(feed("SessionStatus", r#"{"Status":"Finished"}"#).as_bytes());
+        assert_eq!(r.running, Some(false));
     }
 
     #[test]

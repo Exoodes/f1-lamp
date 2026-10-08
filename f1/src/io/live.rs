@@ -54,6 +54,9 @@ const MAX_RETRY: Duration = Duration::from_secs(60);
 #[derive(Default)]
 pub struct LiveControl {
     wanted: AtomicBool,
+    /// The feed says the session still goes on, which keeps it live past its
+    /// scheduled window.
+    running: AtomicBool,
     /// The session whose winner the feed has shown, so the OpenF1 lookup
     /// doesn't show it a second time.
     winner_shown: Mutex<Option<u32>>,
@@ -71,6 +74,16 @@ impl LiveControl {
 
     fn wanted(&self) -> bool {
         self.wanted.load(Ordering::Relaxed)
+    }
+
+    pub fn feed_running(&self) -> bool {
+        self.running.load(Ordering::Relaxed)
+    }
+
+    fn set_running(&self, running: bool) {
+        if self.running.swap(running, Ordering::Relaxed) != running {
+            log::info!("live: session {}", if running { "running" } else { "over" });
+        }
     }
 
     pub fn winner_shown(&self) -> Option<u32> {
@@ -100,6 +113,7 @@ fn run(tx: &SyncSender<Input>, control: &LiveControl, tokens: &TokenKeeper, hear
         heartbeat.beat(Instant::now());
         if !control.wanted() {
             retry.reset();
+            control.set_running(false);
             if tell(tx, health.not_wanted()).is_err() {
                 return;
             }
@@ -341,6 +355,9 @@ fn handle(
             heap.free,
             heap.largest_block
         );
+    }
+    if let Some(running) = received.running {
+        control.set_running(running);
     }
     for event in received.events {
         log::info!("live: {event:?}");

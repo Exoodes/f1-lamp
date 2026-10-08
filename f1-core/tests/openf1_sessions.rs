@@ -80,7 +80,7 @@ fn every_session_ends_after_it_starts() {
 fn monza_race_day_goes_through_every_phase() {
     let sessions = usable_sessions(dtos());
     let race = *sessions.iter().find(|s| s.key == MONZA_RACE).unwrap();
-    let at = |now| phase_at(&sessions, now);
+    let at = |now| phase_at(&sessions, now, false);
 
     assert_eq!(at(race.start - 60), SessionPhase::PreSession);
     assert_eq!(at(race.start + 60), SessionPhase::Live);
@@ -94,7 +94,7 @@ fn monza_race_day_goes_through_every_phase() {
 #[test]
 fn monza_race_is_the_current_session_while_live() {
     let sessions = usable_sessions(dtos());
-    let (_, current) = current_session(&sessions, 1_788_699_600 + 60).unwrap();
+    let (_, current) = current_session(&sessions, 1_788_699_600 + 60, false).unwrap();
     assert_eq!(current.key, MONZA_RACE);
 }
 

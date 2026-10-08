@@ -117,6 +117,20 @@ impl TrackState {
         self.shown
     }
 
+    /// Whether the session still goes on: started and not over. Qualifying
+    /// is `Finished` between its parts, so for anything but a race only
+    /// `Finalised` and `Ends` mean over.
+    pub fn session_running(&self) -> bool {
+        use SessionState::{Aborted, Finished, Inactive, Started};
+
+        match self.session {
+            Some(Started | Aborted) => true,
+            Some(Inactive) => self.started,
+            Some(Finished) => self.is_race == Some(false),
+            _ => false,
+        }
+    }
+
     /// The flag the session's state and the track status mean together. A
     /// suspended session (`Aborted`) is red whatever the track status says.
     /// While the session runs the track status decides, a yellow becoming a
@@ -462,6 +476,41 @@ mod tests {
                 RaceEvent::TrackFlag(TrackFlag::Green)
             ]
         );
+    }
+
+    #[test]
+    fn a_session_runs_from_the_start_until_it_is_over() {
+        let mut s = TrackState::default();
+        s.apply(info("Race"));
+        assert!(!s.session_running());
+        s.apply(session(SessionState::Inactive));
+        assert!(!s.session_running());
+        s.apply(session(SessionState::Started));
+        assert!(s.session_running());
+        s.apply(session(SessionState::Aborted));
+        assert!(s.session_running());
+        s.apply(session(SessionState::Finished));
+        assert!(!s.session_running());
+    }
+
+    #[test]
+    fn a_red_flag_counts_as_running_even_when_joined_during_it() {
+        let mut s = TrackState::default();
+        s.apply(session(SessionState::Aborted));
+        assert!(s.session_running());
+    }
+
+    #[test]
+    fn qualifying_runs_between_its_parts_until_finalised() {
+        let mut s = TrackState::default();
+        s.apply(info("Qualifying"));
+        s.apply(session(SessionState::Started));
+        s.apply(session(SessionState::Finished));
+        assert!(s.session_running());
+        s.apply(session(SessionState::Inactive));
+        assert!(s.session_running());
+        s.apply(session(SessionState::Finalised));
+        assert!(!s.session_running());
     }
 
     #[test]

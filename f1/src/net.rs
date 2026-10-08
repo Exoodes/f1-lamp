@@ -174,9 +174,10 @@ impl Schedule {
     fn update_phase(
         &mut self,
         now_unix: i64,
+        feed_running: bool,
         tx: &SyncSender<Input>,
     ) -> anyhow::Result<SessionPhase> {
-        let phase = schedule::phase_at(&self.sessions, now_unix);
+        let phase = schedule::phase_at(&self.sessions, now_unix, feed_running);
         // A replay owns the phase; two producers would fight over it.
         if cfg!(feature = "player") || self.sent_phase == Some(phase) {
             return Ok(phase);
@@ -184,7 +185,7 @@ impl Schedule {
         tx.send(Input::Phase(phase))
             .context("render loop is gone")?;
         self.sent_phase = Some(phase);
-        log_phase(&self.sessions, now_unix);
+        log_phase(&self.sessions, now_unix, feed_running);
         Ok(phase)
     }
 }
@@ -405,7 +406,8 @@ impl<'a> Net<'a> {
         let Some(unix) = clock::unix_now() else {
             return Ok(now + PHASE_WAITING_EVERY);
         };
-        let phase = self.schedule.update_phase(unix, self.tx)?;
+        let feed_running = self.shared.live.feed_running();
+        let phase = self.schedule.update_phase(unix, feed_running, self.tx)?;
         self.shared
             .live
             .set_wanted(cfg!(feature = "live-now") || schedule::feed_wanted(phase));
@@ -437,7 +439,14 @@ fn check_winner(
     live: &LiveControl,
     tx: &SyncSender<Input>,
 ) -> anyhow::Result<()> {
-    let key = match schedule::winner_lookup(sessions, now_unix, *sent, live.winner_shown()) {
+    let lookup = schedule::winner_lookup(
+        sessions,
+        now_unix,
+        *sent,
+        live.winner_shown(),
+        live.feed_running(),
+    );
+    let key = match lookup {
         WinnerLookup::Nothing => return Ok(()),
         WinnerLookup::ShownByFeed(key) => {
             log::info!("winner: session {key} already shown from the live feed");
@@ -500,8 +509,8 @@ fn log_calendar(sessions: &[Session], now_unix: i64) {
 }
 
 /// `phase: Live (Race, session 11731)`, then the next session.
-fn log_phase(sessions: &[Session], now_unix: i64) {
-    match schedule::current_session(sessions, now_unix) {
+fn log_phase(sessions: &[Session], now_unix: i64, feed_running: bool) {
+    match schedule::current_session(sessions, now_unix, feed_running) {
         Some((phase, s)) => log::info!("phase: {phase:?} ({:?}, session {})", s.kind, s.key),
         None => log::info!("phase: Idle"),
     }
