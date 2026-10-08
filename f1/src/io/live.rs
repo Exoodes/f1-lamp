@@ -106,7 +106,7 @@ fn run(tx: &SyncSender<Input>, control: &LiveControl, tokens: &TokenKeeper, hear
             thread::sleep(IDLE);
             continue;
         }
-        match session(tx, control, tokens, heartbeat, &mut health) {
+        match session(tx, control, tokens, heartbeat, &mut health, &mut retry) {
             Ok(()) => retry.reset(),
             Err(e) => {
                 let wait = retry.next_wait();
@@ -176,6 +176,7 @@ fn session(
     tokens: &TokenKeeper,
     heartbeat: &Heartbeat,
     health: &mut FeedHealth,
+    retry: &mut Backoff,
 ) -> anyhow::Result<()> {
     let mut conn = Connection::open(tokens, heartbeat)?;
     let mut live = LiveSession::new(MAX_FRAME);
@@ -194,7 +195,7 @@ fn session(
             live.expect(data.frame_len);
         }
         let received = live.receive(&data.bytes);
-        handle(received, &mut conn, tx, control, health)?;
+        handle(received, &mut conn, tx, control, health, retry)?;
     }
 }
 
@@ -324,12 +325,14 @@ fn handle(
     tx: &SyncSender<Input>,
     control: &LiveControl,
     health: &mut FeedHealth,
+    retry: &mut Backoff,
 ) -> anyhow::Result<()> {
     for problem in &received.problems {
         log::warn!("live: {problem}");
     }
     if received.subscribed {
         conn.subscribed();
+        retry.reset();
         tell(tx, health.working())?;
         let heap = system::heap();
         log::info!(
