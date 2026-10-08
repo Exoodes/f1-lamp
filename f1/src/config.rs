@@ -60,6 +60,8 @@ pub mod nvs {
     /// How often the firmware on trial has started; absent when none is
     /// (`ota.rs`).
     pub const OTA_TRIAL: &str = "ota_trial";
+    /// Which firmware is on trial: the start of its ELF SHA-256 (`ota.rs`).
+    pub const OTA_TRIAL_IMAGE: &str = "ota_trial_img";
     /// Set before switching back, so the firmware that runs next can say why
     /// (`ota.rs`).
     pub const OTA_FELL_BACK: &str = "ota_fell_back";
