@@ -39,12 +39,18 @@ const THREAD_SILENCE_LIMIT: Duration = Duration::from_secs(180);
 const WIFI_SSID: &str = env!("WIFI_SSID");
 const WIFI_PSK: &str = env!("WIFI_PSK");
 
-fn main() -> anyhow::Result<()> {
+fn main() {
     esp_idf_svc::sys::link_patches();
-    let booted = Instant::now();
-
     // The serial log, plus the last lines for the web page.
     io::weblog::init();
+    if let Err(e) = run() {
+        log::error!("startup failed, restarting: {e:#}");
+        restart();
+    }
+}
+
+fn run() -> anyhow::Result<()> {
+    let booted = Instant::now();
     if WIFI_SSID.is_empty() {
         log::warn!("WiFi SSID is empty: set wifi_ssid in f1/cfg.toml");
     }
