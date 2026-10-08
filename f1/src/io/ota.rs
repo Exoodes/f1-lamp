@@ -11,7 +11,7 @@
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
-        Mutex, OnceLock,
+        Mutex, MutexGuard, OnceLock,
     },
     time::Duration,
 };
@@ -77,11 +77,16 @@ pub fn check_boot(partition: EspDefaultNvsPartition) -> anyhow::Result<()> {
 /// over.
 pub fn mark_healthy() {
     ON_TRIAL.store(false, Ordering::Relaxed);
-    let Some(nvs) = TRIAL.get() else { return };
-    let nvs = nvs.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(nvs) = trial_store() else { return };
     if nvs.remove(OTA_TRIAL).unwrap_or(false) {
         log::info!("ota: new firmware is healthy, trial passed");
     }
+}
+
+fn trial_store() -> Option<MutexGuard<'static, EspNvs<NvsDefault>>> {
+    TRIAL
+        .get()
+        .map(|nvs| nvs.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
 /// Whether this trial boot has had its time (`HEALTHY_WITHIN`) and still
@@ -145,12 +150,20 @@ pub fn receive(req: &mut Request<&mut EspHttpConnection<'_>>, len: usize) -> any
         }
     }
 
-    // Checks the whole image, then makes its slot the boot slot.
-    update.complete().context("the image doesn't check out")?;
     // The new firmware starts on trial.
-    if let Some(nvs) = TRIAL.get() {
-        let nvs = nvs.lock().unwrap_or_else(|e| e.into_inner());
+    let previous = trial_store().and_then(|nvs| nvs.get_u8(OTA_TRIAL).ok().flatten());
+    if let Some(nvs) = trial_store() {
         nvs.set_u8(OTA_TRIAL, 0).context("start the trial")?;
+    }
+    // Checks the whole image, then makes its slot the boot slot.
+    if let Err(e) = update.complete() {
+        if let Some(nvs) = trial_store() {
+            let _ = match previous {
+                Some(boot) => nvs.set_u8(OTA_TRIAL, boot),
+                None => nvs.remove(OTA_TRIAL).map(|_| ()),
+            };
+        }
+        return Err(e).context("the image doesn't check out");
     }
     log::info!("ota: done, {received} bytes; restarting into the new firmware");
     Ok(())

@@ -131,13 +131,12 @@ fn ota_route(server: &mut EspHttpServer<'static>) -> anyhow::Result<()> {
         };
         match ota::receive(&mut req, len) {
             Ok(()) => {
-                reply(req, 200, TEXT, b"updated, restarting")?;
                 // A moment for the answer to leave before the chip restarts.
                 std::thread::spawn(|| {
                     std::thread::sleep(std::time::Duration::from_secs(1));
                     crate::restart();
                 });
-                Ok(())
+                reply(req, 200, TEXT, b"updated, restarting")
             }
             Err(e) => {
                 log::warn!("ota: {e:#}");
