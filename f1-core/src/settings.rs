@@ -2,6 +2,8 @@
 //! which events show for which drivers. Saved in flash as JSON; missing fields
 //! take their defaults, so settings saved by older firmware still load.
 
+use core::fmt;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{color::Rgb, drivers::DriverSet, input::RaceEvent, theme::LAMP};
@@ -10,6 +12,27 @@ use crate::{color::Rgb, drivers::DriverSet, input::RaceEvent, theme::LAMP};
 /// settings into a buffer this big; a longer entry can't be read and the lamp
 /// falls back to defaults. A test below checks the worst case fits.
 pub const MAX_JSON: usize = 1024;
+
+/// Streams run up to about a minute behind the feed. Every race event waits
+/// this long in memory, so it can't be unlimited.
+pub const MAX_TV_DELAY_MS: u32 = 120_000;
+pub const MAX_WINNER_DISPLAY_MS: u32 = 60 * 60 * 1000;
+pub const MAX_GREEN_DISPLAY_MS: u32 = 10 * 60 * 1000;
+/// Night times are minutes after midnight.
+pub const LAST_MINUTE: u16 = 24 * 60 - 1;
+
+/// A setting outside what the lamp accepts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OutOfRange {
+    pub field: &'static str,
+    pub max: f64,
+}
+
+impl fmt::Display for OutOfRange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} must be between 0 and {}", self.field, self.max)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -85,6 +108,61 @@ impl Settings {
 impl Settings {
     fn follows(&self, driver: u8) -> bool {
         self.follow_all || self.followed_drivers.contains(driver)
+    }
+
+    /// For settings sent from the page: the first field out of range.
+    pub fn validate(&self) -> Result<(), OutOfRange> {
+        let minute = |m: Option<u16>| m.map_or(0.0, f64::from);
+        let limited = [
+            ("lamp_brightness", f64::from(self.lamp_brightness), 1.0),
+            ("global_brightness", f64::from(self.global_brightness), 1.0),
+            ("night_brightness", f64::from(self.night_brightness), 1.0),
+            (
+                "night_start",
+                minute(self.night_start),
+                f64::from(LAST_MINUTE),
+            ),
+            ("night_end", minute(self.night_end), f64::from(LAST_MINUTE)),
+            (
+                "tv_delay_ms",
+                f64::from(self.tv_delay_ms),
+                f64::from(MAX_TV_DELAY_MS),
+            ),
+            (
+                "winner_display_ms",
+                f64::from(self.winner_display_ms),
+                f64::from(MAX_WINNER_DISPLAY_MS),
+            ),
+            (
+                "green_display_ms",
+                f64::from(self.green_display_ms),
+                f64::from(MAX_GREEN_DISPLAY_MS),
+            ),
+        ];
+        match limited
+            .into_iter()
+            .find(|&(_, value, max)| !(0.0..=max).contains(&value))
+        {
+            Some((field, _, max)) => Err(OutOfRange { field, max }),
+            None => Ok(()),
+        }
+    }
+
+    /// For settings saved by firmware that didn't check them: every field
+    /// brought into range.
+    #[must_use]
+    pub fn clamped(self) -> Self {
+        Settings {
+            lamp_brightness: self.lamp_brightness.clamp(0.0, 1.0),
+            global_brightness: self.global_brightness.clamp(0.0, 1.0),
+            night_brightness: self.night_brightness.clamp(0.0, 1.0),
+            night_start: self.night_start.map(|m| m.min(LAST_MINUTE)),
+            night_end: self.night_end.map(|m| m.min(LAST_MINUTE)),
+            tv_delay_ms: self.tv_delay_ms.min(MAX_TV_DELAY_MS),
+            winner_display_ms: self.winner_display_ms.min(MAX_WINNER_DISPLAY_MS),
+            green_display_ms: self.green_display_ms.min(MAX_GREEN_DISPLAY_MS),
+            ..self
+        }
     }
 }
 
@@ -451,5 +529,101 @@ mod tests {
         assert!(!Settings::default().follow_all);
         let old: Settings = serde_json::from_str(r#"{"followed_drivers":[44]}"#).unwrap();
         assert!(!old.follow_all);
+    }
+
+    // ---- Limits ----
+
+    fn at_the_limits() -> Settings {
+        Settings {
+            lamp_brightness: 1.0,
+            global_brightness: 0.0,
+            night_brightness: 1.0,
+            night_start: Some(LAST_MINUTE),
+            night_end: Some(0),
+            tv_delay_ms: MAX_TV_DELAY_MS,
+            winner_display_ms: MAX_WINNER_DISPLAY_MS,
+            green_display_ms: MAX_GREEN_DISPLAY_MS,
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn defaults_and_the_limits_themselves_are_valid() {
+        assert_eq!(Settings::default().validate(), Ok(()));
+        assert_eq!(at_the_limits().validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_tv_delay_above_the_limit_is_rejected_by_name() {
+        let s = Settings {
+            tv_delay_ms: MAX_TV_DELAY_MS + 1,
+            ..Settings::default()
+        };
+        let e = s.validate().unwrap_err();
+        assert_eq!(e.field, "tv_delay_ms");
+        assert_eq!(e.to_string(), "tv_delay_ms must be between 0 and 120000");
+    }
+
+    #[test]
+    fn every_limited_field_is_checked() {
+        let too_far = [
+            Settings {
+                lamp_brightness: 1.5,
+                ..Settings::default()
+            },
+            Settings {
+                global_brightness: -0.1,
+                ..Settings::default()
+            },
+            Settings {
+                night_brightness: 2.0,
+                ..Settings::default()
+            },
+            Settings {
+                night_start: Some(LAST_MINUTE + 1),
+                ..Settings::default()
+            },
+            Settings {
+                night_end: Some(u16::MAX),
+                ..Settings::default()
+            },
+            Settings {
+                winner_display_ms: MAX_WINNER_DISPLAY_MS + 1,
+                ..Settings::default()
+            },
+            Settings {
+                green_display_ms: MAX_GREEN_DISPLAY_MS + 1,
+                ..Settings::default()
+            },
+        ];
+        for s in too_far {
+            assert!(s.validate().is_err(), "{s:?}");
+        }
+    }
+
+    #[test]
+    fn clamping_brings_every_field_into_range() {
+        let wild = Settings {
+            lamp_brightness: 7.0,
+            global_brightness: -1.0,
+            night_brightness: 3.0,
+            night_start: Some(u16::MAX),
+            night_end: Some(u16::MAX),
+            tv_delay_ms: u32::MAX,
+            winner_display_ms: u32::MAX,
+            green_display_ms: u32::MAX,
+            ..Settings::default()
+        };
+        let expected = Settings {
+            night_end: Some(LAST_MINUTE),
+            ..at_the_limits()
+        };
+        assert_eq!(wild.clamped(), expected);
+    }
+
+    #[test]
+    fn clamping_leaves_valid_settings_alone() {
+        assert_eq!(at_the_limits().clamped(), at_the_limits());
+        assert_eq!(Settings::default().clamped(), Settings::default());
     }
 }

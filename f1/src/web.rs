@@ -99,7 +99,13 @@ fn command_routes(
     let settings_tx = tx.clone();
     server.fn_handler::<anyhow::Error, _>("/api/settings", Method::Post, move |req| {
         post_json(req, "settings", |req, settings: Settings| {
-            send(req, &settings_tx, Input::Settings(settings))
+            match settings.validate() {
+                Ok(()) => send(req, &settings_tx, Input::Settings(settings)),
+                Err(e) => {
+                    log::warn!("rejected settings: {e}");
+                    reply(req, 400, TEXT, format!("bad settings: {e}").as_bytes())
+                }
+            }
         })
     })?;
 

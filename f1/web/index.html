@@ -320,10 +320,10 @@
       <label>Overall brightness
         <span class="slider"><input type="range" id="global_brightness" min="0" max="100"><output id="global_brightness_out"></output></span>
       </label>
-      <label>Winner shown (min) <input type="number" id="winner_minutes" min="0" step="0.5"></label>
-      <label>Green shown (s) <input type="number" id="green_seconds" min="0" step="1"></label>
+      <label>Winner shown (min) <input type="number" id="winner_minutes" min="0" max="60" step="0.5"></label>
+      <label>Green shown (s) <input type="number" id="green_seconds" min="0" max="600" step="1"></label>
       <p class="hint">After a green flag the lamp returns to its own colour; 0 keeps it green.</p>
-      <label>TV delay (s) <input type="number" id="tv_delay" min="0" step="0.5"></label>
+      <label>TV delay (s) <input type="number" id="tv_delay" min="0" max="120" step="0.5"></label>
     </section>
 
     <section class="settings">

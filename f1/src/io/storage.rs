@@ -36,6 +36,7 @@ impl SettingsStore {
     pub fn load(&self) -> Settings {
         let mut buf = [0u8; settings::MAX_JSON];
         load_json(&self.nvs, SETTINGS, &mut buf, "settings", "using defaults")
+            .map(Settings::clamped)
             .inspect(|settings: &Settings| log::info!("settings loaded: {settings:?}"))
             .unwrap_or_default()
     }
