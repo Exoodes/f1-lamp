@@ -250,7 +250,6 @@ impl<'a> Net<'a> {
         let schedule = Schedule::load(ScheduleStore::new(nvs.clone())?);
         let wifi = wifi::create(modem, sys_loop, nvs, WIFI_SSID, WIFI_PSK)?;
         let mdns = mdns::start().context("start mDNS")?;
-        clock::set_timezone();
         Ok(Net {
             tx,
             shared,

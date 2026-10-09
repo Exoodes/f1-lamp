@@ -41,6 +41,7 @@ const WIFI_PSK: &str = env!("WIFI_PSK");
 
 fn main() {
     esp_idf_svc::sys::link_patches();
+    io::clock::set_timezone();
     // The serial log, plus the last lines for the web page.
     io::weblog::init();
     if let Err(e) = run() {
