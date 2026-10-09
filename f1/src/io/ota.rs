@@ -24,6 +24,8 @@ use esp_idf_svc::{
     sys::{
         esp, esp_app_desc_t, esp_app_get_description, esp_ota_get_next_update_partition,
         esp_ota_get_partition_description, esp_ota_get_running_partition,
+        esp_ota_get_state_partition, esp_ota_img_states_t,
+        esp_ota_img_states_t_ESP_OTA_IMG_PENDING_VERIFY, esp_ota_mark_app_valid_cancel_rollback,
         esp_ota_set_boot_partition,
     },
 };
@@ -78,7 +80,27 @@ pub fn check_boot(partition: EspDefaultNvsPartition) -> anyhow::Result<()> {
             }
         }
     }
+    confirm_to_bootloader()?;
     let _ = TRIAL.set(Mutex::new(nvs));
+    Ok(())
+}
+
+/// The bootloader sends a firmware that arrived over WiFi back if it restarts
+/// before this, e.g. a crash before `check_boot`. From here on the trial
+/// counted in NVS decides.
+fn confirm_to_bootloader() -> anyhow::Result<()> {
+    let mut state: esp_ota_img_states_t = 0;
+    // SAFETY: the running partition is a partition table entry, valid for the
+    // whole run, and `state` is a local the call writes into.
+    let read =
+        esp!(unsafe { esp_ota_get_state_partition(esp_ota_get_running_partition(), &mut state) });
+    if read.is_err() || state != esp_ota_img_states_t_ESP_OTA_IMG_PENDING_VERIFY {
+        return Ok(());
+    }
+    // SAFETY: no arguments; it only rewrites `otadata`.
+    esp!(unsafe { esp_ota_mark_app_valid_cancel_rollback() })
+        .context("confirm the firmware to the bootloader")?;
+    log::info!("ota: confirmed to the bootloader");
     Ok(())
 }
 

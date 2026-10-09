@@ -5,8 +5,9 @@ target = "riscv32imc-esp-espidf"
 linker = "ldproxy"
 # partitions.csv has two app slots for updates over WiFi. USB always writes
 # slot ota_0, and erasing otadata makes the chip boot what was just flashed
-# (after a WiFi update it could otherwise keep booting ota_1).
-runner = "espflash flash --monitor --partition-table partitions.csv --target-app-partition ota_0 --erase-parts otadata"
+# (after a WiFi update it could otherwise keep booting ota_1). The bootloader
+# is ESP-IDF's own build, with the sdkconfig's rollback.
+runner = "espflash flash --monitor --bootloader target/riscv32imc-esp-espidf/release/build/bootloader.bin --partition-table partitions.csv --target-app-partition ota_0 --erase-parts otadata"
 rustflags = [ "--cfg",  "espidf_time64"]
 
 [unstable]
