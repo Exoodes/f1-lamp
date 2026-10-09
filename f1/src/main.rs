@@ -92,8 +92,12 @@ fn run() -> anyhow::Result<()> {
     // From here on the main task is the render loop: it must not wait for
     // the network threads' work. Why 6: `config::RENDER_PRIORITY`.
     io::system::set_own_priority(config::RENDER_PRIORITY);
+    if let Err(e) = io::system::watch_own_task(config::RENDER_WATCHDOG) {
+        log::warn!("watchdog not started: {e:#}");
+    }
     let mut next_check = Instant::now() + THREAD_CHECK_EVERY;
     loop {
+        io::system::feed_watchdog();
         let now = Instant::now();
         if now >= next_check {
             supervise(&threads, booted, now);

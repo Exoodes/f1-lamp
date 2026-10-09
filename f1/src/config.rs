@@ -42,6 +42,11 @@ pub mod led {
 /// lose next to nothing.
 pub const RENDER_PRIORITY: u32 = 6;
 
+/// The render loop restarts the chip when it hasn't drawn a frame for this
+/// long. Far above its slowest normal frame (a flash write, a burst of log
+/// lines).
+pub const RENDER_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Inputs waiting for the render loop, which takes them all every frame
 /// (20 ms). When it's full, threads wait and the web server answers 503.
 pub const INPUT_QUEUE: usize = 32;
