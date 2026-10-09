@@ -8,7 +8,7 @@ use std::{
         mpsc::{self, Receiver, SyncSender},
         Arc, Mutex,
     },
-    thread::{self, JoinHandle},
+    thread::JoinHandle,
     time::{Duration, Instant},
 };
 
@@ -110,6 +110,7 @@ fn run() -> anyhow::Result<()> {
         log::warn!("watchdog not started: {e:#}");
     }
     let mut next_check = Instant::now() + THREAD_CHECK_EVERY;
+    let mut pacer = io::system::Pacer::new(FRAME_INTERVAL);
     loop {
         io::system::feed_watchdog();
         let now = Instant::now();
@@ -121,7 +122,7 @@ fn run() -> anyhow::Result<()> {
         lamp.show(now);
         lamp.publish_snapshot();
         lamp.storage.save_if_due(now);
-        thread::sleep(FRAME_INTERVAL);
+        pacer.wait();
     }
 }
 

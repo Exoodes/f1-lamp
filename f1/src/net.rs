@@ -254,9 +254,10 @@ impl<'a> Net<'a> {
         if now >= self.due.heap_log {
             let heap = system::heap();
             log::info!(
-                "heap: {} B free, {} B lowest since boot",
+                "heap: {} B free, {} B lowest since boot, largest block {} B",
                 heap.free,
-                heap.lowest
+                heap.lowest,
+                heap.largest_block
             );
             self.due.heap_log = now + HEAP_LOG_EVERY;
         }

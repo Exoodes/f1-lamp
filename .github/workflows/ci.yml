@@ -1,5 +1,6 @@
-# The checks in check.ps1, on every push and pull request. Two jobs, so the
-# quick one (f1-core and the probe) reports while the firmware still builds.
+# The checks in check.ps1, on every push and pull request, plus a security
+# audit of the lock files. Separate jobs, so the quick ones report while the
+# firmware still builds.
 
 name: CI
 
@@ -32,6 +33,27 @@ jobs:
       - name: Checks
         shell: pwsh
         run: ./check.ps1 -Part core
+
+  audit:
+    name: security advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      # A known vulnerability in any crate of the three lock files fails the
+      # run. From the repository root, so f1's pinned nightly isn't needed.
+      - name: cargo audit
+        run: |
+          failed=0
+          for lock in f1-core/Cargo.lock f1-probe/Cargo.lock f1/Cargo.lock; do
+            echo "== $lock"
+            cargo audit --file "$lock" || failed=1
+          done
+          exit $failed
 
   firmware:
     name: firmware

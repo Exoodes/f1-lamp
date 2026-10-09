@@ -78,7 +78,7 @@ You need:
   `rust-src`, and rustup installs them on the first build. The ESP32-C3 is
   RISC-V, so `espup` (the Xtensa toolchain) isn't needed.
 - `cargo install ldproxy espflash` (espflash 4).
-- git and Python 3: the first build downloads ESP-IDF v5.2 and builds it,
+- git and Python 3: the first build downloads ESP-IDF v5.2.8 and builds it,
   which takes a while; later builds reuse it.
 
 Create `f1/cfg.toml` (it's in `.gitignore`, keep it out of git):
@@ -223,7 +223,9 @@ powershell -ExecutionPolicy Bypass -File check.ps1 -Part core
 
 It runs formatting, clippy with warnings as errors, the f1-core tests, the
 probe, and the release builds (plain, showcase, replay of the archived race)
-with a check that each image stays under 95 % of an app slot.
+with a check that each image stays under 95 % of an app slot. Any warning in
+their output fails them, also one clippy can't turn into an error (such as an
+unused dependency). The CI also runs `cargo audit` on the three lock files.
 `cargo fmt --all` from `f1/` fixes formatting in f1 and f1-core.
 
 Watching a live session with the probe (on the PC):

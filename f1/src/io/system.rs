@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use esp_idf_svc::sys;
+use esp_idf_svc::{hal::delay::TickType, sys};
 
 /// The heap, in bytes.
 pub struct Heap {
@@ -19,6 +19,31 @@ pub fn restart() -> ! {
     // SAFETY: `esp_restart` takes no arguments and has no preconditions; it
     // reboots the chip and never returns.
     unsafe { sys::esp_restart() }
+}
+
+/// Wakes the calling task every `period`, counted in FreeRTOS ticks.
+/// `thread::sleep` can't do this: since ESP-IDF 5.2.x it sleeps at least the
+/// time asked and so wakes a tick late, which made 20 ms frames 30 ms.
+pub struct Pacer {
+    last_wake: sys::TickType_t,
+    period: sys::TickType_t,
+}
+
+impl Pacer {
+    pub fn new(period: Duration) -> Self {
+        Pacer {
+            // SAFETY: only reads the scheduler's tick count.
+            last_wake: unsafe { sys::xTaskGetTickCount() },
+            period: TickType::from(period).ticks(),
+        }
+    }
+
+    /// Waits until the next period starts; at once if this one is over.
+    pub fn wait(&mut self) {
+        // SAFETY: `last_wake` is a field that lives through the call, which
+        // advances it by one period.
+        unsafe { sys::xTaskDelayUntil(&mut self.last_wake, self.period) };
+    }
 }
 
 /// Sets the calling task's FreeRTOS priority.

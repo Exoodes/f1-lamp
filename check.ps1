@@ -1,6 +1,8 @@
 # Every check the CI runs (.github/workflows/ci.yml), the same way on this
 # PC: formatting, clippy with warnings as errors, the f1-core tests, the
-# probe, and release builds of the firmware with the image-size check.
+# probe, and release builds of the firmware with the image-size check. Any
+# warning in a check's output fails it. Only the security audit of the lock
+# files runs in CI alone.
 #
 #   powershell -ExecutionPolicy Bypass -File check.ps1             everything
 #   powershell -ExecutionPolicy Bypass -File check.ps1 -Part core  no firmware
@@ -48,6 +50,11 @@ function Invoke-Cargo {
     Pop-Location
     foreach ($key in $saved.Keys) {
         [Environment]::SetEnvironmentVariable($key, $saved[$key])
+    }
+    # Warnings that clippy's -D warnings doesn't reach (e.g. an unused
+    # dependency in Cargo.toml) fail the check too.
+    if ($code -eq 0 -and $output -match '(?m)^warning:') {
+        $code = 1
     }
     if ($code -ne 0) {
         Write-Host $output

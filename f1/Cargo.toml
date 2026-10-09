@@ -12,6 +12,10 @@ harness = false # do not use the built-in cargo test harness -> resolve rust-ana
 
 [profile.release]
 opt-level = "s"
+# Optimised across crates as one unit: a smaller image (replays fill most of
+# an app slot), for a slower build.
+lto = true
+codegen-units = 1
 
 # Only for `cargo check` and the editor: a debug build doesn't fit an app
 # slot, so the lamp always gets `--release`.
