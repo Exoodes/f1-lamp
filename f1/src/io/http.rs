@@ -2,9 +2,12 @@
 //! capped in size, and the lock that keeps two TLS handshakes from running at
 //! once.
 
-use std::{sync::Mutex, time::Duration};
+use std::{
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use esp_idf_svc::http::{
     client::{Configuration, EspHttpConnection},
     Method,
@@ -14,6 +17,10 @@ use serde::de::DeserializeOwned;
 /// Larger responses are refused, so a surprise can't exhaust the heap.
 const MAX_BODY: usize = 32 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(15);
+/// The longest a whole body may take. `TIMEOUT` only limits each read, so a
+/// server sending a few bytes at a time could keep the net thread busy past
+/// its heartbeat limit.
+const BODY_DEADLINE: Duration = Duration::from_secs(30);
 /// Room for the request line and headers. The default 512 bytes can't hold
 /// `Authorization: Bearer <F1TV token>`: the token alone is 1-2 KB.
 const TX_BUFFER: usize = 4096;
@@ -55,10 +62,11 @@ pub fn request(method: Method, url: &str, headers: &[(&str, &str)]) -> anyhow::R
 
     let status = connection.status();
     let set_cookie = connection.header("Set-Cookie").map(str::to_owned);
+    let deadline = Instant::now() + BODY_DEADLINE;
     let body = if (200..300).contains(&status) {
-        read_body(&mut connection).with_context(|| format!("read body of {url}"))?
+        read_body(&mut connection, deadline).with_context(|| format!("read body of {url}"))?
     } else {
-        error_detail(&mut connection).into_bytes()
+        error_detail(&mut connection, deadline).into_bytes()
     };
     Ok(Reply {
         status,
@@ -75,7 +83,7 @@ pub fn get_json<T: DeserializeOwned>(url: &str) -> anyhow::Result<Option<T>> {
         200 => {}
         404 => return Ok(None),
         // The body usually says why, e.g. OpenF1's "Live F1 session in progress".
-        status => anyhow::bail!(
+        status => bail!(
             "GET {url}: HTTP {status}: {}",
             String::from_utf8_lossy(&reply.body)
         ),
@@ -87,10 +95,10 @@ pub fn get_json<T: DeserializeOwned>(url: &str) -> anyhow::Result<Option<T>> {
 
 /// The start of an error response's body, for the log. Best effort: whatever
 /// could be read, possibly empty.
-fn error_detail(connection: &mut EspHttpConnection) -> String {
+fn error_detail(connection: &mut EspHttpConnection, deadline: Instant) -> String {
     let mut buf = [0u8; ERROR_DETAIL_MAX];
     let mut len = 0;
-    while len < buf.len() {
+    while len < buf.len() && Instant::now() < deadline {
         match connection.read(&mut buf[len..]) {
             Ok(0) | Err(_) => break,
             Ok(n) => len += n,
@@ -100,16 +108,27 @@ fn error_detail(connection: &mut EspHttpConnection) -> String {
     String::from_utf8_lossy(&buf[..len]).trim().to_string()
 }
 
-fn read_body(connection: &mut EspHttpConnection) -> anyhow::Result<Vec<u8>> {
-    let mut body = Vec::new();
+/// The whole body, in one allocation when the server says how long it is: a
+/// growing buffer briefly needs twice its size in one block.
+fn read_body(connection: &mut EspHttpConnection, deadline: Instant) -> anyhow::Result<Vec<u8>> {
+    let announced = connection
+        .header("Content-Length")
+        .and_then(|len| len.parse::<usize>().ok());
+    if announced.is_some_and(|len| len > MAX_BODY) {
+        bail!("body larger than {MAX_BODY} bytes");
+    }
+    let mut body = Vec::with_capacity(announced.unwrap_or(0));
     let mut chunk = [0u8; 512];
     loop {
+        if Instant::now() >= deadline {
+            bail!("body not read within {} s", BODY_DEADLINE.as_secs());
+        }
         let n = connection.read(&mut chunk)?;
         if n == 0 {
             return Ok(body);
         }
         if body.len() + n > MAX_BODY {
-            anyhow::bail!("body larger than {MAX_BODY} bytes");
+            bail!("body larger than {MAX_BODY} bytes");
         }
         body.extend_from_slice(&chunk[..n]);
     }
