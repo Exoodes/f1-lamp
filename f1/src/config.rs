@@ -32,6 +32,9 @@ pub mod led {
     /// the frame and makes LEDs flicker. Channel 0 borrows the blocks of the
     /// unused channels 1-3, giving each refill 4x more time.
     pub const RMT_MEM_BLOCKS: u8 = 4;
+    /// Frames in a row that fail to reach the LEDs (5 s) before the chip
+    /// restarts: a fresh RMT driver is the simplest way back.
+    pub const FAILURES_BEFORE_RESTART: u32 = 250;
 }
 
 /// The render loop's FreeRTOS priority (the main task starts at 1). Above

@@ -84,6 +84,7 @@ fn run() -> anyhow::Result<()> {
         last_snapshot: controller.snapshot(),
         controller,
         leds,
+        led_failures: 0,
         storage,
         frame: Frame::new(),
         snapshot,
@@ -178,6 +179,8 @@ fn supervise(threads: &[Watched], booted: Instant, now: Instant) {
 struct Lamp {
     controller: Controller,
     leds: LedOutput<'static>,
+    /// Frames in a row that didn't reach the LEDs.
+    led_failures: u32,
     storage: SettingsStore,
     frame: Frame,
     /// Shared with the web server.
@@ -203,8 +206,21 @@ impl Lamp {
     /// Renders a frame and sends it to the LEDs.
     fn show(&mut self, now: Instant) {
         self.controller.render(now, &mut self.frame);
-        if let Err(e) = self.leds.write(&self.frame) {
-            log::warn!("{e}");
+        match self.leds.write(&self.frame) {
+            Ok(()) => self.led_failures = 0,
+            Err(e) => {
+                self.led_failures += 1;
+                if self.led_failures == 1 {
+                    log::warn!("{e}");
+                }
+                if self.led_failures >= config::led::FAILURES_BEFORE_RESTART {
+                    log::error!(
+                        "LEDs failing for {} frames ({e}), restarting",
+                        self.led_failures
+                    );
+                    restart();
+                }
+            }
         }
         if let Some(r) = self.stats.frame(now) {
             log::info!(
