@@ -89,6 +89,7 @@ wifi_ssid = "your network"
 wifi_psk = "your password"
 # Updates over WiFi need this key (at least 16 visible characters, no quotes).
 # `cargo ota` reads it from here; nothing else is accepted by /api/ota.
+# It's never sent: uploads only prove it (see below).
 ota_key = "some long random text"
 
 # Only for --features replay: the session to play.
@@ -118,8 +119,11 @@ the lamp can still reach your network, otherwise over USB.
 
 `cargo ota` is an alias (`f1/.cargo/config.toml`) that builds like
 `cargo run --release` and hands the result to `ota.ps1`, which uploads it to
-`f1-lightbox.local` with the `ota_key` from `cfg.toml`; the lamp refuses an
-upload without it. A new key takes effect with the firmware that carries it,
+`f1-lightbox.local`. The `ota_key` from `cfg.toml` never leaves the PC: the
+lamp hands out a one-time nonce, and the upload carries
+HMAC-SHA256(key, nonce + SHA-256(image)), which the lamp checks before the new
+firmware can boot. A recorded upload can't be sent again, and the lamp refuses
+an upload without a valid tag. A new key takes effect with the firmware that carries it,
 so the upload that brings a changed key still needs the old one: after changing
 `ota_key`, flash once over USB. If the name doesn't resolve, point it at the lamp's IP:
 
@@ -185,7 +189,8 @@ The page uses these, and scripts can too:
 | `POST /api/override` | `{"kind":"flag","flag":"red"}`, `{"kind":"color","color":"#ff8800"}` or `{"kind":"release"}` |
 | `GET /api/token`, `POST /api/token` | The F1TV token's state; post a token (plain text) to set it, an empty one to remove it |
 | `GET /api/log?after=<n>` | The log lines after number `n` |
-| `POST /api/ota` | A firmware image; also needs `X-F1-Key` (see `cargo ota`) |
+| `POST /api/ota/nonce` | A one-time nonce (hex) for the next upload, valid for 2 minutes |
+| `POST /api/ota` | A firmware image, with `X-F1-Nonce` and its tag in `X-F1-Auth` (see `cargo ota`) |
 | `GET /api/replay`, `POST /api/replay` | Replay builds only: the position, and `{"action":"play"}`, `pause`, `{"action":"speed","speed":60}`, `lights_out`, `{"action":"seek","position_ms":4000000}` |
 
 ## F1TV (optional)

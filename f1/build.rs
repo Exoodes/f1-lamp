@@ -65,8 +65,8 @@ fn wifi_credentials(f1: &toml::Table) {
 const MIN_OTA_KEY: usize = 16;
 
 /// Hands the update key to the compiler as `OTA_KEY`. The lamp only takes a
-/// firmware upload that carries it (`web.rs`); `ota.ps1` reads it from
-/// cfg.toml too.
+/// firmware upload whose tag proves it (`f1_core::ota_auth`); `ota.ps1`
+/// reads it from cfg.toml too.
 fn ota_key(f1: &toml::Table) {
     let key = f1
         .get("ota_key")
@@ -77,8 +77,8 @@ fn ota_key(f1: &toml::Table) {
                  {MIN_OTA_KEY} characters, e.g. ota_key = \"<32 random letters>\""
             )
         });
-    // Checked here so a bad key stops the build, not an update later. Header
-    // values can't hold control characters, and ota.ps1 reads it between quotes.
+    // Checked here so a bad key stops the build, not an update later: ota.ps1
+    // reads it between quotes.
     if key.len() < MIN_OTA_KEY {
         panic!("f1/cfg.toml: ota_key must be at least {MIN_OTA_KEY} characters");
     }

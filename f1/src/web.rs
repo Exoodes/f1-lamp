@@ -1,6 +1,7 @@
 //! The web server: the page, the API it uses (the README has the list), and
 //! firmware updates. Every POST needs the `X-F1-Lamp` header and the lamp's own
-//! name or IP address in `Host`; an upload also needs the update key.
+//! name or IP address in `Host`; an upload also proves the update key
+//! (`f1_core::ota_auth`).
 
 use std::sync::{
     mpsc::{SyncSender, TrySendError},
@@ -15,8 +16,8 @@ use esp_idf_svc::{
     io::Write,
 };
 use f1_core::{
-    command::OverrideRequest, input::Input, settings::Settings, snapshot::Snapshot,
-    token::TokenStatus, web_api::is_lamp_host,
+    command::OverrideRequest, input::Input, ota_auth::UploadCheck, settings::Settings,
+    snapshot::Snapshot, token::TokenStatus, web_api::is_lamp_host,
 };
 use serde::de::DeserializeOwned;
 
@@ -33,9 +34,10 @@ const MAX_TOKEN_BODY: usize = 8192;
 /// preflight), which the lamp never allows, so other sites can't change
 /// settings or upload firmware through a browser on the home network.
 const PAGE_HEADER: &str = "X-F1-Lamp";
-/// A firmware upload must also carry `ota_key` from cfg.toml in this header.
-const KEY_HEADER: &str = "X-F1-Key";
-const OTA_KEY: &str = env!("OTA_KEY");
+/// A firmware upload names the nonce it got from `POST /api/ota/nonce` in
+/// one header and proves the update key in the other (`f1_core::ota_auth`).
+const NONCE_HEADER: &str = "X-F1-Nonce";
+const AUTH_HEADER: &str = "X-F1-Auth";
 
 const HTML: &str = "text/html; charset=utf-8";
 const JSON: &str = "application/json";
@@ -117,25 +119,40 @@ fn command_routes(
     Ok(())
 }
 
-/// `POST /api/ota`: a firmware image, with the update key. In every build,
-/// replay and showcase included: whatever runs must be able to receive the
-/// next firmware, or the way back needs the cable.
+/// `POST /api/ota/nonce` (a one-time nonce) and `POST /api/ota` (a firmware
+/// image, with the nonce and its tag). In every build, replay and showcase
+/// included: whatever runs must be able to receive the next firmware, or the
+/// way back needs the cable.
 fn ota_route(server: &mut EspHttpServer<'static>) -> anyhow::Result<()> {
+    server.fn_handler::<anyhow::Error, _>("/api/ota/nonce", Method::Post, |req| {
+        if let Some(why) = refusal(&req) {
+            return refuse(req, why);
+        }
+        reply(req, 200, TEXT, ota::issue_nonce().as_bytes())
+    })?;
+
     server.fn_handler::<anyhow::Error, _>("/api/ota", Method::Post, |mut req| {
         if let Some(why) = refusal(&req) {
             return refuse(req, why);
         }
-        if !req.header(KEY_HEADER).is_some_and(is_ota_key) {
-            log::warn!("ota: refused an upload without the right key");
-            return reply(req, 401, TEXT, b"wrong or missing update key");
-        }
+        let nonce = req.header(NONCE_HEADER).and_then(ota::redeem_nonce);
+        let tag = req.header(AUTH_HEADER).map(str::to_owned);
+        let (Some(nonce), Some(tag)) = (nonce, tag) else {
+            log::warn!("ota: refused an upload without a fresh nonce and its tag");
+            return reply(
+                req,
+                401,
+                TEXT,
+                b"needs a fresh nonce from /api/ota/nonce and its tag",
+            );
+        };
         let Some(len) = req
             .header("Content-Length")
             .and_then(|l| l.parse::<usize>().ok())
         else {
             return reply(req, 411, TEXT, b"Content-Length needed");
         };
-        match ota::receive(&mut req, len) {
+        match ota::receive(&mut req, len, UploadCheck::new(nonce), &tag) {
             Ok(()) => {
                 // A moment for the answer to leave before the chip restarts.
                 std::thread::spawn(|| {
@@ -270,17 +287,6 @@ fn refusal(req: &Request<&mut EspHttpConnection<'_>>) -> Option<&'static str> {
 fn refuse(req: Request<&mut EspHttpConnection<'_>>, why: &str) -> anyhow::Result<()> {
     log::warn!("refused a POST to {}: {why}", req.uri());
     reply(req, 403, TEXT, why.as_bytes())
-}
-
-/// Compares every byte whatever the first difference, so the time taken
-/// doesn't tell how much of a guess was right.
-fn is_ota_key(given: &str) -> bool {
-    given.len() == OTA_KEY.len()
-        && given
-            .bytes()
-            .zip(OTA_KEY.bytes())
-            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
-            == 0
 }
 
 /// Sends a complete response with the given status, content type and body.

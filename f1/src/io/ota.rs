@@ -13,7 +13,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Mutex, MutexGuard, OnceLock,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{bail, Context};
@@ -22,14 +22,17 @@ use esp_idf_svc::{
     nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault},
     ota::EspOta,
     sys::{
-        esp, esp_app_desc_t, esp_app_get_description, esp_ota_get_next_update_partition,
-        esp_ota_get_partition_description, esp_ota_get_running_partition,
-        esp_ota_get_state_partition, esp_ota_img_states_t,
+        esp, esp_app_desc_t, esp_app_get_description, esp_fill_random,
+        esp_ota_get_next_update_partition, esp_ota_get_partition_description,
+        esp_ota_get_running_partition, esp_ota_get_state_partition, esp_ota_img_states_t,
         esp_ota_img_states_t_ESP_OTA_IMG_PENDING_VERIFY, esp_ota_mark_app_valid_cancel_rollback,
         esp_ota_set_boot_partition,
     },
 };
-use f1_core::ota_trial::{on_boot, BootDecision, HEALTHY_WITHIN};
+use f1_core::{
+    ota_auth::{Nonces, UploadCheck, NONCE_LEN},
+    ota_trial::{on_boot, BootDecision, HEALTHY_WITHIN},
+};
 
 use crate::config::nvs::{NAMESPACE, OTA_FELL_BACK, OTA_TRIAL, OTA_TRIAL_IMAGE};
 
@@ -211,15 +214,46 @@ fn switch_to_other_slot() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The update key from cfg.toml, passed in by build.rs.
+const OTA_KEY: &str = env!("OTA_KEY");
+
+static NONCES: Mutex<Nonces> = Mutex::new(Nonces::new());
+
+/// A new one-time nonce for the next upload, in hex.
+pub fn issue_nonce() -> String {
+    let mut random = [0u8; NONCE_LEN];
+    // SAFETY: writes exactly `random.len()` bytes into the local buffer.
+    unsafe { esp_fill_random(random.as_mut_ptr().cast(), random.len()) };
+    NONCES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .issue(random, Instant::now())
+}
+
+/// The nonce an upload names, if it's the one handed out and still fresh.
+/// Used up either way.
+pub fn redeem_nonce(hex: &str) -> Option<[u8; NONCE_LEN]> {
+    NONCES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .redeem(hex, Instant::now())
+}
+
 /// One app slot in partitions.csv (`0x1F0000`).
 pub const MAX_IMAGE: usize = 0x1F_0000;
 /// Read and written at a time.
 const CHUNK: usize = 4096;
 
 /// Writes the request body (`len` bytes, a `.bin` from `espflash
-/// save-image`) to the free slot and makes it the one to boot. The caller
-/// restarts the chip afterwards.
-pub fn receive(req: &mut Request<&mut EspHttpConnection<'_>>, len: usize) -> anyhow::Result<()> {
+/// save-image`) to the free slot and, if `tag` proves the update key (see
+/// `f1_core::ota_auth`), makes it the one to boot. The caller restarts the
+/// chip afterwards.
+pub fn receive(
+    req: &mut Request<&mut EspHttpConnection<'_>>,
+    len: usize,
+    mut check: UploadCheck,
+    tag: &str,
+) -> anyhow::Result<()> {
     if len == 0 || len > MAX_IMAGE {
         bail!("{len} bytes: a firmware image must be 1 to {MAX_IMAGE} bytes");
     }
@@ -244,6 +278,7 @@ pub fn receive(req: &mut Request<&mut EspHttpConnection<'_>>, len: usize) -> any
         update
             .write(&buf[..n])
             .with_context(|| format!("write at byte {received} (not firmware for this chip?)"))?;
+        check.update(&buf[..n]);
         received += n;
         if received >= next_report && received < len {
             log::info!("ota: {}%", received * 100 / len);
@@ -251,6 +286,9 @@ pub fn receive(req: &mut Request<&mut EspHttpConnection<'_>>, len: usize) -> any
         }
     }
 
+    if !check.verify(OTA_KEY, tag) {
+        bail!("wrong update key, or the image changed on the way");
+    }
     // The new firmware starts on trial.
     let image = update_image()?;
     let previous = trial_store().map(|nvs| saved_trial(&nvs));
