@@ -3,9 +3,12 @@
 //! name or IP address in `Host`; an upload also proves the update key
 //! (`f1_core::ota_auth`).
 
-use std::sync::{
-    mpsc::{SyncSender, TrySendError},
-    Arc, Mutex,
+use std::{
+    sync::{
+        mpsc::{SyncSender, TrySendError},
+        Arc, Mutex,
+    },
+    time::Duration,
 };
 
 use esp_idf_svc::{
@@ -21,13 +24,21 @@ use f1_core::{
 };
 use serde::de::DeserializeOwned;
 
-use crate::io::{clock, mdns, ota, system, token_store::TokenKeeper, weblog};
+use crate::io::{
+    body::{read_capped, Body},
+    clock, mdns, ota, system,
+    token_store::TokenKeeper,
+    weblog,
+};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 /// Larger request bodies are refused, so a client can't exhaust the heap.
-const MAX_BODY: usize = 2048;
+const MAX_JSON_BODY: usize = 2048;
 /// A pasted F1TV token, or the whole `loginSession` cookie holding one.
 const MAX_TOKEN_BODY: usize = 8192;
+/// The longest a request body may take: the server has a single task, which
+/// a client sending a few bytes at a time would otherwise keep to itself.
+const BODY_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Every POST must carry this header (any value). A page from another site
 /// can't send it without the browser asking the lamp first (a CORS
@@ -156,7 +167,7 @@ fn ota_route(server: &mut EspHttpServer<'static>) -> anyhow::Result<()> {
             Ok(()) => {
                 // A moment for the answer to leave before the chip restarts.
                 std::thread::spawn(|| {
-                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    std::thread::sleep(Duration::from_secs(1));
                     system::restart();
                 });
                 reply(req, 200, TEXT, b"updated, restarting")
@@ -220,8 +231,10 @@ fn token_routes(
         if let Some(why) = refusal(&req) {
             return refuse(req, why);
         }
-        let Some(body) = read_body(&mut req, MAX_TOKEN_BODY)? else {
-            return reply(req, 413, TEXT, b"too long for a token");
+        let body = match read_capped(&mut req, MAX_TOKEN_BODY, None, BODY_DEADLINE)? {
+            Body::Whole(body) => body,
+            Body::TooLarge => return reply(req, 413, TEXT, b"too long for a token"),
+            Body::TooSlow => return reply(req, 408, TEXT, b"body too slow"),
         };
         let pasted = String::from_utf8_lossy(&body);
         let status = tokens.set(&pasted, clock::unix_now())?;
@@ -246,7 +259,7 @@ fn query_number(uri: &str, name: &str) -> Option<u64> {
 }
 
 /// What every JSON POST checks first: the page header (else 403), a body of
-/// at most `MAX_BODY` bytes (else 413), and JSON that reads as `T` (else a
+/// at most `MAX_JSON_BODY` bytes (else 413), within `BODY_DEADLINE` (else 408), and JSON that reads as `T` (else a
 /// log line and 400, both naming `what`). Then `act` gets the request and the
 /// value, and answers.
 fn post_json<'r, 'c, T: DeserializeOwned>(
@@ -257,8 +270,10 @@ fn post_json<'r, 'c, T: DeserializeOwned>(
     if let Some(why) = refusal(&req) {
         return refuse(req, why);
     }
-    let Some(body) = read_body(&mut req, MAX_BODY)? else {
-        return reply(req, 413, TEXT, b"body too large");
+    let body = match read_capped(&mut req, MAX_JSON_BODY, None, BODY_DEADLINE)? {
+        Body::Whole(body) => body,
+        Body::TooLarge => return reply(req, 413, TEXT, b"body too large"),
+        Body::TooSlow => return reply(req, 408, TEXT, b"body too slow"),
     };
     match serde_json::from_slice::<T>(&body) {
         Ok(value) => act(req, value),
@@ -299,25 +314,6 @@ fn reply(
     req.into_response(status, None, &[("Content-Type", content_type)])?
         .write_all(body)?;
     Ok(())
-}
-
-/// The request body, or `None` if it is larger than `MAX_BODY`.
-fn read_body(
-    req: &mut Request<&mut EspHttpConnection<'_>>,
-    max: usize,
-) -> anyhow::Result<Option<Vec<u8>>> {
-    let mut body = Vec::new();
-    let mut chunk = [0u8; 256];
-    loop {
-        let n = req.read(&mut chunk)?;
-        if n == 0 {
-            return Ok(Some(body));
-        }
-        if body.len() + n > max {
-            return Ok(None);
-        }
-        body.extend_from_slice(&chunk[..n]);
-    }
 }
 
 /// Hands an input to the render loop without blocking the server task.

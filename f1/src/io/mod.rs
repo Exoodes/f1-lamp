@@ -1,6 +1,7 @@
 //! Everything that touches the chip or the network; the decisions are in
 //! f1-core.
 
+pub mod body;
 pub mod clock;
 pub mod http;
 pub mod led;

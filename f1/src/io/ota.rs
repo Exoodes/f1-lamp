@@ -34,9 +34,9 @@ use f1_core::{
     ota_trial::{self, on_boot, ArmError, BootDecision, Trial, TrialStore, HEALTHY_WITHIN},
 };
 
-use super::system;
+use super::{storage::open_nvs, system};
 use crate::config::{
-    nvs::{NAMESPACE, OTA_FELL_BACK, OTA_TRIAL, OTA_TRIAL_IMAGE},
+    nvs::{OTA_FELL_BACK, OTA_TRIAL, OTA_TRIAL_IMAGE},
     OTA_KEY,
 };
 
@@ -49,7 +49,7 @@ static ON_TRIAL: AtomicBool = AtomicBool::new(false);
 /// crash: counts a trial boot, or switches back to the other slot after
 /// three of them. Never returns when it switches back.
 pub fn check_boot(partition: EspDefaultNvsPartition) -> anyhow::Result<()> {
-    let nvs = EspNvs::new(partition, NAMESPACE, true).context("open NVS namespace")?;
+    let nvs = open_nvs(partition)?;
     if nvs.remove(OTA_FELL_BACK).unwrap_or(false) {
         log::warn!("ota: the last update kept restarting; this is the firmware from before it");
     }

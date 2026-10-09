@@ -12,6 +12,11 @@ use serde::de::DeserializeOwned;
 
 use crate::config::nvs::{NAMESPACE, SCHEDULE, SETTINGS};
 
+/// The firmware's namespace in NVS (`config::nvs`), for reading and writing.
+pub fn open_nvs(partition: EspDefaultNvsPartition) -> anyhow::Result<EspNvs<NvsDefault>> {
+    EspNvs::new(partition, NAMESPACE, true).context("open NVS namespace")
+}
+
 /// Flash wears out with writes, so changes are saved at most this often.
 const SAVE_EVERY: Duration = Duration::from_secs(5);
 
@@ -26,7 +31,7 @@ pub struct SettingsStore {
 impl SettingsStore {
     pub fn new(partition: EspDefaultNvsPartition) -> anyhow::Result<Self> {
         Ok(Self {
-            nvs: EspNvs::new(partition, NAMESPACE, true).context("open NVS namespace")?,
+            nvs: open_nvs(partition)?,
             pending: None,
             last_saved: Instant::now(),
         })
@@ -80,7 +85,7 @@ pub struct ScheduleStore {
 impl ScheduleStore {
     pub fn new(partition: EspDefaultNvsPartition) -> anyhow::Result<Self> {
         Ok(Self {
-            nvs: EspNvs::new(partition, NAMESPACE, true).context("open NVS namespace")?,
+            nvs: open_nvs(partition)?,
         })
     }
 

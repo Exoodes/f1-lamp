@@ -11,7 +11,8 @@ use anyhow::Context;
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
 use f1_core::token::{F1tvToken, TokenStatus};
 
-use crate::config::nvs::{F1TV_TOKEN, NAMESPACE};
+use super::storage::open_nvs;
+use crate::config::nvs::F1TV_TOKEN;
 
 /// A JWT is 1-2 KB; stored as a blob, which has no string length limit.
 const MAX_STORED: usize = 4096;
@@ -30,7 +31,7 @@ pub struct TokenKeeper {
 impl TokenKeeper {
     /// Opens the store and loads the token, if one was saved.
     pub fn new(partition: EspDefaultNvsPartition) -> anyhow::Result<Self> {
-        let nvs = EspNvs::new(partition, NAMESPACE, true).context("open NVS namespace")?;
+        let nvs = open_nvs(partition)?;
         let mut buf = vec![0u8; MAX_STORED];
         let token = match nvs.get_blob(F1TV_TOKEN, &mut buf) {
             Ok(Some(bytes)) => match std::str::from_utf8(bytes).map(F1tvToken::parse) {

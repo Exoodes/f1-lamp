@@ -14,8 +14,10 @@ use esp_idf_svc::http::{
 };
 use serde::de::DeserializeOwned;
 
+use super::body::{read_capped, Body};
+
 /// Larger responses are refused, so a surprise can't exhaust the heap.
-const MAX_BODY: usize = 32 * 1024;
+const MAX_RESPONSE: usize = 32 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(15);
 /// The longest a whole body may take. `TIMEOUT` only limits each read, so a
 /// server sending a few bytes at a time could keep the net thread busy past
@@ -64,7 +66,16 @@ pub fn request(method: Method, url: &str, headers: &[(&str, &str)]) -> anyhow::R
     let set_cookie = connection.header("Set-Cookie").map(str::to_owned);
     let deadline = Instant::now() + BODY_DEADLINE;
     let body = if (200..300).contains(&status) {
-        read_body(&mut connection, deadline).with_context(|| format!("read body of {url}"))?
+        let announced = connection
+            .header("Content-Length")
+            .and_then(|len| len.parse().ok());
+        let read = read_capped(&mut connection, MAX_RESPONSE, announced, BODY_DEADLINE)
+            .with_context(|| format!("read body of {url}"))?;
+        match read {
+            Body::Whole(body) => body,
+            Body::TooLarge => bail!("{url}: body larger than {MAX_RESPONSE} bytes"),
+            Body::TooSlow => bail!("{url}: body not read within {} s", BODY_DEADLINE.as_secs()),
+        }
     } else {
         error_detail(&mut connection, deadline).into_bytes()
     };
@@ -106,30 +117,4 @@ fn error_detail(connection: &mut EspHttpConnection, deadline: Instant) -> String
     }
     // Lossy: a cut through a multi-byte character becomes '�' instead of failing.
     String::from_utf8_lossy(&buf[..len]).trim().to_string()
-}
-
-/// The whole body, in one allocation when the server says how long it is: a
-/// growing buffer briefly needs twice its size in one block.
-fn read_body(connection: &mut EspHttpConnection, deadline: Instant) -> anyhow::Result<Vec<u8>> {
-    let announced = connection
-        .header("Content-Length")
-        .and_then(|len| len.parse::<usize>().ok());
-    if announced.is_some_and(|len| len > MAX_BODY) {
-        bail!("body larger than {MAX_BODY} bytes");
-    }
-    let mut body = Vec::with_capacity(announced.unwrap_or(0));
-    let mut chunk = [0u8; 512];
-    loop {
-        if Instant::now() >= deadline {
-            bail!("body not read within {} s", BODY_DEADLINE.as_secs());
-        }
-        let n = connection.read(&mut chunk)?;
-        if n == 0 {
-            return Ok(body);
-        }
-        if body.len() + n > MAX_BODY {
-            bail!("body larger than {MAX_BODY} bytes");
-        }
-        body.extend_from_slice(&chunk[..n]);
-    }
 }
