@@ -26,12 +26,12 @@ use esp_idf_svc::{
         esp_ota_get_next_update_partition, esp_ota_get_partition_description,
         esp_ota_get_running_partition, esp_ota_get_state_partition, esp_ota_img_states_t,
         esp_ota_img_states_t_ESP_OTA_IMG_PENDING_VERIFY, esp_ota_mark_app_valid_cancel_rollback,
-        esp_ota_set_boot_partition,
+        esp_ota_set_boot_partition, EspError,
     },
 };
 use f1_core::{
     ota_auth::{Nonces, UploadCheck, NONCE_LEN},
-    ota_trial::{on_boot, BootDecision, HEALTHY_WITHIN},
+    ota_trial::{self, on_boot, ArmError, BootDecision, Trial, TrialStore, HEALTHY_WITHIN},
 };
 
 use crate::config::nvs::{NAMESPACE, OTA_FELL_BACK, OTA_TRIAL, OTA_TRIAL_IMAGE};
@@ -50,25 +50,28 @@ pub fn check_boot(partition: EspDefaultNvsPartition) -> anyhow::Result<()> {
         log::warn!("ota: the last update kept restarting; this is the firmware from before it");
     }
 
-    let mut started = nvs.get_u8(OTA_TRIAL).ok().flatten();
-    if started.is_some() && !trial_is_running(&nvs) {
-        log::warn!(
-            "ota: the firmware on trial isn't the one running (flashed over USB?); trial ended"
-        );
-        end_trial(&nvs)?;
-        started = None;
-    }
-    match on_boot(started) {
+    let mut trial = NvsTrial(&nvs);
+    let stored = trial.load();
+    match on_boot(stored, running_image()) {
         BootDecision::Normal => {}
+        BootDecision::NotThisFirmware => {
+            log::warn!(
+                "ota: the firmware on trial isn't the one running (flashed over USB?); trial ended"
+            );
+            ota_trial::end(&mut trial).context("end the trial")?;
+        }
         BootDecision::Trial { boot } => {
-            nvs.set_u8(OTA_TRIAL, boot)
-                .context("count the trial boot")?;
+            let counted = Trial {
+                boots: Some(boot),
+                ..stored
+            };
+            trial.store(counted).context("count the trial boot")?;
             log::info!("ota: new firmware on trial, boot {boot}");
             ON_TRIAL.store(true, Ordering::Relaxed);
         }
         BootDecision::FallBack => {
             // Cleared first: whatever happens next, no endless switching.
-            end_trial(&nvs)?;
+            ota_trial::end(&mut trial).context("end the trial")?;
             match switch_to_other_slot() {
                 Ok(()) => {
                     let _ = nvs.set_u8(OTA_FELL_BACK, 1);
@@ -112,7 +115,7 @@ fn confirm_to_bootloader() -> anyhow::Result<()> {
 pub fn mark_healthy() {
     ON_TRIAL.store(false, Ordering::Relaxed);
     let Some(nvs) = trial_store() else { return };
-    if end_trial(&nvs).unwrap_or(false) {
+    if ota_trial::end(&mut NvsTrial(&nvs)).unwrap_or(false) {
         log::info!("ota: new firmware is healthy, trial passed");
     }
 }
@@ -123,46 +126,37 @@ fn trial_store() -> Option<MutexGuard<'static, EspNvs<NvsDefault>>> {
         .map(|nvs| nvs.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
-type SavedTrial = (Option<u8>, Option<u64>);
+/// The trial in NVS.
+struct NvsTrial<'a>(&'a EspNvs<NvsDefault>);
 
-fn saved_trial(nvs: &EspNvs<NvsDefault>) -> SavedTrial {
-    (
-        nvs.get_u8(OTA_TRIAL).ok().flatten(),
-        nvs.get_u64(OTA_TRIAL_IMAGE).ok().flatten(),
-    )
-}
+impl TrialStore for NvsTrial<'_> {
+    type Error = EspError;
 
-fn start_trial(nvs: &EspNvs<NvsDefault>, image: u64) -> anyhow::Result<()> {
-    nvs.set_u64(OTA_TRIAL_IMAGE, image)
-        .context("start the trial")?;
-    nvs.set_u8(OTA_TRIAL, 0).context("start the trial")?;
-    Ok(())
-}
+    fn load(&self) -> Trial {
+        Trial {
+            boots: self.0.get_u8(OTA_TRIAL).ok().flatten(),
+            image: self.0.get_u64(OTA_TRIAL_IMAGE).ok().flatten(),
+        }
+    }
 
-fn restore_trial(nvs: &EspNvs<NvsDefault>, (boot, image): SavedTrial) {
-    let _ = match boot {
-        Some(boot) => nvs.set_u8(OTA_TRIAL, boot),
-        None => nvs.remove(OTA_TRIAL).map(drop),
-    };
-    let _ = match image {
-        Some(image) => nvs.set_u64(OTA_TRIAL_IMAGE, image),
-        None => nvs.remove(OTA_TRIAL_IMAGE).map(drop),
-    };
-}
-
-/// Whether a trial was going on.
-fn end_trial(nvs: &EspNvs<NvsDefault>) -> anyhow::Result<bool> {
-    let ended = nvs.remove(OTA_TRIAL).context("end the trial")?;
-    let _ = nvs.remove(OTA_TRIAL_IMAGE);
-    Ok(ended)
-}
-
-/// A trial saved by older firmware has no image; it counts as the running one.
-fn trial_is_running(nvs: &EspNvs<NvsDefault>) -> bool {
-    nvs.get_u64(OTA_TRIAL_IMAGE)
-        .ok()
-        .flatten()
-        .is_none_or(|image| image == running_image())
+    /// The image is written before the count and removed after it: a count
+    /// without an image counts as the running firmware's (`on_boot`), so a
+    /// write cut in half never puts the wrong firmware on trial.
+    fn store(&mut self, trial: Trial) -> Result<(), EspError> {
+        if let Some(image) = trial.image {
+            self.0.set_u64(OTA_TRIAL_IMAGE, image)?;
+        }
+        match trial.boots {
+            Some(boots) => self.0.set_u8(OTA_TRIAL, boots)?,
+            None => {
+                self.0.remove(OTA_TRIAL)?;
+            }
+        }
+        if trial.image.is_none() {
+            self.0.remove(OTA_TRIAL_IMAGE)?;
+        }
+        Ok(())
+    }
 }
 
 /// The start of an app's ELF SHA-256: tells two firmware builds apart.
@@ -289,18 +283,17 @@ pub fn receive(
     if !check.verify(OTA_KEY, tag) {
         bail!("wrong update key, or the image changed on the way");
     }
-    // The new firmware starts on trial.
+    // The new firmware starts on trial, then its slot becomes the boot slot.
     let image = update_image()?;
-    let previous = trial_store().map(|nvs| saved_trial(&nvs));
-    let started = trial_store().map_or(Ok(()), |nvs| start_trial(&nvs, image));
-    // Checks the whole image, then makes its slot the boot slot.
-    let completed = started.and_then(|()| update.complete().context("the image doesn't check out"));
-    if let Err(e) = completed {
-        if let (Some(nvs), Some(previous)) = (trial_store(), previous) {
-            restore_trial(&nvs, previous);
-        }
-        return Err(e);
-    }
+    let complete = move || update.complete();
+    let armed = match trial_store() {
+        Some(nvs) => ota_trial::arm(&mut NvsTrial(&nvs), image, complete),
+        None => complete().map_err(ArmError::Switch),
+    };
+    armed.map_err(|e| match e {
+        ArmError::Store(e) => anyhow::Error::from(e).context("start the trial"),
+        ArmError::Switch(e) => anyhow::Error::from(e).context("the image doesn't check out"),
+    })?;
     log::info!("ota: done, {received} bytes; restarting into the new firmware");
     Ok(())
 }
