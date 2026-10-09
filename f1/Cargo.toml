@@ -21,8 +21,7 @@ opt-level = "z"
 
 [dependencies]
 log = "0.4"
-esp-idf-svc = { version = "0.52", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }
-embassy-time = { version = "0.5", features = ["generic-queue-8"] }
+esp-idf-svc = "0.52"
 smart-leds = "0.4"
 ws2812-esp32-rmt-driver = { version = "0.14.0", features = ["smart-leds-trait"] }
 f1-core = { path = "../f1-core" }
