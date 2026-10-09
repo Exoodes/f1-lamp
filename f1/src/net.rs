@@ -19,8 +19,9 @@ use f1_core::{
     color::Rgb,
     heartbeat::Heartbeat,
     input::{Input, NetStatus, RaceEvent, SessionPhase},
+    net_schedule::{in_words, Calendar, Deadlines},
     openf1::{self, DriverDto, ResultDto, SessionDto, CALENDAR_DAYS},
-    schedule::{self, Session, WinnerLookup, CACHED_SESSIONS},
+    schedule::{self, Session, WinnerLookup},
     snapshot::Snapshot,
 };
 
@@ -94,79 +95,34 @@ const PHASE_WAITING_EVERY: Duration = Duration::from_secs(1);
 /// while to appear after the flag.
 const WINNER_EVERY: Duration = Duration::from_secs(60);
 
-/// When each of the thread's jobs is next due.
-struct Deadlines {
-    wifi_check: Instant,
-    heap_log: Instant,
-    clock: Instant,
-    calendar: Instant,
-    phase: Instant,
-    winner: Instant,
-}
-
-impl Deadlines {
-    fn earliest(&self) -> Instant {
-        self.wifi_check
-            .min(self.heap_log)
-            .min(self.clock)
-            .min(self.calendar)
-            .min(self.phase)
-            .min(self.winner)
-    }
-}
-
-impl Deadlines {
-    /// Every job due at once.
-    fn all(now: Instant) -> Self {
-        Deadlines {
-            wifi_check: now,
-            heap_log: now,
-            clock: now,
-            calendar: now,
-            phase: now,
-            winner: now,
-        }
-    }
-}
-
-/// What the scheduler knows: the sessions, the copy of them in flash, and
-/// the phase it last sent.
+/// The calendar and its copy in flash.
 struct Schedule {
-    sessions: Vec<Session>,
+    calendar: Calendar,
     store: ScheduleStore,
-    /// What `store` holds, so an unchanged list isn't written again.
-    saved: Vec<Session>,
-    sent_phase: Option<SessionPhase>,
 }
 
 impl Schedule {
-    /// The sessions saved in flash: a reboot during a session (when OpenF1
-    /// refuses free requests) still knows what's on.
     fn load(store: ScheduleStore) -> Self {
-        let sessions = store.load();
         Schedule {
-            saved: sessions.clone(),
-            sessions,
+            calendar: Calendar::new(store.load()),
             store,
-            sent_phase: None,
         }
     }
 
     /// Swaps in a freshly downloaded list, and saves the part of it that
     /// still matters if that changed.
     fn replace(&mut self, sessions: Vec<Session>, now_unix: i64) {
-        let relevant = schedule::still_relevant(&sessions, now_unix, CACHED_SESSIONS);
-        if relevant != self.saved {
-            match self.store.save(&relevant) {
-                Ok(()) => {
-                    log::info!("schedule saved: {} sessions", relevant.len());
-                    self.saved = relevant;
-                }
-                // Not fatal: the next download tries again.
-                Err(e) => log::warn!("{e:#}"),
+        let Some(relevant) = self.calendar.replace(sessions, now_unix) else {
+            return;
+        };
+        match self.store.save(&relevant) {
+            Ok(()) => {
+                log::info!("schedule saved: {} sessions", relevant.len());
+                self.calendar.saved(relevant);
             }
+            // Not fatal: the next download tries again.
+            Err(e) => log::warn!("{e:#}"),
         }
-        self.sessions = sessions;
     }
 
     /// Works out the phase at `now_unix` and sends it, but only when it
@@ -177,15 +133,13 @@ impl Schedule {
         feed_running: bool,
         tx: &SyncSender<Input>,
     ) -> anyhow::Result<SessionPhase> {
-        let phase = schedule::phase_at(&self.sessions, now_unix, feed_running);
+        let (phase, changed) = self.calendar.phase(now_unix, feed_running);
         // A replay owns the phase; two producers would fight over it.
-        if cfg!(feature = "player") || self.sent_phase == Some(phase) {
-            return Ok(phase);
+        if changed && !cfg!(feature = "player") {
+            tx.send(Input::Phase(phase))
+                .context("render loop is gone")?;
+            log_phase(self.calendar.sessions(), now_unix, feed_running);
         }
-        tx.send(Input::Phase(phase))
-            .context("render loop is gone")?;
-        self.sent_phase = Some(phase);
-        log_phase(&self.sessions, now_unix, feed_running);
         Ok(phase)
     }
 }
@@ -384,7 +338,7 @@ impl<'a> Net<'a> {
         match fetch_calendar(unix) {
             Ok(sessions) => {
                 self.schedule.replace(sessions, unix);
-                log_calendar(&self.schedule.sessions, unix);
+                log_calendar(self.schedule.calendar.sessions(), unix);
                 // Work out the phase straight away with the new list.
                 self.due.phase = now;
                 self.calendar_retry.reset();
@@ -410,14 +364,14 @@ impl<'a> Net<'a> {
         self.shared
             .live
             .set_wanted(cfg!(feature = "live-now") || schedule::feed_wanted(phase));
-        Ok(now + schedule::phase_wait(&self.schedule.sessions, unix))
+        Ok(now + schedule::phase_wait(self.schedule.calendar.sessions(), unix))
     }
 
     /// The OpenF1 winner lookup, once WiFi and the clock are ready.
     fn look_for_winner(&mut self) -> anyhow::Result<()> {
         if let (Some(unix), true) = (clock::unix_now(), self.wifi_up()) {
             check_winner(
-                &self.schedule.sessions,
+                self.schedule.calendar.sessions(),
                 unix,
                 &mut self.winner_sent,
                 &self.shared.live,
@@ -526,17 +480,6 @@ fn log_next(sessions: &[Session], now_unix: i64) {
             in_words(next.start - now_unix)
         ),
         None => log::info!("next: no session coming up"),
-    }
-}
-
-/// `2 d 5 h 48 min`, or `3 h 20 min` when under a day.
-fn in_words(seconds: i64) -> String {
-    let minutes = seconds / 60;
-    let (days, hours, minutes) = (minutes / (24 * 60), minutes / 60 % 24, minutes % 60);
-    if days > 0 {
-        format!("{days} d {hours} h {minutes} min")
-    } else {
-        format!("{hours} h {minutes} min")
     }
 }
 

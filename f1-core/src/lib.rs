@@ -12,8 +12,9 @@
 //!   show), [`effect`], [`theme`], [`overlays`], [`delay`] (the TV delay),
 //!   [`post`] (brightness), [`frame`], [`color`], [`snapshot`], [`command`],
 //!   [`settings`] and [`drivers`].
-//! - Around it: [`schedule`] and [`openf1`] (when sessions are), [`token`]
-//!   (F1TV), [`ota_auth`], [`ota_trial`], [`heartbeat`], [`backoff`],
+//! - Around it: [`schedule`], [`openf1`] (when sessions are) and
+//!   [`net_schedule`] (the network thread's jobs), [`token`] (F1TV),
+//!   [`ota_auth`], [`ota_trial`], [`heartbeat`], [`backoff`],
 //!   [`frame_stats`], [`logbuf`] and [`web_api`].
 
 #![forbid(unsafe_code)]
@@ -35,6 +36,7 @@ pub mod live;
 pub mod live_timers;
 pub mod logbuf;
 pub mod negotiate;
+pub mod net_schedule;
 pub mod openf1;
 pub mod ota_auth;
 pub mod ota_trial;
