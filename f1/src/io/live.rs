@@ -22,7 +22,7 @@ use f1_core::{
     feed_health::FeedHealth,
     heartbeat::Heartbeat,
     input::{Input, RaceEvent},
-    live::{LiveSession, Received},
+    live::{LiveSession, Received, MAX_FRAME},
     live_timers::{LiveTimers, SILENCE_LIMIT, TLS_HOLD_MAX},
     negotiate,
     signalr::PING,
@@ -39,12 +39,6 @@ use crate::{
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
-/// One SignalR message at most. The state the lamp uses arrives as about
-/// 12 KB after a race. The race control history (about 45 KB) is meant to
-/// exceed it: the splitter skips it without buffering, which logs one "frame
-/// larger than" warning per connection. Buffering it would need a single
-/// 45 KB block, which the heap often doesn't have.
-const MAX_FRAME: usize = 24 * 1024;
 /// How often to look again while the feed isn't wanted.
 const IDLE: Duration = Duration::from_secs(1);
 const FIRST_RETRY: Duration = Duration::from_secs(5);

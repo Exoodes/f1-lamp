@@ -29,6 +29,14 @@ const INITIAL_ORDER: [Stream; 5] = [
     Stream::SessionStatus,
 ];
 
+/// One SignalR message at most, for [`LiveSession::new`] on the device. The
+/// state the lamp uses arrives as about 12 KB after a race. The race control
+/// history (about 45 KB) is meant to exceed it: the splitter skips it without
+/// buffering, which logs one "frame larger than" warning per connection.
+/// Buffering it would need a single 45 KB block, which the heap often doesn't
+/// have. `tests/live_capture.rs` checks both against a real answer.
+pub const MAX_FRAME: usize = 24 * 1024;
+
 /// Also subscribed to, so a quiet session still shows the connection is alive.
 const HEARTBEAT: &str = "Heartbeat";
 

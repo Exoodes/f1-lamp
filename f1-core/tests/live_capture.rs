@@ -5,6 +5,8 @@
 use f1_core::{
     color::Rgb,
     feed::update_team_colours,
+    input::{RaceEvent, TrackFlag},
+    live::{LiveSession, MAX_FRAME},
     timeline::{Stream, Timeline},
     track_state::FeedMessage,
 };
@@ -99,25 +101,101 @@ fn top_three_leader_is_verstappen() {
     assert_eq!(leader.as_deref(), Some("3"));
 }
 
-/// The capture put back together as the server's answer to `Subscribe`.
-fn subscribe_answer() -> String {
-    let streams: Vec<String> = FILES
+/// The streams of the capture by name, Heartbeat included.
+fn captured(name: &str) -> &'static str {
+    match name {
+        "Heartbeat" => include_str!("data/live/2026-bahrain-race-subscribe/Heartbeat.jsonStream"),
+        _ => {
+            FILES
+                .iter()
+                .find(|(stream, _)| stream.name() == name)
+                .unwrap_or_else(|| panic!("no {name} in {DIR}"))
+                .1
+        }
+    }
+}
+
+/// The capture put back together as the server's answer to the `Subscribe`
+/// call `id` for `names`.
+fn answer(id: &str, names: &[&str]) -> String {
+    let streams: Vec<String> = names
         .iter()
-        .map(|(stream, text)| {
-            let json = &text.trim_start_matches('\u{feff}')[12..].trim_end();
-            format!("\"{}\":{json}", stream.name())
+        .map(|name| {
+            let json = &captured(name).trim_start_matches('\u{feff}')[12..].trim_end();
+            format!("\"{name}\":{json}")
         })
         .collect();
     format!(
-        "{{\"type\":3,\"invocationId\":\"1\",\"result\":{{{}}}}}\u{1e}",
+        "{{\"type\":3,\"invocationId\":\"{id}\",\"result\":{{{}}}}}\u{1e}",
         streams.join(",")
     )
 }
 
+/// The answers to the lamp's own first two `Subscribe` calls, built from what
+/// they ask for: the state it uses, and the race control history.
+fn the_lamps_answers() -> (String, String) {
+    let call = |frame: &String| {
+        let call: serde_json::Value =
+            serde_json::from_str(frame.trim_end_matches('\u{1e}')).unwrap();
+        let names: Vec<&str> = call["arguments"][0]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|name| name.as_str().unwrap())
+            .collect();
+        answer(call["invocationId"].as_str().unwrap(), &names)
+    };
+    let frames = LiveSession::opening_frames(false);
+    (call(&frames[1]), call(&frames[2]))
+}
+
+/// Feeds `answer` to `live` in the pieces the device's WebSocket client hands
+/// over (its buffer is 4 KB): the problems reported, and whether it
+/// subscribed.
+fn receive_as_on_the_device(live: &mut LiveSession, answer: &str) -> (Vec<String>, bool) {
+    live.expect(answer.len());
+    let mut problems = Vec::new();
+    let mut subscribed = false;
+    for piece in answer.as_bytes().chunks(4096) {
+        let r = live.receive(piece);
+        problems.extend(r.problems);
+        subscribed |= r.subscribed;
+    }
+    (problems, subscribed)
+}
+
+#[test]
+fn the_state_the_lamp_asks_for_fits_one_frame_on_the_device() {
+    let (state, _) = the_lamps_answers();
+    assert!(state.len() < MAX_FRAME, "{} bytes", state.len());
+    let mut live = LiveSession::new(MAX_FRAME);
+    let (problems, subscribed) = receive_as_on_the_device(&mut live, &state);
+    assert!(problems.is_empty(), "{problems:?}");
+    assert!(subscribed);
+}
+
+#[test]
+fn the_race_control_history_is_skipped_on_the_device_and_updates_still_arrive() {
+    let (state, history) = the_lamps_answers();
+    assert!(history.len() > MAX_FRAME, "{} bytes", history.len());
+    let mut live = LiveSession::new(MAX_FRAME);
+    receive_as_on_the_device(&mut live, &state);
+    let (problems, _) = receive_as_on_the_device(&mut live, &history);
+    assert_eq!(
+        problems,
+        [format!("frame larger than {MAX_FRAME} bytes, dropped")]
+    );
+    let update = "{\"type\":1,\"target\":\"feed\",\"arguments\":[\"SessionStatus\",{\"Status\":\"Aborted\"},\"t\"]}\u{1e}";
+    assert_eq!(
+        live.receive(update.as_bytes()).events,
+        [RaceEvent::TrackFlag(TrackFlag::Red)]
+    );
+}
+
 #[test]
 fn joining_after_the_race_applies_57_kb_of_state_silently() {
-    use f1_core::live::LiveSession;
-    let answer = subscribe_answer();
+    let names: Vec<&str> = FILES.iter().map(|(stream, _)| stream.name()).collect();
+    let answer = answer("1", &names);
     assert!(answer.len() > 50_000);
 
     let mut live = LiveSession::new(96 * 1024);
