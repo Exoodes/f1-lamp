@@ -13,8 +13,8 @@
 //!   [`post`] (brightness), [`frame`], [`color`], [`snapshot`], [`command`],
 //!   [`settings`] and [`drivers`].
 //! - Around it: [`schedule`] and [`openf1`] (when sessions are), [`token`]
-//!   (F1TV), [`ota_trial`], [`heartbeat`], [`backoff`], [`frame_stats`] and
-//!   [`logbuf`].
+//!   (F1TV), [`ota_trial`], [`heartbeat`], [`backoff`], [`frame_stats`],
+//!   [`logbuf`] and [`web_api`].
 
 #![forbid(unsafe_code)]
 
@@ -51,3 +51,4 @@ pub mod timeline;
 pub mod token;
 pub mod track_state;
 pub mod tracker;
+pub mod web_api;

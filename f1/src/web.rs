@@ -1,6 +1,6 @@
 //! The web server: the page, the API it uses (the README has the list), and
-//! firmware updates. Every POST needs the `X-F1-Lamp` header; an upload also
-//! needs the update key.
+//! firmware updates. Every POST needs the `X-F1-Lamp` header and the lamp's own
+//! name or IP address in `Host`; an upload also needs the update key.
 
 use std::sync::{
     mpsc::{SyncSender, TrySendError},
@@ -16,11 +16,11 @@ use esp_idf_svc::{
 };
 use f1_core::{
     command::OverrideRequest, input::Input, settings::Settings, snapshot::Snapshot,
-    token::TokenStatus,
+    token::TokenStatus, web_api::is_lamp_host,
 };
 use serde::de::DeserializeOwned;
 
-use crate::io::{clock, ota, token_store::TokenKeeper, weblog};
+use crate::io::{clock, mdns, ota, token_store::TokenKeeper, weblog};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 /// Larger request bodies are refused, so a client can't exhaust the heap.
@@ -122,8 +122,8 @@ fn command_routes(
 /// next firmware, or the way back needs the cable.
 fn ota_route(server: &mut EspHttpServer<'static>) -> anyhow::Result<()> {
     server.fn_handler::<anyhow::Error, _>("/api/ota", Method::Post, |mut req| {
-        if !from_page(&req) {
-            return refuse(req);
+        if let Some(why) = refusal(&req) {
+            return refuse(req, why);
         }
         if !req.header(KEY_HEADER).is_some_and(is_ota_key) {
             log::warn!("ota: refused an upload without the right key");
@@ -200,8 +200,8 @@ fn token_routes(
     })?;
 
     server.fn_handler::<anyhow::Error, _>("/api/token", Method::Post, move |mut req| {
-        if !from_page(&req) {
-            return refuse(req);
+        if let Some(why) = refusal(&req) {
+            return refuse(req, why);
         }
         let Some(body) = read_body(&mut req, MAX_TOKEN_BODY)? else {
             return reply(req, 413, TEXT, b"too long for a token");
@@ -237,8 +237,8 @@ fn post_json<'r, 'c, T: DeserializeOwned>(
     what: &str,
     act: impl FnOnce(Request<&'r mut EspHttpConnection<'c>>, T) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
-    if !from_page(&req) {
-        return refuse(req);
+    if let Some(why) = refusal(&req) {
+        return refuse(req, why);
     }
     let Some(body) = read_body(&mut req, MAX_BODY)? else {
         return reply(req, 413, TEXT, b"body too large");
@@ -252,13 +252,24 @@ fn post_json<'r, 'c, T: DeserializeOwned>(
     }
 }
 
-/// Whether a POST carries `PAGE_HEADER`, as the lamp's own page and ota.ps1 do.
-fn from_page(req: &Request<&mut EspHttpConnection<'_>>) -> bool {
-    req.header(PAGE_HEADER).is_some()
+/// Why a POST is refused, if it is: it must carry `PAGE_HEADER`, as the
+/// lamp's own page and ota.ps1 do, and name the lamp in `Host`.
+fn refusal(req: &Request<&mut EspHttpConnection<'_>>) -> Option<&'static str> {
+    if req.header(PAGE_HEADER).is_none() {
+        return Some("missing X-F1-Lamp header");
+    }
+    if !req
+        .header("Host")
+        .is_some_and(|host| is_lamp_host(host, mdns::HOSTNAME))
+    {
+        return Some("unknown Host: use f1-lightbox.local or the lamp's IP address");
+    }
+    None
 }
 
-fn refuse(req: Request<&mut EspHttpConnection<'_>>) -> anyhow::Result<()> {
-    reply(req, 403, TEXT, b"missing X-F1-Lamp header")
+fn refuse(req: Request<&mut EspHttpConnection<'_>>, why: &str) -> anyhow::Result<()> {
+    log::warn!("refused a POST to {}: {why}", req.uri());
+    reply(req, 403, TEXT, why.as_bytes())
 }
 
 /// Compares every byte whatever the first difference, so the time taken
