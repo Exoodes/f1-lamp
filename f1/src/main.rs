@@ -195,7 +195,7 @@ impl Lamp {
     /// Applies every input waiting; new settings are also saved, later.
     fn take_inputs(&mut self, rx: &Receiver<Input>, now: Instant) {
         while let Ok(input) = rx.try_recv() {
-            log::info!("input: {input:?}");
+            log::debug!("input: {input:?}");
             self.controller.apply(input, now);
             if let Input::Settings(s) = input {
                 self.storage.changed(s);
@@ -240,9 +240,19 @@ impl Lamp {
             return;
         }
         *self.snapshot.lock().unwrap() = snap;
-        match serde_json::to_string(&snap) {
-            Ok(json) => log::info!("snapshot: {json}"),
-            Err(e) => log::warn!("snapshot not serialisable: {e}"),
+        let shown = |s: &Snapshot| (s.layer, s.phase, s.net, s.override_active);
+        if shown(&snap) != shown(&self.last_snapshot) {
+            log::info!(
+                "lamp: {} ({:?}, {:?}{})",
+                snap.layer,
+                snap.phase,
+                snap.net,
+                if snap.override_active {
+                    ", override"
+                } else {
+                    ""
+                }
+            );
         }
         self.last_snapshot = snap;
     }

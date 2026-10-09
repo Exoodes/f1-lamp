@@ -133,6 +133,10 @@ fn run(rx: &Receiver<ReplayCommand>, tx: &SyncSender<Input>, heartbeat: &Heartbe
         let wait = match replayer.step(Instant::now()) {
             Step::Send(inputs) => {
                 for input in inputs {
+                    match input {
+                        Input::Race { event, .. } => log::info!("replay: {event:?}"),
+                        other => log::info!("replay: {other:?}"),
+                    }
                     if tx.send(input).is_err() {
                         return;
                     }
