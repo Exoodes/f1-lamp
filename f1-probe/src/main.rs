@@ -66,91 +66,103 @@ const EXTRA_STREAMS: [&str; 15] = [
 ];
 
 fn main() -> anyhow::Result<()> {
-    let mut minutes = None;
-    let mut raw = false;
-    let mut extra = false;
-    for arg in std::env::args().skip(1) {
-        match arg.as_str() {
-            "--raw" => raw = true,
-            "--extra" => extra = true,
-            n => {
-                minutes = Some(
-                    n.parse::<u64>()
-                        .context("usage: f1-probe [minutes] [--raw] [--extra]")?,
-                )
-            }
-        }
-    }
-    let stop_at = minutes.map(|m| Instant::now() + Duration::from_secs(m * 60));
-
-    // Checked the same way as on the lamp; a bad token is left out.
-    let auth = match std::env::var("F1TV_TOKEN") {
-        Err(_) => {
-            println!("F1TV token: none");
-            None
-        }
-        Ok(pasted) => match F1tvToken::parse(&pasted) {
-            Ok(token) => {
-                let now = chrono::Utc::now().timestamp();
-                let expires = chrono::DateTime::from_timestamp(token.expires(), 0)
-                    .map_or("?".to_owned(), |t| t.to_rfc3339());
-                println!(
-                    "F1TV token: {:?}, expires {expires}",
-                    TokenStatus::of(Some(&token), now)
-                );
-                token.is_usable(now).then(|| token.bearer())
-            }
-            Err(e) => {
-                println!("F1TV token rejected ({e}); going on without");
-                println!("  what arrived: {}", shape(&pasted));
-                None
-            }
-        },
-    };
-
+    let options = Options::from_args()?;
+    let auth = auth_from_env();
     let token = negotiate(auth.as_deref())?;
     let mut ws = connect(&token, auth.as_deref())?;
     let mut capture = Capture::create()?;
     println!("saving to {}", capture.dir.display());
+    subscribe_all(&mut ws, auth.is_some(), options.extra)?;
+    capture_until(&mut ws, &mut capture, &options)
+}
 
-    // The same frames the lamp sends.
-    for frame in LiveSession::opening_frames(auth.is_some()) {
-        send(&mut ws, &frame)?;
+/// What the command line asks for (see the module docs).
+struct Options {
+    stop_at: Option<Instant>,
+    raw: bool,
+    extra: bool,
+}
+
+impl Options {
+    fn from_args() -> anyhow::Result<Self> {
+        let mut options = Options {
+            stop_at: None,
+            raw: false,
+            extra: false,
+        };
+        for arg in std::env::args().skip(1) {
+            match arg.as_str() {
+                "--raw" => options.raw = true,
+                "--extra" => options.extra = true,
+                n => {
+                    let minutes = n
+                        .parse::<u64>()
+                        .context("usage: f1-probe [minutes] [--raw] [--extra]")?;
+                    options.stop_at = Some(Instant::now() + Duration::from_secs(minutes * 60));
+                }
+            }
+        }
+        Ok(options)
+    }
+}
+
+/// The `Authorization` header value from `F1TV_TOKEN`, if it holds a usable
+/// token. Checked the same way as on the lamp; a bad token is left out.
+fn auth_from_env() -> Option<String> {
+    let Ok(pasted) = std::env::var("F1TV_TOKEN") else {
+        println!("F1TV token: none");
+        return None;
+    };
+    match F1tvToken::parse(&pasted) {
+        Ok(token) => {
+            let now = chrono::Utc::now().timestamp();
+            let expires = chrono::DateTime::from_timestamp(token.expires(), 0)
+                .map_or("?".to_owned(), |t| t.to_rfc3339());
+            println!(
+                "F1TV token: {:?}, expires {expires}",
+                TokenStatus::of(Some(&token), now)
+            );
+            token.is_usable(now).then(|| token.bearer())
+        }
+        Err(e) => {
+            println!("F1TV token rejected ({e}); going on without");
+            println!("  what arrived: {}", shape(&pasted));
+            None
+        }
+    }
+}
+
+/// The same frames the lamp sends, and with `extra` one more `Subscribe`.
+fn subscribe_all(ws: &mut Socket, with_token: bool, extra: bool) -> anyhow::Result<()> {
+    for frame in LiveSession::opening_frames(with_token) {
+        send(ws, &frame)?;
     }
     println!("sent the handshake and the Subscribe calls");
     if extra {
-        send(&mut ws, &signalr::subscribe(3, &EXTRA_STREAMS))?;
+        send(ws, &signalr::subscribe(3, &EXTRA_STREAMS))?;
         println!("sent Subscribe 3: {}", EXTRA_STREAMS.join(", "));
     }
+    Ok(())
+}
 
+/// Pings, reads, prints and saves until the time is up or the server closes.
+fn capture_until(ws: &mut Socket, capture: &mut Capture, options: &Options) -> anyhow::Result<()> {
     let mut splitter = Splitter::new(MAX_FRAME);
     let mut next_ping = Instant::now() + PING_EVERY;
     loop {
-        if stop_at.is_some_and(|t| Instant::now() >= t) {
+        if options.stop_at.is_some_and(|t| Instant::now() >= t) {
             println!("time is up");
-            break;
+            return Ok(());
         }
         if Instant::now() >= next_ping {
-            send(&mut ws, PING)?;
+            send(ws, PING)?;
             next_ping = Instant::now() + PING_EVERY;
         }
-
-        let bytes = match ws.read() {
-            Ok(tungstenite::Message::Text(text)) => text.as_bytes().to_vec(),
-            Ok(tungstenite::Message::Binary(bytes)) => bytes.to_vec(),
-            Ok(tungstenite::Message::Close(frame)) => {
-                println!("server closed the WebSocket: {frame:?}");
-                break;
-            }
-            Ok(_) => continue, // WebSocket-level ping/pong: tungstenite answers itself
-            Err(tungstenite::Error::Io(e))
-                if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
-            {
-                continue
-            }
-            Err(e) => return Err(e).context("reading from the feed"),
+        let bytes = match next_bytes(ws)? {
+            Read::Bytes(bytes) => bytes,
+            Read::Nothing => continue,
+            Read::Closed => return Ok(()),
         };
-
         for frame in splitter.push(&bytes) {
             let frame = match frame {
                 Ok(frame) => frame,
@@ -159,15 +171,41 @@ fn main() -> anyhow::Result<()> {
                     continue;
                 }
             };
-            if raw {
+            if options.raw {
                 println!("<< {frame}");
             }
-            if !handle(&frame, &mut capture)? {
+            if !handle(&frame, capture)? {
                 return Ok(());
             }
         }
     }
-    Ok(())
+}
+
+/// What one read from the WebSocket gave.
+enum Read {
+    Bytes(Vec<u8>),
+    /// The read timed out, or brought a WebSocket-level ping or pong (which
+    /// tungstenite answers itself).
+    Nothing,
+    Closed,
+}
+
+fn next_bytes(ws: &mut Socket) -> anyhow::Result<Read> {
+    Ok(match ws.read() {
+        Ok(tungstenite::Message::Text(text)) => Read::Bytes(text.as_bytes().to_vec()),
+        Ok(tungstenite::Message::Binary(bytes)) => Read::Bytes(bytes.to_vec()),
+        Ok(tungstenite::Message::Close(frame)) => {
+            println!("server closed the WebSocket: {frame:?}");
+            Read::Closed
+        }
+        Ok(_) => Read::Nothing,
+        Err(tungstenite::Error::Io(e))
+            if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
+        {
+            Read::Nothing
+        }
+        Err(e) => return Err(e).context("reading from the feed"),
+    })
 }
 
 /// Gets the load balancer's cookie, then a connection token (see

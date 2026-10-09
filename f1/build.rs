@@ -97,10 +97,20 @@ fn ota_key(f1: &toml::Table) {
 /// `showcase` always plays the hand-written race in f1-core's test data.
 fn replay_dir(replay: Option<&toml::Table>) {
     println!("cargo:rerun-if-env-changed=F1_REPLAY_DIR");
+    let Some(dir) = replay_source(replay) else {
+        return;
+    };
+    println!("cargo:rustc-env=REPLAY_DIR={}", slashes(&dir));
+    watch_folders(&dir);
+    hand_over_streams(&dir);
+}
+
+/// The session folder the build plays, or `None` without a replay feature.
+fn replay_source(replay: Option<&toml::Table>) -> Option<PathBuf> {
     let wants_replay = std::env::var_os("CARGO_FEATURE_REPLAY").is_some();
     let wants_showcase = std::env::var_os("CARGO_FEATURE_SHOWCASE").is_some();
     let dir = match (wants_replay, wants_showcase) {
-        (false, false) => return,
+        (false, false) => return None,
         (true, true) => panic!("--features replay and showcase both play a session: pick one"),
         (false, true) => "../f1-core/tests/data/showcase".to_owned(),
         (true, false) => std::env::var("F1_REPLAY_DIR")
@@ -125,29 +135,37 @@ fn replay_dir(replay: Option<&toml::Table>) {
     if !dir.is_dir() {
         panic!("replay: {} is not a folder", slashes(&dir));
     }
-    println!("cargo:rustc-env=REPLAY_DIR={}", slashes(&dir));
-    // Watch the folders too: a file that appears later (a stream downloaded
-    // or written afterwards) must make this run again.
-    println!("cargo:rerun-if-changed={}", slashes(&dir));
-    for sub in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+    Some(dir)
+}
+
+/// Watches the session folder and its subfolders too: a file that appears
+/// later (a stream downloaded or written afterwards) must make this run
+/// again.
+fn watch_folders(dir: &Path) {
+    println!("cargo:rerun-if-changed={}", slashes(dir));
+    for sub in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         if sub.path().is_dir() {
             println!("cargo:rerun-if-changed={}", slashes(&sub.path()));
         }
     }
+}
 
+/// Trims each of `REPLAY_FILES` found in `dir` into OUT_DIR and hands its
+/// path to the compiler; a missing optional one becomes an empty file.
+fn hand_over_streams(dir: &Path) {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     for (stream, var, required) in REPLAY_FILES {
         let name = format!("{stream}.jsonStream");
-        let path = match find(&dir, &name) {
+        let path = match find(dir, &name) {
             Some(path) => {
                 println!("cargo:rerun-if-changed={}", slashes(&path));
                 trimmed(&path, stream, &out_dir.join(&name))
             }
-            None if required => panic!("replay: no {name} in {} or its subfolders", slashes(&dir)),
+            None if required => panic!("replay: no {name} in {} or its subfolders", slashes(dir)),
             None => {
                 println!(
                     "cargo:warning=replay: no {name} in {}; its events won't show",
-                    slashes(&dir)
+                    slashes(dir)
                 );
                 // An empty stream: the replay plays without it.
                 let empty = out_dir.join(&name);

@@ -116,39 +116,64 @@ pub fn spawn(tx: SyncSender<Input>, heartbeat: Arc<Heartbeat>) -> anyhow::Result
 /// Returns only when the render loop is gone.
 fn run(rx: &Receiver<ReplayCommand>, tx: &SyncSender<Input>, heartbeat: &Heartbeat) {
     let handle = HANDLE.get().expect("set in spawn");
-    let started = Instant::now();
-    let mut replayer = Replayer::new(&FILES, SPEED, started);
-    let status = replayer.status(Instant::now());
-    log::info!(
-        "replay: {} ({} of feed), paused at {}, read in {} ms",
-        env!("REPLAY_DIR"),
-        clock(status.end_ms),
-        clock(status.position_ms),
-        started.elapsed().as_millis(),
-    );
-
-    let mut finished_logged = false;
+    let mut player = Player::read();
     loop {
         heartbeat.beat(Instant::now());
-        let wait = match replayer.step(Instant::now()) {
+        let Some(wait) = player.step(tx) else {
+            return;
+        };
+        player.publish(handle);
+        if player.wait_for_command(rx, wait) {
+            player.publish(handle);
+        }
+    }
+}
+
+/// The replay, and whether its end has been logged yet.
+struct Player {
+    replayer: Replayer<'static>,
+    finished_logged: bool,
+}
+
+impl Player {
+    /// Reads the embedded session, paused just before lights out.
+    fn read() -> Self {
+        let started = Instant::now();
+        let replayer = Replayer::new(&FILES, SPEED, started);
+        let status = replayer.status(Instant::now());
+        log::info!(
+            "replay: {} ({} of feed), paused at {}, read in {} ms",
+            env!("REPLAY_DIR"),
+            clock(status.end_ms),
+            clock(status.position_ms),
+            started.elapsed().as_millis(),
+        );
+        Player {
+            replayer,
+            finished_logged: false,
+        }
+    }
+
+    /// Sends what's due. Returns how long to wait before the next step, or
+    /// `None` when the render loop is gone.
+    fn step(&mut self, tx: &SyncSender<Input>) -> Option<Duration> {
+        Some(match self.replayer.step(Instant::now()) {
             Step::Send(inputs) => {
                 for input in inputs {
                     match input {
                         Input::Race { event, .. } => log::info!("replay: {event:?}"),
                         other => log::info!("replay: {other:?}"),
                     }
-                    if tx.send(input).is_err() {
-                        return;
-                    }
+                    tx.send(input).ok()?;
                 }
                 Duration::ZERO
             }
             Step::Wait(wait) => wait.min(STATUS_EVERY),
             Step::Paused => STATUS_EVERY,
             Step::Finished => {
-                if !finished_logged {
+                if !self.finished_logged {
                     log::info!("replay: finished");
-                    finished_logged = true;
+                    self.finished_logged = true;
                 }
                 STATUS_EVERY
             }
@@ -156,22 +181,33 @@ fn run(rx: &Receiver<ReplayCommand>, tx: &SyncSender<Input>, heartbeat: &Heartbe
                 log::warn!("replay: skipped {e}");
                 Duration::ZERO
             }
-        };
-        *handle.status.lock().unwrap() = Some(replayer.status(Instant::now()));
+        })
+    }
 
-        // Waiting here, not in `thread::sleep`, so a command acts at once.
+    /// Waits up to `wait` for a command from the page and carries it out.
+    /// Waiting here, not in `thread::sleep`, so a command acts at once.
+    /// Whether one came.
+    fn wait_for_command(&mut self, rx: &Receiver<ReplayCommand>, wait: Duration) -> bool {
         match rx.recv_timeout(wait) {
             Ok(command) => {
                 let took = Instant::now();
-                replayer.command(command, took);
+                self.replayer.command(command, took);
                 log::info!("replay: {command:?} ({} ms)", took.elapsed().as_millis());
-                finished_logged = false;
-                *handle.status.lock().unwrap() = Some(replayer.status(Instant::now()));
+                self.finished_logged = false;
+                true
             }
-            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Timeout) => false,
             // The sender lives in a static, so this can't happen.
-            Err(RecvTimeoutError::Disconnected) => thread::sleep(wait),
+            Err(RecvTimeoutError::Disconnected) => {
+                thread::sleep(wait);
+                false
+            }
         }
+    }
+
+    /// Shares the position with the page.
+    fn publish(&self, handle: &ReplayHandle) {
+        *handle.status.lock().unwrap() = Some(self.replayer.status(Instant::now()));
     }
 }
 
