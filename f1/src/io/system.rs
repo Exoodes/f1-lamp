@@ -15,6 +15,12 @@ pub struct Heap {
     pub largest_block: usize,
 }
 
+pub fn restart() -> ! {
+    // SAFETY: `esp_restart` takes no arguments and has no preconditions; it
+    // reboots the chip and never returns.
+    unsafe { sys::esp_restart() }
+}
+
 /// Sets the calling task's FreeRTOS priority.
 pub fn set_own_priority(priority: u32) {
     // SAFETY: a null handle means the calling task, which exists while it

@@ -50,7 +50,7 @@ fn read_cfg() -> toml::Table {
 }
 
 /// Hands the WiFi credentials to the compiler as `WIFI_SSID` and `WIFI_PSK`,
-/// which `main.rs` bakes in with `env!`.
+/// which `config.rs` bakes in with `env!`.
 fn wifi_credentials(f1: &toml::Table) {
     for (key, var) in [("wifi_ssid", "WIFI_SSID"), ("wifi_psk", "WIFI_PSK")] {
         let value = f1

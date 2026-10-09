@@ -18,7 +18,7 @@ use f1_core::{
     controller::Controller, frame::Frame, frame_stats::FrameStats, heartbeat::Heartbeat,
     input::Input, snapshot::Snapshot,
 };
-use io::{led::LedOutput, storage::SettingsStore};
+use io::{led::LedOutput, storage::SettingsStore, system::restart};
 
 mod config;
 mod io;
@@ -35,10 +35,6 @@ const THREAD_CHECK_EVERY: Duration = Duration::from_secs(1);
 /// live thread's 60 s pause between reconnects.
 const THREAD_SILENCE_LIMIT: Duration = Duration::from_secs(180);
 
-// WiFi credentials from f1/cfg.toml, passed in by build.rs.
-const WIFI_SSID: &str = env!("WIFI_SSID");
-const WIFI_PSK: &str = env!("WIFI_PSK");
-
 fn main() {
     esp_idf_svc::sys::link_patches();
     io::clock::set_timezone();
@@ -52,10 +48,10 @@ fn main() {
 
 fn run() -> anyhow::Result<()> {
     let booted = Instant::now();
-    if WIFI_SSID.is_empty() {
+    if config::wifi::SSID.is_empty() {
         log::warn!("WiFi SSID is empty: set wifi_ssid in f1/cfg.toml");
     }
-    log::info!("SSID: {WIFI_SSID}");
+    log::info!("SSID: {}", config::wifi::SSID);
 
     let peripherals = Peripherals::take()?;
     let sys_loop = EspSystemEventLoop::take()?;
@@ -297,10 +293,4 @@ fn crash_test() {
         std::thread::sleep(Duration::from_secs(10));
         panic!("crash-test");
     });
-}
-
-pub fn restart() -> ! {
-    // SAFETY: `esp_restart` takes no arguments and has no preconditions; it
-    // reboots the chip and never returns.
-    unsafe { esp_idf_svc::sys::esp_restart() }
 }

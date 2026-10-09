@@ -34,7 +34,11 @@ use f1_core::{
     ota_trial::{self, on_boot, ArmError, BootDecision, Trial, TrialStore, HEALTHY_WITHIN},
 };
 
-use crate::config::nvs::{NAMESPACE, OTA_FELL_BACK, OTA_TRIAL, OTA_TRIAL_IMAGE};
+use super::system;
+use crate::config::{
+    nvs::{NAMESPACE, OTA_FELL_BACK, OTA_TRIAL, OTA_TRIAL_IMAGE},
+    OTA_KEY,
+};
 
 /// Opened at boot by `check_boot`, used by `receive` and `mark_healthy`.
 static TRIAL: OnceLock<Mutex<EspNvs<NvsDefault>>> = OnceLock::new();
@@ -78,7 +82,7 @@ pub fn check_boot(partition: EspDefaultNvsPartition) -> anyhow::Result<()> {
                     log::error!(
                         "ota: new firmware never got healthy; going back to the previous one"
                     );
-                    crate::restart();
+                    system::restart();
                 }
                 // E.g. the other slot was half overwritten: nothing to go back
                 // to, so carry on with what runs.
@@ -207,9 +211,6 @@ fn switch_to_other_slot() -> anyhow::Result<()> {
     esp!(unsafe { esp_ota_set_boot_partition(other) }).context("set the boot slot")?;
     Ok(())
 }
-
-/// The update key from cfg.toml, passed in by build.rs.
-const OTA_KEY: &str = env!("OTA_KEY");
 
 static NONCES: Mutex<Nonces> = Mutex::new(Nonces::new());
 

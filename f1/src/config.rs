@@ -1,6 +1,17 @@
 //! How the firmware uses the chip: thread stacks, the LED output, the input
-//! queue and the flash keys, in one place. Timeouts and intervals stay next
-//! to the code that uses them, with their reasons.
+//! queue, the flash keys and what f1/cfg.toml builds in, in one place.
+//! Timeouts and intervals stay next to the code that uses them, with their
+//! reasons.
+
+/// The WiFi network, from f1/cfg.toml (passed in by build.rs).
+pub mod wifi {
+    pub const SSID: &str = env!("WIFI_SSID");
+    pub const PSK: &str = env!("WIFI_PSK");
+}
+
+/// The update key from f1/cfg.toml (passed in by build.rs). It never leaves
+/// the lamp: uploads only prove it (`f1_core::ota_auth`).
+pub const OTA_KEY: &str = env!("OTA_KEY");
 
 /// Stack sizes, in bytes, of the threads and tasks the firmware starts. The
 /// main task's (the render loop) is `CONFIG_ESP_MAIN_TASK_STACK_SIZE` in

@@ -21,7 +21,7 @@ use f1_core::{
 };
 use serde::de::DeserializeOwned;
 
-use crate::io::{clock, mdns, ota, token_store::TokenKeeper, weblog};
+use crate::io::{clock, mdns, ota, system, token_store::TokenKeeper, weblog};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 /// Larger request bodies are refused, so a client can't exhaust the heap.
@@ -157,7 +157,7 @@ fn ota_route(server: &mut EspHttpServer<'static>) -> anyhow::Result<()> {
                 // A moment for the answer to leave before the chip restarts.
                 std::thread::spawn(|| {
                     std::thread::sleep(std::time::Duration::from_secs(1));
-                    crate::restart();
+                    system::restart();
                 });
                 reply(req, 200, TEXT, b"updated, restarting")
             }

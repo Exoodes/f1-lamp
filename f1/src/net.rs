@@ -31,7 +31,7 @@ use crate::{
         clock, http, live::LiveControl, mdns, ota, storage::ScheduleStore, system,
         token_store::TokenKeeper, wifi,
     },
-    web, WIFI_PSK, WIFI_SSID,
+    web,
 };
 
 /// What the net thread shares with the other threads.
@@ -202,7 +202,7 @@ impl<'a> Net<'a> {
         let mut status = None;
         report(tx, &mut status, NetStatus::Connecting)?;
         let schedule = Schedule::load(ScheduleStore::new(nvs.clone())?);
-        let wifi = wifi::create(modem, sys_loop, nvs, WIFI_SSID, WIFI_PSK)?;
+        let wifi = wifi::create(modem, sys_loop, nvs, config::wifi::SSID, config::wifi::PSK)?;
         let mdns = mdns::start().context("start mDNS")?;
         Ok(Net {
             tx,
@@ -269,7 +269,7 @@ impl<'a> Net<'a> {
         }
 
         report(self.tx, &mut self.status, NetStatus::Connecting)?;
-        log::info!("connecting to {WIFI_SSID}");
+        log::info!("connecting to {}", config::wifi::SSID);
         match wifi::connect(&mut self.wifi) {
             Ok(()) => {
                 report(self.tx, &mut self.status, NetStatus::Online)?;
