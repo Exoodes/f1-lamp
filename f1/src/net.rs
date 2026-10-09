@@ -153,7 +153,7 @@ fn run(
     shared: Shared,
     heartbeat: &Heartbeat,
 ) -> anyhow::Result<()> {
-    let mut net = Net::start(modem, sys_loop, nvs, tx, shared)?;
+    let mut net = Net::start(modem, sys_loop, nvs, tx, shared, heartbeat)?;
     loop {
         let now = Instant::now();
         heartbeat.beat(now);
@@ -165,6 +165,9 @@ fn run(
 /// The net thread's state from one round of its loop to the next.
 struct Net<'a> {
     tx: &'a SyncSender<Input>,
+    /// Beaten before every network job, so a round of several never looks
+    /// like a hang.
+    heartbeat: &'a Heartbeat,
     shared: Shared,
     wifi: wifi::Wifi,
     /// The status last sent, so each change is sent once.
@@ -198,6 +201,7 @@ impl<'a> Net<'a> {
         nvs: EspDefaultNvsPartition,
         tx: &'a SyncSender<Input>,
         shared: Shared,
+        heartbeat: &'a Heartbeat,
     ) -> anyhow::Result<Self> {
         let mut status = None;
         report(tx, &mut status, NetStatus::Connecting)?;
@@ -206,6 +210,7 @@ impl<'a> Net<'a> {
         let mdns = mdns::start().context("start mDNS")?;
         Ok(Net {
             tx,
+            heartbeat,
             shared,
             wifi,
             status,
@@ -225,6 +230,7 @@ impl<'a> Net<'a> {
     /// Runs every job that is due at `now`.
     fn round(&mut self, now: Instant) -> anyhow::Result<()> {
         if now >= self.due.wifi_check {
+            self.beat();
             self.due.wifi_check = self.check_wifi()?;
         }
         self.start_services(now)?;
@@ -234,12 +240,14 @@ impl<'a> Net<'a> {
         }
         // Before the phase: a new calendar makes the phase due at once.
         if now >= self.due.calendar {
+            self.beat();
             self.due.calendar = self.update_calendar(now);
         }
         if now >= self.due.phase {
             self.due.phase = self.update_phase(now)?;
         }
         if now >= self.due.winner {
+            self.beat();
             self.look_for_winner()?;
             self.due.winner = now + WINNER_EVERY;
         }
@@ -253,6 +261,10 @@ impl<'a> Net<'a> {
             self.due.heap_log = now + HEAP_LOG_EVERY;
         }
         Ok(())
+    }
+
+    fn beat(&self) {
+        self.heartbeat.beat(Instant::now());
     }
 
     fn wifi_up(&self) -> bool {
@@ -376,6 +388,7 @@ impl<'a> Net<'a> {
                 &mut self.winner_sent,
                 &self.shared.live,
                 self.tx,
+                self.heartbeat,
             )?;
         }
         Ok(())
@@ -391,6 +404,7 @@ fn check_winner(
     sent: &mut Option<u32>,
     live: &LiveControl,
     tx: &SyncSender<Input>,
+    heartbeat: &Heartbeat,
 ) -> anyhow::Result<()> {
     let lookup = schedule::winner_lookup(
         sessions,
@@ -409,7 +423,7 @@ fn check_winner(
         WinnerLookup::Fetch(key) => key,
     };
 
-    match fetch_winner(key) {
+    match fetch_winner(key, heartbeat) {
         Ok(Some((driver, team_color))) => {
             log::info!("winner: #{driver} ({team_color}), session {key}");
             tx.send(Input::Race {
@@ -430,12 +444,13 @@ fn check_winner(
 
 /// The winner of `session_key` and their team colour; `None` until OpenF1 has
 /// published the result (it answers 404 until then).
-fn fetch_winner(session_key: u32) -> anyhow::Result<Option<(u8, Rgb)>> {
+fn fetch_winner(session_key: u32, heartbeat: &Heartbeat) -> anyhow::Result<Option<(u8, Rgb)>> {
     let results =
         http::get_json::<Vec<ResultDto>>(&openf1::results_url(session_key))?.unwrap_or_default();
     let Some(driver) = openf1::winner(&results) else {
         return Ok(None);
     };
+    heartbeat.beat(Instant::now());
     let drivers =
         http::get_json::<Vec<DriverDto>>(&openf1::drivers_url(session_key))?.unwrap_or_default();
     // Without a colour, try again later rather than guess one.

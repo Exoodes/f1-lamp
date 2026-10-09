@@ -22,7 +22,7 @@ use f1_core::{
     feed_health::FeedHealth,
     heartbeat::Heartbeat,
     input::{Input, RaceEvent},
-    live::{LiveSession, Received, MAX_FRAME},
+    live::{LiveSession, Received, MAX_FRAME, MAX_OPENING_FRAMES},
     live_timers::{LiveTimers, SILENCE_LIMIT, TLS_HOLD_MAX},
     negotiate,
     signalr::PING,
@@ -42,7 +42,14 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(5);
 /// How often to look again while the feed isn't wanted.
 const IDLE: Duration = Duration::from_secs(1);
 const FIRST_RETRY: Duration = Duration::from_secs(5);
-const MAX_RETRY: Duration = Duration::from_secs(60);
+pub const MAX_RETRY: Duration = Duration::from_secs(60);
+/// The longest this thread holds `http::TLS`: opening the WebSocket, sending
+/// the opening frames, and waiting for the answer to `Subscribe`.
+pub const LONGEST_TLS_HOLD: Duration = Duration::from_secs(
+    CONNECT_TIMEOUT.as_secs()
+        + MAX_OPENING_FRAMES as u64 * SEND_TIMEOUT.as_secs()
+        + TLS_HOLD_MAX.as_secs(),
+);
 
 /// Shared between the net thread, which decides, and the live thread.
 #[derive(Default)]
@@ -147,7 +154,10 @@ fn tell(tx: &SyncSender<Input>, change: Option<bool>) -> anyhow::Result<()> {
 /// The load balancer's cookie, then a connection token (see
 /// `f1_core::negotiate`). `auth` is the `Authorization` header value, with
 /// the F1TV token.
-fn negotiate(auth: Option<&str>) -> anyhow::Result<(Option<String>, String)> {
+fn negotiate(
+    auth: Option<&str>,
+    heartbeat: &Heartbeat,
+) -> anyhow::Result<(Option<String>, String)> {
     let options = http::request(Method::Options, negotiate::NEGOTIATE_URL, &[])
         .context("negotiate (OPTIONS)")?;
     // Only one `Set-Cookie` gets here (`http::Reply`), so at most one of the
@@ -164,6 +174,7 @@ fn negotiate(auth: Option<&str>) -> anyhow::Result<(Option<String>, String)> {
     if let Some(auth) = auth {
         headers.push(("Authorization", auth));
     }
+    heartbeat.beat(Instant::now());
     let reply = http::request(Method::Post, negotiate::NEGOTIATE_POST_URL, &headers)
         .context("negotiate (POST)")?;
     if reply.status != 200 {
@@ -237,7 +248,7 @@ impl Connection {
             "live: connecting {} F1TV token",
             if auth.is_some() { "with" } else { "without" }
         );
-        let (cookie, token) = negotiate(auth.as_deref())?;
+        let (cookie, token) = negotiate(auth.as_deref(), heartbeat)?;
         heartbeat.beat(Instant::now());
         let mut headers = cookie.map_or(String::new(), |c| format!("Cookie: {c}\r\n"));
         if let Some(auth) = &auth {

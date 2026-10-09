@@ -37,6 +37,10 @@ const INITIAL_ORDER: [Stream; 5] = [
 /// have. `tests/live_capture.rs` checks both against a real answer.
 pub const MAX_FRAME: usize = 24 * 1024;
 
+/// The most frames [`LiveSession::opening_frames`] gives: the device's
+/// longest hold of its TLS lock includes sending them.
+pub const MAX_OPENING_FRAMES: usize = 5;
+
 /// Also subscribed to, so a quiet session still shows the connection is alive.
 const HEARTBEAT: &str = "Heartbeat";
 
@@ -489,6 +493,13 @@ mod tests {
         );
         assert!(!r.subscribed);
         assert_eq!(r.problems.len(), 1);
+    }
+
+    #[test]
+    fn opening_frames_never_exceed_their_maximum() {
+        for with_token in [false, true] {
+            assert!(LiveSession::opening_frames(with_token).len() <= MAX_OPENING_FRAMES);
+        }
     }
 
     #[test]

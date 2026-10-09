@@ -30,10 +30,26 @@ mod web;
 const FRAME_INTERVAL: Duration = Duration::from_millis(20);
 /// How often the render loop checks that all threads are still running.
 const THREAD_CHECK_EVERY: Duration = Duration::from_secs(1);
-/// A thread that hasn't beaten for this long has hung. Well above the
-/// longest normal wait: two 15 s HTTPS requests plus the TLS lock, or the
-/// live thread's 60 s pause between reconnects.
+/// A thread that hasn't beaten for this long has hung. The threads beat
+/// between their network steps, so this covers the longest single one,
+/// checked below: waiting for the TLS lock while the other thread holds it,
+/// then one HTTPS request; or the live thread's pause between reconnects.
 const THREAD_SILENCE_LIMIT: Duration = Duration::from_secs(180);
+const _: () = {
+    let request = io::http::LONGEST_REQUEST.as_secs();
+    let hold = io::live::LONGEST_TLS_HOLD.as_secs();
+    let lock_wait = if hold > request { hold } else { request };
+    let longest = lock_wait + request;
+    let longest = if io::live::MAX_RETRY.as_secs() > longest {
+        io::live::MAX_RETRY.as_secs()
+    } else {
+        longest
+    };
+    assert!(
+        THREAD_SILENCE_LIMIT.as_secs() > longest,
+        "THREAD_SILENCE_LIMIT is shorter than a network step"
+    );
+};
 
 fn main() {
     esp_idf_svc::sys::link_patches();
