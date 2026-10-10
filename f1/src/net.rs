@@ -287,6 +287,7 @@ impl<'a> Net<'a> {
             Ok(()) => {
                 report(self.tx, &mut self.status, NetStatus::Online)?;
                 self.wifi_retry.reset();
+                self.shared.live.wifi_reconnected();
                 Ok(Instant::now() + WIFI_CHECK_EVERY)
             }
             Err(e) => {

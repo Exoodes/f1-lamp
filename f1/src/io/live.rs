@@ -42,6 +42,8 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(5);
 /// How often to look again while the feed isn't wanted.
 const IDLE: Duration = Duration::from_secs(1);
 const FIRST_RETRY: Duration = Duration::from_secs(5);
+/// How often a retry wait looks whether WiFi has come back.
+const RETRY_CHECK: Duration = Duration::from_millis(250);
 pub const MAX_RETRY: Duration = Duration::from_secs(60);
 /// The longest this thread holds `http::TLS`: opening the WebSocket, sending
 /// the opening frames, and waiting for the answer to `Subscribe`.
@@ -61,6 +63,9 @@ pub struct LiveControl {
     /// The session whose winner the feed has shown, so the OpenF1 lookup
     /// doesn't show it a second time.
     winner_shown: Mutex<Option<u32>>,
+    /// WiFi has connected again since the live thread last looked: a feed
+    /// that failed because WiFi was down can retry at once.
+    wifi_back: AtomicBool,
 }
 
 impl LiveControl {
@@ -89,6 +94,15 @@ impl LiveControl {
 
     pub fn winner_shown(&self) -> Option<u32> {
         *self.winner_shown.lock().unwrap()
+    }
+
+    /// Called by the net thread after WiFi has connected again.
+    pub fn wifi_reconnected(&self) {
+        self.wifi_back.store(true, Ordering::Relaxed);
+    }
+
+    fn take_wifi_back(&self) -> bool {
+        self.wifi_back.swap(false, Ordering::Relaxed)
     }
 }
 
@@ -130,10 +144,33 @@ fn run(tx: &SyncSender<Input>, control: &LiveControl, tokens: &TokenKeeper, hear
                     return;
                 }
                 heartbeat.beat(Instant::now());
-                thread::sleep(wait);
+                if wait_for_retry(control, wait) {
+                    log::info!("live: WiFi is back, retrying now");
+                    retry.reset();
+                }
             }
         }
     }
+}
+
+/// Waits `wait` before the next try, or less: returns `true` when WiFi came
+/// back meanwhile (Singapore 2026 qualifying: the feed would otherwise have
+/// waited 36 s more), `false` after the whole wait or when the feed isn't
+/// wanted any more.
+fn wait_for_retry(control: &LiveControl, wait: Duration) -> bool {
+    // A reconnect during the failed try counts too: it may have failed
+    // before WiFi was back. An older one costs one early retry at most.
+    let end = Instant::now() + wait;
+    while Instant::now() < end {
+        if control.take_wifi_back() {
+            return true;
+        }
+        thread::sleep(RETRY_CHECK.min(end.saturating_duration_since(Instant::now())));
+        if !control.wanted() {
+            return false;
+        }
+    }
+    false
 }
 
 /// Tells the render loop when the feed starts or stops failing, so the lamp

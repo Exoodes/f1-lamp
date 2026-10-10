@@ -17,13 +17,6 @@ Ideas for after the course, in no particular order of size.
   qualifying, Singapore 2026-10-09), and some look too much alike.
 - **A new chequered flag.** The current one (one lit pixel in four, swapping
   every 500 ms) doesn't look good and is too short (10 s).
-- **Winner after the chequered flag, not before.** The winner comes from
-  SessionStatus `Finished`, the chequered flag from race control, and
-  `Finished` arrives first (Singapore sprint 2026-10-10: 109 ms earlier). So
-  the lamp showed the winner, then the chequered flag on top of it, then the
-  winner again for what was left of its time. Start the winner only once
-  the chequered flag has finished. Mostly a race problem: pole now waits
-  for the last laps after the flag, unless every car is already in the pits.
 - **Fastest driver of each qualifying part.** At the end of Q1 and Q2 (and
   SQ1/SQ2) show the team colour of the part's quickest driver, like pole
   after Q3. The leader is only certain once the last cars finish their laps
@@ -35,10 +28,6 @@ Ideas for after the course, in no particular order of size.
 - **VSC ending.** The feed sends it (`TrackStatus` 7, `VSCEnding`, ~15 s
   before green; FP1 Singapore had one), but the lamp treats it like VSC and
   keeps breathing yellow. Give it a look of its own, e.g. faster breathing.
-- **Retry the feed at once when WiFi is back.** After a WiFi drop the feed
-  keeps waiting out its backoff: qualifying Singapore 2026-10-10, WiFi up at
-  16:24:41, the feed waited for its 40 s retry and connected at 16:25:17,
-  about 36 s lost in Q3. Reset the feed's backoff when WiFi comes up.
 - **No calendar downloads during a session.** In pre-session and live, OpenF1
   answers 401 anyway ("Live F1 session in progress"; every 30 min in FP1),
   and each try costs a TLS handshake while the feed is open. Skip them while
