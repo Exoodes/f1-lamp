@@ -62,10 +62,23 @@ enum Delayed {
     Phase(SessionPhase),
 }
 
+/// How long a winner waits for a chequered flag that may still come: the
+/// feed sends SessionStatus `Finished` and race control's chequered flag
+/// apart, in either order (Monza 2026 race: flag 0.4 s first; Singapore 2026
+/// sprint: `Finished` 0.1 s first).
+pub const CHEQUERED_WAIT: Duration = Duration::from_secs(3);
+
+/// A winner shows after [`CHEQUERED_WAIT`] once no overlay plays, so it
+/// never flashes before the chequered flag, and then for its whole display
+/// time.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct WinnerScene {
-    scene: Scene,
-    until: Instant,
+    effect: Effect,
+    arrived: Instant,
+    /// From the settings when it arrived.
+    display: Duration,
+    /// When it started to show; `None` while it waits.
+    shown: Option<Instant>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -153,8 +166,19 @@ impl Controller {
         self.release_due(now);
         self.expire_green(now);
         self.overlays.tick(now);
-        if self.layers.winner.is_some_and(|w| now >= w.until) {
-            self.layers.winner = None;
+        self.tick_winner(now);
+    }
+
+    fn tick_winner(&mut self, now: Instant) {
+        let Some(winner) = &mut self.layers.winner else {
+            return;
+        };
+        match winner.shown {
+            None if now >= winner.arrived + CHEQUERED_WAIT && self.overlays.is_empty() => {
+                winner.shown = Some(now);
+            }
+            Some(shown) if now >= shown + winner.display => self.layers.winner = None,
+            _ => {}
         }
     }
 
@@ -258,12 +282,12 @@ impl Controller {
             RaceEvent::FlagCleared => self.layers.flag = None,
             RaceEvent::Winner { team_color, .. } => {
                 self.layers.winner = Some(WinnerScene {
-                    scene: Scene {
-                        effect: winner_effect(team_color),
-                        started: now,
-                    },
-                    until: now
-                        + Duration::from_millis(u64::from(self.layers.settings.winner_display_ms)),
+                    effect: winner_effect(team_color),
+                    arrived: now,
+                    display: Duration::from_millis(u64::from(
+                        self.layers.settings.winner_display_ms,
+                    )),
+                    shown: None,
                 });
             }
             other => {
@@ -299,7 +323,11 @@ impl Controller {
     }
 
     fn winner_layer(&self) -> Option<Scene> {
-        self.layers.winner.map(|w| w.scene)
+        let winner = self.layers.winner?;
+        winner.shown.map(|started| Scene {
+            effect: winner.effect,
+            started,
+        })
     }
 
     fn status_layer(&self) -> Option<Scene> {
@@ -368,6 +396,12 @@ mod tests {
     fn default_lamp() -> Effect {
         let s = Settings::default();
         Effect::Solid(s.lamp_color.scale(s.lamp_brightness))
+    }
+
+    fn chequered_length() -> Duration {
+        event_overlay(RaceEvent::ChequeredFlag)
+            .and_then(|e| e.duration())
+            .unwrap()
     }
 
     fn default_winner_display() -> Duration {
@@ -636,9 +670,10 @@ mod tests {
         // Yellow: a green would have given way to the lamp by then.
         c.apply(flag(TrackFlag::Yellow, t0), t0);
         c.apply(winner(t0), t0);
-        assert_eq!(winner_at(&mut c, t0), ("winner", winner_effect(TEAM)));
+        let shown = t0 + CHEQUERED_WAIT;
+        assert_eq!(winner_at(&mut c, shown), ("winner", winner_effect(TEAM)));
         let display = default_winner_display();
-        assert_eq!(winner_at(&mut c, t0 + display).0, "live track");
+        assert_eq!(winner_at(&mut c, shown + display).0, "live track");
     }
 
     #[test]
@@ -649,10 +684,54 @@ mod tests {
         c.apply(Input::Phase(SessionPhase::PostSession), t0);
         c.apply(winner(t0), t0);
 
-        assert_eq!(winner_at(&mut c, t0), ("winner", winner_effect(TEAM)));
+        let shown = t0 + CHEQUERED_WAIT;
+        assert_eq!(winner_at(&mut c, shown), ("winner", winner_effect(TEAM)));
         let display = default_winner_display();
-        assert_eq!(winner_at(&mut c, t0 + display - ms(1)).0, "winner");
-        assert_eq!(winner_at(&mut c, t0 + display).0, "lamp");
+        assert_eq!(winner_at(&mut c, shown + display - ms(1)).0, "winner");
+        assert_eq!(winner_at(&mut c, shown + display).0, "lamp");
+    }
+
+    #[test]
+    fn winner_waits_a_moment_for_a_chequered_flag() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(winner(t0), t0);
+        assert_ne!(winner_at(&mut c, t0).0, "winner");
+        assert_ne!(winner_at(&mut c, t0 + CHEQUERED_WAIT - ms(1)).0, "winner");
+        assert_eq!(winner_at(&mut c, t0 + CHEQUERED_WAIT).0, "winner");
+    }
+
+    #[test]
+    fn winner_before_the_chequered_flag_shows_after_it_for_its_whole_time() {
+        // Singapore 2026 sprint: `Finished` came 0.1 s before the flag.
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(winner(t0), t0);
+        winner_at(&mut c, t0);
+        c.apply(race(RaceEvent::ChequeredFlag, t0 + ms(100)), t0 + ms(100));
+        let flag_ends = t0 + ms(100) + chequered_length();
+        assert_eq!(winner_at(&mut c, t0 + ms(100)).0, "overlay");
+        assert_eq!(winner_at(&mut c, flag_ends - ms(1)).0, "overlay");
+        assert_eq!(
+            winner_at(&mut c, flag_ends),
+            ("winner", winner_effect(TEAM))
+        );
+        let display = default_winner_display();
+        assert_eq!(winner_at(&mut c, flag_ends + display - ms(1)).0, "winner");
+        assert_eq!(winner_at(&mut c, flag_ends + display).0, "lamp");
+    }
+
+    #[test]
+    fn winner_after_the_chequered_flag_waits_for_it_to_end() {
+        // Monza 2026 race: the flag came 0.4 s before `Finished`.
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(race(RaceEvent::ChequeredFlag, t0), t0);
+        winner_at(&mut c, t0);
+        c.apply(winner(t0 + ms(400)), t0 + ms(400));
+        let flag_ends = t0 + chequered_length();
+        assert_eq!(winner_at(&mut c, flag_ends - ms(1)).0, "overlay");
+        assert_eq!(winner_at(&mut c, flag_ends).0, "winner");
     }
 
     #[test]
@@ -713,8 +792,10 @@ mod tests {
         };
         c.apply(Input::Settings(settings), t0);
         c.apply(winner(t0), t0);
-        assert_eq!(winner_at(&mut c, t0 + ms(4999)).0, "winner");
-        assert_eq!(winner_at(&mut c, t0 + ms(5000)).0, "lamp");
+        let shown = t0 + CHEQUERED_WAIT;
+        winner_at(&mut c, shown);
+        assert_eq!(winner_at(&mut c, shown + ms(4999)).0, "winner");
+        assert_eq!(winner_at(&mut c, shown + ms(5000)).0, "lamp");
     }
 
     #[test]
@@ -728,7 +809,9 @@ mod tests {
             ..Settings::default()
         };
         c.apply(Input::Settings(shorter), t0 + ms(10));
-        assert_eq!(winner_at(&mut c, t0 + ms(2000)).0, "winner");
+        let shown = t0 + CHEQUERED_WAIT;
+        winner_at(&mut c, shown);
+        assert_eq!(winner_at(&mut c, shown + ms(2000)).0, "winner");
     }
 
     fn night_settings() -> Settings {
