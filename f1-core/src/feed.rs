@@ -334,9 +334,11 @@ impl SessionData {
     }
 }
 
-/// The timing screen. Only who is knocked out of qualifying is read: the
-/// feed sets `KnockedOut` for a part's slowest drivers when the next part
-/// is announced, about six minutes after its chequered flag.
+/// The timing screen. Read: who is knocked out of qualifying (the feed sets
+/// `KnockedOut` for a part's slowest drivers when the next part is
+/// announced, about six minutes after its chequered flag), and what a car is
+/// doing after the flag: crossing the line (`NumberOfLaps`), in the pits or
+/// out of the session.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct TimingData {
@@ -347,6 +349,10 @@ pub struct TimingData {
 #[serde(rename_all = "PascalCase")]
 pub struct TimingLine {
     pub knocked_out: Option<bool>,
+    pub number_of_laps: Option<u32>,
+    pub in_pit: Option<bool>,
+    pub retired: Option<bool>,
+    pub stopped: Option<bool>,
 }
 
 #[cfg(test)]
@@ -667,5 +673,18 @@ mod tests {
         let lines = t.lines.unwrap();
         assert_eq!(lines[&22].knocked_out, Some(true));
         assert_eq!(lines[&63].knocked_out, None);
+    }
+
+    #[test]
+    fn timing_data_reads_laps_and_where_a_car_is() {
+        let t: TimingData = serde_json::from_str(
+            r#"{"Lines":{"3":{"NumberOfLaps":15,"Sectors":{"2":{"Value":"28.1"}}},"44":{"InPit":true,"NumberOfPitStops":4},"16":{"Retired":true,"Stopped":true}}}"#,
+        )
+        .unwrap();
+        let lines = t.lines.unwrap();
+        assert_eq!(lines[&3].number_of_laps, Some(15));
+        assert_eq!(lines[&44].in_pit, Some(true));
+        assert_eq!(lines[&16].retired, Some(true));
+        assert_eq!(lines[&16].stopped, Some(true));
     }
 }

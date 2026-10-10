@@ -6,6 +6,9 @@
 //! replay the start lights or a chequered flag. Afterwards only the current
 //! flag is sent, so the lamp shows it at once.
 
+use std::time::Duration;
+
+use chrono::DateTime;
 use serde_json::value::RawValue;
 
 use crate::{
@@ -178,6 +181,11 @@ impl LiveSession {
             }
             Message::Invocation { .. } => {
                 if let Some(update) = msg.feed_update() {
+                    // Every update moves the tracker's clock, also those
+                    // whose content is skipped.
+                    if let Some(at) = update.timestamp.as_deref().and_then(feed_time) {
+                        out.events.extend(self.tracker.tick(at));
+                    }
                     if let Some(stream) = Stream::from_name(&update.stream) {
                         self.update(stream, update.data.get(), out);
                     }
@@ -249,6 +257,15 @@ impl LiveSession {
             }
         }
     }
+}
+
+/// An update's timestamp, e.g. `2026-10-09T13:36:00.133Z`, as time since
+/// the Unix epoch.
+fn feed_time(timestamp: &str) -> Option<Duration> {
+    let millis = DateTime::parse_from_rfc3339(timestamp)
+        .ok()?
+        .timestamp_millis();
+    u64::try_from(millis).ok().map(Duration::from_millis)
 }
 
 #[cfg(test)]
@@ -547,5 +564,13 @@ mod tests {
             );
             assert!(r.events.is_empty() && !r.subscribed, "call {id}");
         }
+    }
+
+    #[test]
+    fn feed_timestamps_are_read_to_the_millisecond() {
+        let a = feed_time("2026-10-09T13:36:00.133Z").unwrap();
+        let b = feed_time("2026-10-09T13:38:00.1331234Z").unwrap();
+        assert_eq!(b - a, Duration::from_secs(120));
+        assert_eq!(feed_time("not a time"), None);
     }
 }

@@ -1,7 +1,8 @@
 //! Driver events from the feed, each in the driver's team colour:
 //!
 //! - winner: the leader in TopThree when a race's SessionStatus becomes
-//!   `Finished`, or pole once the last part of qualifying is `Finalised`;
+//!   `Finished`, or pole once every car has finished its lap after the
+//!   last part of qualifying (at most [`LAST_LAPS_MAX`] after the flag);
 //! - knocked out: a driver out of qualifying after Q1 or Q2 (TimingData,
 //!   public);
 //! - pit stop: a car leaving the pit lane (PitLaneTimeCollection, public);
@@ -13,13 +14,16 @@
 //! The colours come from DriverList: TopThree patches leave `TeamColour` out
 //! when it didn't change, e.g. when one Mercedes passes the other.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use crate::{
     color::Rgb,
     feed::{
-        update_team_colours, OvertakeSeries, PitLaneTimes, SessionState, TimingData, TimingStats,
-        TopThree,
+        update_team_colours, OvertakeSeries, PitLaneTimes, SessionState, TimingData, TimingLine,
+        TimingStats, TopThree,
     },
     input::RaceEvent,
     track_state::FeedMessage,
@@ -36,6 +40,53 @@ const MAX_PIT_LANE_SECS: f32 = 120.0;
 const FIRST_FASTEST_LAP: u32 = 2;
 /// Qualifying (and sprint qualifying) ends with its third part.
 const LAST_QUALIFYING_PART: u8 = 3;
+/// After qualifying's last flag, pole waits at most this long for the cars
+/// still on track to finish their laps. Singapore 2026 sprint qualifying:
+/// all done 88 s after the flag; `Finalised` came after 18 minutes.
+pub const LAST_LAPS_MAX: Duration = Duration::from_secs(120);
+
+/// What TimingData last said about a car.
+#[derive(Debug, Default)]
+struct Car {
+    laps: Option<u32>,
+    in_pit: bool,
+    knocked_out: bool,
+    retired: bool,
+    stopped: bool,
+}
+
+impl Car {
+    fn update(&mut self, line: &TimingLine) {
+        fn set(field: &mut bool, value: Option<bool>) {
+            if let Some(v) = value {
+                *field = v;
+            }
+        }
+        if line.number_of_laps.is_some() {
+            self.laps = line.number_of_laps;
+        }
+        set(&mut self.in_pit, line.in_pit);
+        set(&mut self.knocked_out, line.knocked_out);
+        set(&mut self.retired, line.retired);
+        set(&mut self.stopped, line.stopped);
+    }
+
+    /// Won't set a time any more: in the pits or out of the session.
+    fn off_track(&self) -> bool {
+        self.in_pit || self.knocked_out || self.retired || self.stopped
+    }
+}
+
+/// From qualifying's last flag until pole is known.
+#[derive(Debug)]
+struct LastLaps {
+    /// Feed time of the flag; `None` before the first timestamp.
+    flag_at: Option<Duration>,
+    /// The cars that may still set a time, with their lap count at the
+    /// flag. A car is done when it crosses the line (the count changes) or
+    /// leaves the track.
+    on_track: HashMap<u8, Option<u32>>,
+}
 
 #[derive(Debug, Default)]
 pub struct Tracker {
@@ -48,6 +99,12 @@ pub struct Tracker {
     qualifying_part: Option<u8>,
     /// Shown already: the feed may repeat a driver's `KnockedOut`.
     knocked_out: HashSet<u8>,
+    /// From TimingData updates; the snapshot on connecting is too large to
+    /// read, so a car can be missing.
+    cars: HashMap<u8, Car>,
+    /// The feed's clock, from [`Tracker::tick`].
+    now: Option<Duration>,
+    last_laps: Option<LastLaps>,
     /// Racing number in the first line of TopThree.
     leader: Option<u8>,
     colours: HashMap<u8, Rgb>,
@@ -55,6 +112,14 @@ pub struct Tracker {
 }
 
 impl Tracker {
+    /// Moves the feed's clock to `at`: a live message's timestamp, or a
+    /// replay's position. Returns pole when the cars' last laps run out of
+    /// time.
+    pub fn tick(&mut self, at: Duration) -> Option<RaceEvent> {
+        self.now = Some(self.now.map_or(at, |now| now.max(at)));
+        self.pole_after_last_laps()
+    }
+
     /// Reads one message; returns the events it carries, usually none.
     pub fn apply(&mut self, msg: &FeedMessage) -> Vec<RaceEvent> {
         let mut events = Vec::new();
@@ -74,45 +139,102 @@ impl Tracker {
             }
             FeedMessage::DriverList(patch) => update_team_colours(&mut self.colours, patch),
             FeedMessage::TopThree(top) => self.read_top_three(top),
-            FeedMessage::Session(s)
-                if s.status.is_some_and(|state| self.names_the_winner(state))
-                    && !self.winner_sent =>
-            {
-                if let Some(driver) = self.leader {
-                    self.winner_sent = true;
-                    events.push(RaceEvent::Winner {
-                        driver,
-                        team_color: self.colour(driver),
-                    });
+            FeedMessage::Session(s) => {
+                if let Some(state) = s.status {
+                    events.extend(self.session_state(state));
                 }
             }
             FeedMessage::PitLane(pit) => self.pit_stops(pit, &mut events),
             FeedMessage::TimingStats(stats) => self.fastest_laps(stats, &mut events),
             FeedMessage::Overtakes(series) => self.overtakes(series, &mut events),
-            FeedMessage::TimingData(timing) => self.knockouts(timing, &mut events),
+            FeedMessage::TimingData(timing) => {
+                self.timing(timing, &mut events);
+                events.extend(self.pole_after_last_laps());
+            }
             _ => {}
         }
         events
     }
 
-    /// Whether the session reaching `state` makes TopThree's leader the
-    /// winner. A race is `Finished` when the leader takes the flag. Qualifying
-    /// is `Finished` when the clock runs out, but drivers still complete their
-    /// last laps, which often take pole (Monza 2026: 70 s later, a new
-    /// leader); it's `Finalised` once they have.
-    fn names_the_winner(&self, state: SessionState) -> bool {
+    /// The winner, if the session reaching `state` names one. A race is
+    /// `Finished` when the leader takes the flag. Qualifying is `Finished`
+    /// when the clock runs out, but drivers still complete their last laps,
+    /// which often take pole (Monza 2026: 70 s later, a new leader), so pole
+    /// waits for them. `Finalised`, often many minutes later, is the
+    /// fallback.
+    fn session_state(&mut self, state: SessionState) -> Option<RaceEvent> {
+        let last_part = self.is_qualifying && self.qualifying_part == Some(LAST_QUALIFYING_PART);
         match state {
-            SessionState::Finished => self.is_race,
-            SessionState::Finalised => {
-                self.is_qualifying && self.qualifying_part == Some(LAST_QUALIFYING_PART)
+            SessionState::Finished if self.is_race => self.winner(),
+            SessionState::Finished if last_part => {
+                self.start_last_laps();
+                self.pole_after_last_laps()
             }
-            _ => false,
+            SessionState::Finalised if last_part => self.winner(),
+            _ => None,
         }
     }
 
-    fn knockouts(&mut self, timing: &TimingData, events: &mut Vec<RaceEvent>) {
+    /// Qualifying's last flag: notes which cars may still set a time. A car
+    /// only DriverList knows of may be on track too.
+    fn start_last_laps(&mut self) {
+        let numbers: HashSet<u8> = self
+            .colours
+            .keys()
+            .chain(self.cars.keys())
+            .copied()
+            .collect();
+        let on_track = numbers
+            .into_iter()
+            .filter_map(|n| match self.cars.get(&n) {
+                Some(car) if car.off_track() => None,
+                car => Some((n, car.and_then(|c| c.laps))),
+            })
+            .collect();
+        self.last_laps = Some(LastLaps {
+            flag_at: self.now,
+            on_track,
+        });
+    }
+
+    /// Pole, once every car on track at the last flag is done, or
+    /// [`LAST_LAPS_MAX`] after the flag.
+    fn pole_after_last_laps(&mut self) -> Option<RaceEvent> {
+        let last = self.last_laps.as_ref()?;
+        let time_up = matches!(
+            (last.flag_at, self.now),
+            (Some(flag), Some(now)) if now.saturating_sub(flag) >= LAST_LAPS_MAX
+        );
+        let all_done = last.on_track.iter().all(|(n, laps_at_flag)| {
+            self.cars
+                .get(n)
+                .is_some_and(|car| car.off_track() || car.laps != *laps_at_flag)
+        });
+        if !time_up && !all_done {
+            return None;
+        }
+        self.last_laps = None;
+        self.winner()
+    }
+
+    /// TopThree's leader as the winner, once.
+    fn winner(&mut self) -> Option<RaceEvent> {
+        if self.winner_sent {
+            return None;
+        }
+        let driver = self.leader?;
+        self.winner_sent = true;
+        Some(RaceEvent::Winner {
+            driver,
+            team_color: self.colour(driver),
+        })
+    }
+
+    /// Knockouts, and what each car is doing.
+    fn timing(&mut self, timing: &TimingData, events: &mut Vec<RaceEvent>) {
         let Some(lines) = &timing.lines else { return };
         for (&driver, line) in lines.iter() {
+            self.cars.entry(driver).or_default().update(line);
             if line.knocked_out == Some(true) && self.knocked_out.insert(driver) {
                 events.push(RaceEvent::KnockedOut {
                     driver,
@@ -616,6 +738,113 @@ mod tests {
             r#"{"Lines":{"0":{"RacingNumber":"12"}}}"#,
         );
         assert_eq!(finalise(&mut t), winner(12, "#00d7b6"));
+    }
+
+    fn timing(t: &mut Tracker, json: &str) -> Option<RaceEvent> {
+        feed(t, Stream::TimingData, json)
+    }
+
+    /// Q3 with cars 10 and 12 on track (lap 14) and 5 knocked out, the
+    /// clock at 1000 s; then the flag.
+    fn q3_flag() -> Tracker {
+        let mut t = qualifying();
+        part(&mut t, 3);
+        timing(
+            &mut t,
+            r#"{"Lines":{"10":{"NumberOfLaps":14,"InPit":false},"12":{"NumberOfLaps":14,"InPit":false},"5":{"KnockedOut":true,"InPit":true}}}"#,
+        );
+        t.tick(secs(1000));
+        assert_eq!(finish(&mut t), None);
+        t
+    }
+
+    fn secs(s: u64) -> Duration {
+        Duration::from_secs(s)
+    }
+
+    #[test]
+    fn pole_comes_once_every_car_on_track_has_crossed_the_line() {
+        let mut t = q3_flag();
+        assert_eq!(
+            timing(&mut t, r#"{"Lines":{"10":{"NumberOfLaps":15}}}"#),
+            None
+        );
+        assert_eq!(
+            timing(&mut t, r#"{"Lines":{"12":{"NumberOfLaps":15}}}"#),
+            winner(10, "#00a1e8")
+        );
+        assert_eq!(finalise(&mut t), None, "sent once");
+    }
+
+    #[test]
+    fn a_car_going_into_the_pits_has_finished() {
+        let mut t = q3_flag();
+        timing(&mut t, r#"{"Lines":{"10":{"NumberOfLaps":15}}}"#);
+        assert_eq!(
+            timing(&mut t, r#"{"Lines":{"12":{"InPit":true}}}"#),
+            winner(10, "#00a1e8")
+        );
+    }
+
+    #[test]
+    fn a_new_leader_on_the_last_lap_takes_pole() {
+        let mut t = q3_flag();
+        timing(&mut t, r#"{"Lines":{"10":{"NumberOfLaps":15}}}"#);
+        feed(
+            &mut t,
+            Stream::TopThree,
+            r#"{"Lines":{"0":{"RacingNumber":"12"}}}"#,
+        );
+        assert_eq!(
+            timing(&mut t, r#"{"Lines":{"12":{"NumberOfLaps":15}}}"#),
+            winner(12, "#00d7b6")
+        );
+    }
+
+    #[test]
+    fn pole_comes_two_minutes_after_the_flag_at_the_latest() {
+        let mut t = q3_flag();
+        timing(&mut t, r#"{"Lines":{"10":{"NumberOfLaps":15}}}"#);
+        assert_eq!(
+            t.tick(secs(1000) + LAST_LAPS_MAX - Duration::from_millis(1)),
+            None
+        );
+        assert_eq!(t.tick(secs(1000) + LAST_LAPS_MAX), winner(10, "#00a1e8"));
+    }
+
+    #[test]
+    fn a_car_without_timing_data_is_waited_for() {
+        // Car 12 is only in DriverList: maybe on track since a reconnect.
+        let mut t = qualifying();
+        part(&mut t, 3);
+        timing(&mut t, r#"{"Lines":{"10":{"NumberOfLaps":14}}}"#);
+        t.tick(secs(1000));
+        finish(&mut t);
+        assert_eq!(
+            timing(&mut t, r#"{"Lines":{"10":{"NumberOfLaps":15}}}"#),
+            None
+        );
+        assert!(t.tick(secs(1000) + LAST_LAPS_MAX).is_some());
+    }
+
+    #[test]
+    fn pole_is_at_the_flag_when_every_car_is_already_in_the_pits() {
+        let mut t = qualifying();
+        part(&mut t, 3);
+        timing(
+            &mut t,
+            r#"{"Lines":{"10":{"InPit":true},"12":{"InPit":true}}}"#,
+        );
+        assert_eq!(finish(&mut t), winner(10, "#00a1e8"));
+    }
+
+    #[test]
+    fn the_end_of_q1_doesnt_wait_for_last_laps() {
+        let mut t = qualifying();
+        part(&mut t, 1);
+        t.tick(secs(1000));
+        finish(&mut t);
+        assert_eq!(t.tick(secs(1000) + LAST_LAPS_MAX), None);
     }
 
     #[test]

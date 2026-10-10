@@ -161,6 +161,7 @@ impl<'a> Replayer<'a> {
             Err(_) => true,
         }) {
             if let Ok((offset, msg)) = item {
+                self.tracker.tick(offset);
                 self.tracker.apply(&msg);
                 self.state.apply(msg);
                 self.applied = Some(offset);
@@ -188,6 +189,11 @@ impl<'a> Replayer<'a> {
     pub fn step(&mut self, now: Instant) -> Step {
         let mut out = Vec::new();
         self.sync(now, &mut out);
+        // Pole can be due between messages: the last laps' time ran out.
+        let position = self.playback.position(now).min(self.end);
+        if let Some(event) = self.tracker.tick(position) {
+            out.push(race(event, now));
+        }
         loop {
             let offset = match self.timeline.peek() {
                 None => {
@@ -235,6 +241,9 @@ impl<'a> Replayer<'a> {
             return;
         };
         self.send_phase(self.phase_at(offset), out);
+        if let Some(event) = self.tracker.tick(offset) {
+            out.push(race(event, now));
+        }
         for event in self.tracker.apply(&msg) {
             out.push(race(event, now));
         }

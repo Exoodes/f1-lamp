@@ -89,8 +89,18 @@ impl Stream {
             }
             // Most lines are status changes.
             Stream::SessionData => json.contains("\"QualifyingPart\""),
-            // About 9000 lines a qualifying; two of them knock drivers out.
-            Stream::TimingData => json.contains("\"KnockedOut\":true"),
+            // About 9000 lines a qualifying, mostly sector times. Read are
+            // knockouts and, for pole, cars crossing the line, entering the
+            // pits or dropping out: about 360 lines.
+            Stream::TimingData => [
+                "\"KnockedOut\":true",
+                "\"NumberOfLaps\"",
+                "\"InPit\"",
+                "\"Retired\"",
+                "\"Stopped\"",
+            ]
+            .iter()
+            .any(|key| json.contains(key)),
             _ => true,
         }
     }
