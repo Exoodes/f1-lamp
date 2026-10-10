@@ -21,9 +21,10 @@ Rust: the course*, with some extras of its own.
 | Virtual safety car | slowly breathing yellow |
 | Red flag | red, also through the whole stoppage |
 | Start lights | five red lights going out with the TV (needs a TV delay of at least 6 s) |
-| Chequered flag | a white pattern (one lit LED, three dark) that jumps back and forth, for 10 s |
-| Winner | a chase in the winner's team colour |
-| Fastest lap | three purple flashes |
+| Chequered flag | a white pattern (one lit LED, three dark) that jumps back and forth, for 10 s; in qualifying after Q1, Q2 and Q3 |
+| Winner | a chase in the winner's team colour; after qualifying, pole's (once the session is finalised, a few minutes after the flag) |
+| Fastest lap | three purple flashes, from a driver's second lap on |
+| Knocked out | the team colour fading out over 3 s (followed drivers, after Q1 and Q2; the feed says so about 6 minutes after the part's chequered flag) |
 | Pit stop | two flashes in the team colour (followed drivers) |
 | Overtake | one flash in the team colour (followed drivers, needs F1TV) |
 | No network | breathing blue (WiFi connecting) or blinking red (the live feed failed 3 times in a row), only around a session |
@@ -242,7 +243,8 @@ With `$env:F1TV_TOKEN` set, the probe sends the token as well.
 
 - **F1 live timing** (`livetiming.formula1.com`, SignalR over a WebSocket):
   flags, session status, race control, driver list, top three, pit lane,
-  timing stats, overtakes. Unofficial and undocumented; it changes without
+  timing stats, overtakes, qualifying parts (session data) and knockouts
+  (timing data). Unofficial and undocumented; it changes without
   notice. When the lamp stops reacting on a race weekend, run the probe on
   the PC first.
 - **OpenF1** (`api.openf1.org`): the session calendar, and the winner as a

@@ -107,10 +107,18 @@ fn showcase_plays_every_flag_and_the_winner_in_order() {
             (secs(10.0), FlagCleared),
             (secs(20.0), StartLights),
             (secs(20.0), flag(Green)),
+            (
+                secs(30.0),
+                FastestLap {
+                    driver: 81,
+                    team_color: colour("#f47600")
+                }
+            ),
             (secs(35.0), flag(Yellow)),
             (secs(42.0), flag(DoubleYellow)),
             (secs(50.5), flag(Green)),
-            // Not the lap-2 best at 30 s: the first timed lap is ignored.
+            // The lap-2 best at 30 s above is the first timed lap for #81;
+            // this one is #16's.
             (
                 secs(58.0),
                 FastestLap {

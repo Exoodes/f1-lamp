@@ -5,19 +5,32 @@
 use std::path::{Path, PathBuf};
 
 /// The streams a replay embeds, with the variable that hands each file's path
-/// to `src/replay.rs`. Required ones stop the build when missing; without an
-/// optional one, its events (winner, pit stops, ...) just don't show.
-const REPLAY_FILES: [(&str, &str, bool); 9] = [
-    ("SessionInfo", "REPLAY_SESSION_INFO", false),
-    ("TrackStatus", "REPLAY_TRACK_STATUS", true),
-    ("SessionStatus", "REPLAY_SESSION_STATUS", true),
-    ("RaceControlMessages", "REPLAY_RACE_CONTROL", true),
-    ("DriverList", "REPLAY_DRIVER_LIST", false),
-    ("TopThree", "REPLAY_TOP_THREE", false),
-    ("PitLaneTimeCollection", "REPLAY_PIT_LANE", false),
-    ("TimingStats", "REPLAY_TIMING_STATS", false),
-    ("OvertakeSeries", "REPLAY_OVERTAKES", false),
+/// to `src/replay.rs`, and what a missing one means.
+const REPLAY_FILES: [(&str, &str, Need); 11] = [
+    ("SessionInfo", "REPLAY_SESSION_INFO", Need::Optional),
+    ("TrackStatus", "REPLAY_TRACK_STATUS", Need::Required),
+    ("SessionStatus", "REPLAY_SESSION_STATUS", Need::Required),
+    ("RaceControlMessages", "REPLAY_RACE_CONTROL", Need::Required),
+    ("DriverList", "REPLAY_DRIVER_LIST", Need::Optional),
+    ("TopThree", "REPLAY_TOP_THREE", Need::Optional),
+    ("PitLaneTimeCollection", "REPLAY_PIT_LANE", Need::Optional),
+    ("TimingStats", "REPLAY_TIMING_STATS", Need::Optional),
+    ("OvertakeSeries", "REPLAY_OVERTAKES", Need::Optional),
+    ("SessionData", "REPLAY_SESSION_DATA", Need::QualifyingOnly),
+    ("TimingData", "REPLAY_TIMING_DATA", Need::QualifyingOnly),
 ];
+
+#[derive(Clone, Copy, PartialEq)]
+enum Need {
+    /// Stops the build when missing.
+    Required,
+    /// Without it, its events (winner, pit stops, ...) just don't show; the
+    /// build says so.
+    Optional,
+    /// Only a qualifying uses it (parts, pole, knockouts): missing from a race
+    /// without a word.
+    QualifyingOnly,
+}
 
 fn main() {
     embuild::espidf::sysenv::output();
@@ -151,22 +164,27 @@ fn watch_folders(dir: &Path) {
 }
 
 /// Trims each of `REPLAY_FILES` found in `dir` into OUT_DIR and hands its
-/// path to the compiler; a missing optional one becomes an empty file.
+/// path to the compiler; a missing one that isn't required becomes an empty
+/// file.
 fn hand_over_streams(dir: &Path) {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    for (stream, var, required) in REPLAY_FILES {
+    for (stream, var, need) in REPLAY_FILES {
         let name = format!("{stream}.jsonStream");
         let path = match find(dir, &name) {
             Some(path) => {
                 println!("cargo:rerun-if-changed={}", slashes(&path));
                 trimmed(&path, stream, &out_dir.join(&name))
             }
-            None if required => panic!("replay: no {name} in {} or its subfolders", slashes(dir)),
+            None if need == Need::Required => {
+                panic!("replay: no {name} in {} or its subfolders", slashes(dir))
+            }
             None => {
-                println!(
-                    "cargo:warning=replay: no {name} in {}; its events won't show",
-                    slashes(dir)
-                );
+                if need == Need::Optional {
+                    println!(
+                        "cargo:warning=replay: no {name} in {}; its events won't show",
+                        slashes(dir)
+                    );
+                }
                 // An empty stream: the replay plays without it.
                 let empty = out_dir.join(&name);
                 std::fs::write(&empty, "").unwrap();

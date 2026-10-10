@@ -4,9 +4,6 @@ Ideas for after the course, in no particular order of size.
 
 ## Wanted
 
-- **Full qualifying support.** The chequered flag at the end of Q1, Q2 and Q3,
-  and a signal when a followed driver is knocked out. (Today qualifying shows
-  flags, but treats it as one session.)
 - **Last lap.** A short white flash when the final lap starts, like a bell.
   `LapCount` (public) has `CurrentLap` and `TotalLaps`.
 - **Weekend schedule on the page.** The upcoming sessions with their times and
@@ -14,15 +11,8 @@ Ideas for after the course, in no particular order of size.
 - **Event buttons on the page.** Next to the flag overrides: trigger a fastest
   lap, a pit stop or an overtake for any driver (in their team colour), to see
   the effects without waiting for a session.
-- **Fastest laps earlier than lap 3.** The tracker ignores fastest laps
-  before lap 3 (`FIRST_FASTEST_LAP`), which is meant for a race's opening
-  laps. In practice a driver's lap 2 is their first timed lap: in FP1 in
-  Singapore (2026-10-09) the first five session bests were all on lap 2, so
-  the lamp showed none for the first ~11 minutes. At least in practice and
-  qualifying, show them from the first timed lap.
-- **A "winner" for practice and qualifying.** E.g. the team colour of the
-  driver with the fastest lap when the session ends; today only races and
-  sprints end with a winner.
+- **A "winner" for practice.** E.g. the team colour of the driver with the
+  fastest lap when the session ends, like pole after qualifying.
 - **Rework the effects.** Some are too fast, and some look too much alike.
   The chequered flag doesn't look good and is too short (10 s).
 - **VSC ending.** The feed sends it (`TrackStatus` 7, `VSCEnding`, ~15 s
@@ -66,6 +56,11 @@ Ideas for after the course, in no particular order of size.
     minutes before the start, when the TV shows the cars leaving the pits.
 
 ## Seen in sessions
+
+- **Qualifying knockouts come late:** the feed marks the knocked-out drivers
+  (`TimingData` `KnockedOut`) only when the next part is announced, about 6
+  minutes after the chequered flag (Monza 2026). Pole, too, is only certain
+  at `Finalised`: at Monza a new leader came 70 s after Q3's clock ran out.
 
 - **FP1 Singapore, 2026-10-09:** the TV delay is about 43 s. The logs and
   everything else worked.

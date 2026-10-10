@@ -72,6 +72,7 @@ pub struct EffectToggles {
     pub pit_stop: bool,
     pub overtake: bool,
     pub winner: bool,
+    pub knocked_out: bool,
 }
 
 impl Default for EffectToggles {
@@ -83,6 +84,7 @@ impl Default for EffectToggles {
             pit_stop: true,
             overtake: true,
             winner: true,
+            knocked_out: true,
         }
     }
 }
@@ -101,6 +103,7 @@ impl Settings {
             RaceEvent::PitStop { driver, .. } => e.pit_stop && self.follows(driver),
             RaceEvent::Overtake { driver, .. } => e.overtake && self.follows(driver),
             RaceEvent::Winner { .. } => e.winner,
+            RaceEvent::KnockedOut { driver, .. } => e.knocked_out && self.follows(driver),
         }
     }
 }
@@ -312,6 +315,7 @@ mod tests {
                 pit_stop: false,
                 overtake: false,
                 winner: false,
+                knocked_out: false,
             },
         };
         let json = serde_json::to_string(&settings).unwrap();
@@ -485,6 +489,7 @@ mod tests {
             pit_stop: false,
             overtake: false,
             winner: false,
+            knocked_out: false,
         };
         assert!(with_effects(all_off).shows(RaceEvent::TrackFlag(TrackFlag::Red)));
     }

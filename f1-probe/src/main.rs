@@ -413,6 +413,24 @@ fn describe(msg: &FeedMessage) -> String {
                 .collect();
             format!("overtakes: {}", drivers.join(", "))
         }
+        FeedMessage::SessionData(s) => match s.qualifying_part() {
+            Some(part) => format!("qualifying part {part}"),
+            None => "update".to_owned(),
+        },
+        FeedMessage::TimingData(t) => {
+            let knocked_out: Vec<String> = t
+                .lines
+                .iter()
+                .flat_map(|l| l.iter())
+                .filter(|(_, l)| l.knocked_out == Some(true))
+                .map(|(d, _)| format!("#{d}"))
+                .collect();
+            if knocked_out.is_empty() {
+                "update".to_owned()
+            } else {
+                format!("knocked out: {}", knocked_out.join(", "))
+            }
+        }
     }
 }
 

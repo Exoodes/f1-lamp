@@ -22,6 +22,7 @@ const PIT_STOP_FLASHES: u8 = 2;
 const OVERTAKE_FLASHES: u8 = 1;
 const CHEQUERED_MS: u32 = 10_000;
 const START_HOLD_MS: u32 = 2000;
+const KNOCKED_OUT_FADE_MS: u32 = 3000;
 
 const WINNER_CHASE_SPEED: f32 = 8.0;
 const WINNER_CHASE_TAIL: u8 = 6;
@@ -64,6 +65,10 @@ pub fn event_overlay(event: RaceEvent) -> Option<Effect> {
         RaceEvent::PitStop { team_color, .. } => Some(Effect::flash(team_color, PIT_STOP_FLASHES)),
         RaceEvent::Overtake { team_color, .. } => Some(Effect::flash(team_color, OVERTAKE_FLASHES)),
         RaceEvent::Winner { .. } => None,
+        RaceEvent::KnockedOut { team_color, .. } => Some(Effect::Fade {
+            color: team_color,
+            duration_ms: KNOCKED_OUT_FADE_MS,
+        }),
     }
 }
 

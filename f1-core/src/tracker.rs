@@ -1,7 +1,9 @@
 //! Driver events from the feed, each in the driver's team colour:
 //!
 //! - winner: the leader in TopThree when a race's SessionStatus becomes
-//!   `Finished`;
+//!   `Finished`, or pole once the last part of qualifying is `Finalised`;
+//! - knocked out: a driver out of qualifying after Q1 or Q2 (TimingData,
+//!   public);
 //! - pit stop: a car leaving the pit lane (PitLaneTimeCollection, public);
 //! - fastest lap: a new personal best that is the session's best
 //!   (TimingStats, public);
@@ -11,12 +13,13 @@
 //! The colours come from DriverList: TopThree patches leave `TeamColour` out
 //! when it didn't change, e.g. when one Mercedes passes the other.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     color::Rgb,
     feed::{
-        update_team_colours, OvertakeSeries, PitLaneTimes, SessionState, TimingStats, TopThree,
+        update_team_colours, OvertakeSeries, PitLaneTimes, SessionState, TimingData, TimingStats,
+        TopThree,
     },
     input::RaceEvent,
     track_state::FeedMessage,
@@ -27,15 +30,24 @@ const UNKNOWN_TEAM: Rgb = Rgb::WHITE;
 /// A pit-lane time longer than this isn't a pit stop: during a red flag every
 /// car waits in the pit lane, for half an hour at Monza.
 const MAX_PIT_LANE_SECS: f32 = 120.0;
-/// Fastest laps from this lap on. Lap 2 is everyone's first timed lap, so it
-/// would flash for whoever happens to be quickest out of turn one.
-const FIRST_FASTEST_LAP: u32 = 3;
+/// Fastest laps from this lap on: lap 1 starts from the grid or the pit
+/// lane, so it's never a real lap time. Lap 2 is already a driver's first
+/// timed lap in practice and qualifying.
+const FIRST_FASTEST_LAP: u32 = 2;
+/// Qualifying (and sprint qualifying) ends with its third part.
+const LAST_QUALIFYING_PART: u8 = 3;
 
 #[derive(Debug, Default)]
 pub struct Tracker {
-    /// From SessionInfo. Qualifying also ends parts with `Finished`, so only
-    /// a race (or sprint, also of type "Race") has a winner.
+    /// From SessionInfo; a sprint is of type "Race" too.
     is_race: bool,
+    /// From SessionInfo. Qualifying ends each part with `Finished`; only
+    /// the last part has a winner: pole.
+    is_qualifying: bool,
+    /// From SessionData.
+    qualifying_part: Option<u8>,
+    /// Shown already: the feed may repeat a driver's `KnockedOut`.
+    knocked_out: HashSet<u8>,
     /// Racing number in the first line of TopThree.
     leader: Option<u8>,
     colours: HashMap<u8, Rgb>,
@@ -51,12 +63,19 @@ impl Tracker {
                 if let Some(is_race) = info.is_race() {
                     self.is_race = is_race;
                 }
+                if let Some(is_qualifying) = info.is_qualifying() {
+                    self.is_qualifying = is_qualifying;
+                }
+            }
+            FeedMessage::SessionData(data) => {
+                if let Some(part) = data.qualifying_part() {
+                    self.qualifying_part = Some(part);
+                }
             }
             FeedMessage::DriverList(patch) => update_team_colours(&mut self.colours, patch),
             FeedMessage::TopThree(top) => self.read_top_three(top),
             FeedMessage::Session(s)
-                if s.status == Some(SessionState::Finished)
-                    && self.is_race
+                if s.status.is_some_and(|state| self.names_the_winner(state))
                     && !self.winner_sent =>
             {
                 if let Some(driver) = self.leader {
@@ -70,9 +89,37 @@ impl Tracker {
             FeedMessage::PitLane(pit) => self.pit_stops(pit, &mut events),
             FeedMessage::TimingStats(stats) => self.fastest_laps(stats, &mut events),
             FeedMessage::Overtakes(series) => self.overtakes(series, &mut events),
+            FeedMessage::TimingData(timing) => self.knockouts(timing, &mut events),
             _ => {}
         }
         events
+    }
+
+    /// Whether the session reaching `state` makes TopThree's leader the
+    /// winner. A race is `Finished` when the leader takes the flag. Qualifying
+    /// is `Finished` when the clock runs out, but drivers still complete their
+    /// last laps, which often take pole (Monza 2026: 70 s later, a new
+    /// leader); it's `Finalised` once they have.
+    fn names_the_winner(&self, state: SessionState) -> bool {
+        match state {
+            SessionState::Finished => self.is_race,
+            SessionState::Finalised => {
+                self.is_qualifying && self.qualifying_part == Some(LAST_QUALIFYING_PART)
+            }
+            _ => false,
+        }
+    }
+
+    fn knockouts(&mut self, timing: &TimingData, events: &mut Vec<RaceEvent>) {
+        let Some(lines) = &timing.lines else { return };
+        for (&driver, line) in lines.iter() {
+            if line.knocked_out == Some(true) && self.knocked_out.insert(driver) {
+                events.push(RaceEvent::KnockedOut {
+                    driver,
+                    team_color: self.colour(driver),
+                });
+            }
+        }
     }
 
     fn colour(&self, driver: u8) -> Rgb {
@@ -180,6 +227,10 @@ mod tests {
 
     fn finish(t: &mut Tracker) -> Option<RaceEvent> {
         feed(t, Stream::SessionStatus, r#"{"Status":"Finished"}"#)
+    }
+
+    fn finalise(t: &mut Tracker) -> Option<RaceEvent> {
+        feed(t, Stream::SessionStatus, r#"{"Status":"Finalised"}"#)
     }
 
     fn winner(driver: u8, hex: &str) -> Option<RaceEvent> {
@@ -443,7 +494,20 @@ mod tests {
     }
 
     #[test]
-    fn fastest_lap_on_the_first_timed_lap_is_ignored() {
+    fn fastest_lap_on_lap_one_is_ignored() {
+        let mut t = race();
+        assert_eq!(
+            feed(
+                &mut t,
+                Stream::TimingStats,
+                r#"{"Lines":{"63":{"PersonalBestLapTime":{"Lap":1,"Position":1,"Value":"1:31.002"}}}}"#
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn fastest_lap_counts_from_lap_two() {
         let mut t = race();
         assert_eq!(
             feed(
@@ -451,7 +515,10 @@ mod tests {
                 Stream::TimingStats,
                 r#"{"Lines":{"63":{"PersonalBestLapTime":{"Lap":2,"Position":1,"Value":"1:26.651"}}}}"#
             ),
-            None
+            Some(RaceEvent::FastestLap {
+                driver: 63,
+                team_color: "#00d7b6".parse().unwrap()
+            })
         );
     }
 
@@ -488,5 +555,98 @@ mod tests {
             r#"{"Overtakes":{"12":[{"Timestamp":"a","count":1}],"63":[{"Timestamp":"b","count":1}]}}"#,
         );
         assert_eq!(first.len(), 2);
+    }
+
+    fn qualifying() -> Tracker {
+        let mut t = Tracker::default();
+        feed(
+            &mut t,
+            Stream::SessionInfo,
+            r#"{"Type":"Qualifying","Name":"Qualifying"}"#,
+        );
+        feed(
+            &mut t,
+            Stream::DriverList,
+            r#"{"10":{"TeamColour":"00A1E8"},"12":{"TeamColour":"00D7B6"}}"#,
+        );
+        feed(
+            &mut t,
+            Stream::TopThree,
+            r#"{"Lines":[{"RacingNumber":"10"}]}"#,
+        );
+        t
+    }
+
+    fn part(t: &mut Tracker, n: u8) {
+        feed(
+            t,
+            Stream::SessionData,
+            &format!(r#"{{"Series":{{"{n}":{{"QualifyingPart":{n}}}}}}}"#),
+        );
+    }
+
+    #[test]
+    fn the_end_of_q1_and_q2_has_no_winner() {
+        let mut t = qualifying();
+        for n in [1, 2] {
+            part(&mut t, n);
+            assert_eq!(finish(&mut t), None, "Q{n}");
+            assert_eq!(finalise(&mut t), None, "Q{n}");
+        }
+    }
+
+    #[test]
+    fn pole_is_the_winner_once_q3_is_finalised() {
+        let mut t = qualifying();
+        for n in [1, 2, 3] {
+            part(&mut t, n);
+        }
+        assert_eq!(finish(&mut t), None);
+        assert_eq!(finalise(&mut t), winner(10, "#00a1e8"));
+    }
+
+    #[test]
+    fn a_last_lap_after_the_clock_runs_out_still_takes_pole() {
+        let mut t = qualifying();
+        part(&mut t, 3);
+        finish(&mut t);
+        feed(
+            &mut t,
+            Stream::TopThree,
+            r#"{"Lines":{"0":{"RacingNumber":"12"}}}"#,
+        );
+        assert_eq!(finalise(&mut t), winner(12, "#00d7b6"));
+    }
+
+    #[test]
+    fn qualifying_without_a_known_part_has_no_winner() {
+        let mut t = qualifying();
+        assert_eq!(finalise(&mut t), None);
+    }
+
+    #[test]
+    fn a_race_has_its_winner_at_finished_not_finalised() {
+        let mut t = race();
+        feed(
+            &mut t,
+            Stream::TopThree,
+            r#"{"Lines":[{"RacingNumber":"12"}]}"#,
+        );
+        assert_eq!(finish(&mut t), winner(12, "#00d7b6"));
+        assert_eq!(finalise(&mut t), None);
+    }
+
+    #[test]
+    fn knocked_out_drivers_come_once_each_in_team_colour() {
+        let mut t = qualifying();
+        let knockouts = r#"{"Lines":{"12":{"KnockedOut":true},"10":{"KnockedOut":false}}}"#;
+        assert_eq!(
+            feed_all(&mut t, Stream::TimingData, knockouts),
+            [RaceEvent::KnockedOut {
+                driver: 12,
+                team_color: "#00d7b6".parse().unwrap()
+            }]
+        );
+        assert!(feed_all(&mut t, Stream::TimingData, knockouts).is_empty());
     }
 }

@@ -43,6 +43,11 @@ pub enum Effect {
     StartLights {
         hold_ms: u32,
     },
+    /// Full `color`, dimming to dark over `duration_ms`.
+    Fade {
+        color: Rgb,
+        duration_ms: u32,
+    },
 }
 
 impl Effect {
@@ -72,6 +77,9 @@ impl Effect {
                 handle_chequered(frame, u128::from(*duration_ms), elapsed)
             }
             Effect::StartLights { hold_ms } => handle_start_lights(frame, *hold_ms, elapsed),
+            Effect::Fade { color, duration_ms } => {
+                handle_fade(frame, *color, u128::from(*duration_ms), elapsed);
+            }
         }
     }
 
@@ -89,6 +97,9 @@ impl Effect {
             Effect::StartLights { hold_ms } => Some(Duration::from_millis(
                 lights_out_ms(*hold_ms) + START_LIGHTS_DARK_MS,
             )),
+            Effect::Fade { duration_ms, .. } => {
+                Some(Duration::from_millis(u64::from(*duration_ms)))
+            }
         }
     }
 
@@ -165,6 +176,11 @@ fn handle_chequered(frame: &mut Frame, duration_ms: u128, elapsed: Duration) {
         let is_white = i % CHEQUERED_SPACING == offset;
         frame.set(i, if is_white { Rgb::WHITE } else { Rgb::OFF });
     }
+}
+
+fn handle_fade(frame: &mut Frame, color: Rgb, duration_ms: u128, elapsed: Duration) {
+    let left = duration_ms.saturating_sub(elapsed.as_millis());
+    frame.fill(color.scale(left as f32 / duration_ms.max(1) as f32));
 }
 
 fn handle_start_lights(frame: &mut Frame, hold_ms: u32, elapsed: Duration) {
@@ -596,5 +612,22 @@ mod tests {
     #[test]
     fn other_effects_have_no_lights_out() {
         assert_eq!(Effect::Solid(Rgb::RED).lights_out_after(), None);
+    }
+
+    #[test]
+    fn fade_goes_from_full_to_dark_over_its_duration() {
+        let fade = Effect::Fade {
+            color: Rgb::new(200, 100, 0),
+            duration_ms: 1000,
+        };
+        assert_eq!(fade.duration(), Some(Duration::from_millis(1000)));
+        let at = |ms| {
+            let mut frame = Frame::new();
+            fade.render(Duration::from_millis(ms), &mut frame);
+            frame.pixels()[0]
+        };
+        assert_eq!(at(0), Rgb::new(200, 100, 0));
+        assert_eq!(at(500), Rgb::new(100, 50, 0));
+        assert_eq!(at(1000), Rgb::OFF);
     }
 }

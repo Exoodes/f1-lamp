@@ -101,28 +101,29 @@ fn top_three_leader_is_verstappen() {
     assert_eq!(leader.as_deref(), Some("3"));
 }
 
-/// The streams of the capture by name, Heartbeat included.
-fn captured(name: &str) -> &'static str {
+/// The streams of the capture by name, Heartbeat included. `None` for one
+/// the lamp has asked for only since the capture was made (SessionData).
+fn captured(name: &str) -> Option<&'static str> {
     match name {
-        "Heartbeat" => include_str!("data/live/2026-bahrain-race-subscribe/Heartbeat.jsonStream"),
-        _ => {
-            FILES
-                .iter()
-                .find(|(stream, _)| stream.name() == name)
-                .unwrap_or_else(|| panic!("no {name} in {DIR}"))
-                .1
-        }
+        "Heartbeat" => Some(include_str!(
+            "data/live/2026-bahrain-race-subscribe/Heartbeat.jsonStream"
+        )),
+        _ => FILES
+            .iter()
+            .find(|(stream, _)| stream.name() == name)
+            .map(|(_, text)| *text),
     }
 }
 
 /// The capture put back together as the server's answer to the `Subscribe`
-/// call `id` for `names`.
+/// call `id` for `names`. A stream the capture lacks is left out, as the
+/// server leaves out one without data.
 fn answer(id: &str, names: &[&str]) -> String {
     let streams: Vec<String> = names
         .iter()
-        .map(|name| {
-            let json = &captured(name).trim_start_matches('\u{feff}')[12..].trim_end();
-            format!("\"{name}\":{json}")
+        .filter_map(|name| {
+            let json = captured(name)?.trim_start_matches('\u{feff}')[12..].trim_end();
+            Some(format!("\"{name}\":{json}"))
         })
         .collect();
     format!(

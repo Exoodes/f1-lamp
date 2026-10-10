@@ -9,8 +9,8 @@ use std::{collections::VecDeque, fmt, time::Duration};
 
 use crate::{
     feed::{
-        DriverList, OvertakeSeries, PitLaneTimes, RaceControl, SessionInfo, SessionStatus,
-        TimingStats, TopThree, TrackStatus,
+        DriverList, OvertakeSeries, PitLaneTimes, RaceControl, SessionData, SessionInfo,
+        SessionStatus, TimingData, TimingStats, TopThree, TrackStatus,
     },
     stream::{parse_line, ParseLineError},
     track_state::FeedMessage,
@@ -31,10 +31,14 @@ pub enum Stream {
     TimingStats,
     /// Needs an F1TV token live: one entry per overtake.
     Overtakes,
+    /// Public: which qualifying part runs.
+    SessionData,
+    /// Public: the timing screen; who is knocked out of qualifying.
+    TimingData,
 }
 
 impl Stream {
-    pub const ALL: [Stream; 9] = [
+    pub const ALL: [Stream; 11] = [
         Stream::SessionInfo,
         Stream::TrackStatus,
         Stream::SessionStatus,
@@ -44,6 +48,8 @@ impl Stream {
         Stream::PitLane,
         Stream::TimingStats,
         Stream::Overtakes,
+        Stream::SessionData,
+        Stream::TimingData,
     ];
 
     /// The name F1 uses, in the archive file names and the live feed.
@@ -58,6 +64,8 @@ impl Stream {
             Stream::PitLane => "PitLaneTimeCollection",
             Stream::TimingStats => "TimingStats",
             Stream::Overtakes => "OvertakeSeries",
+            Stream::SessionData => "SessionData",
+            Stream::TimingData => "TimingData",
         }
     }
 
@@ -79,6 +87,10 @@ impl Stream {
             Stream::TimingStats => {
                 json.contains("\"PersonalBestLapTime\":{") && json.contains("\"Value\":\"")
             }
+            // Most lines are status changes.
+            Stream::SessionData => json.contains("\"QualifyingPart\""),
+            // About 9000 lines a qualifying; two of them knock drivers out.
+            Stream::TimingData => json.contains("\"KnockedOut\":true"),
             _ => true,
         }
     }
@@ -118,6 +130,12 @@ impl Stream {
             Stream::Overtakes => vec![FeedMessage::Overtakes(serde_json::from_str::<
                 OvertakeSeries,
             >(json)?)],
+            Stream::SessionData => vec![FeedMessage::SessionData(serde_json::from_str::<
+                SessionData,
+            >(json)?)],
+            Stream::TimingData => vec![FeedMessage::TimingData(
+                serde_json::from_str::<TimingData>(json)?,
+            )],
         })
     }
 }

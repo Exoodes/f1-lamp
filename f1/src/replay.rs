@@ -30,7 +30,7 @@ const SPEED: u32 = if cfg!(feature = "showcase") { 1 } else { 60 };
 const STATUS_EVERY: Duration = Duration::from_secs(1);
 
 /// The files build.rs found; missing optional ones are empty.
-const FILES: [(Stream, &str); 9] = [
+const FILES: [(Stream, &str); 11] = [
     (
         Stream::SessionInfo,
         include_str!(env!("REPLAY_SESSION_INFO")),
@@ -55,6 +55,11 @@ const FILES: [(Stream, &str); 9] = [
         include_str!(env!("REPLAY_TIMING_STATS")),
     ),
     (Stream::Overtakes, include_str!(env!("REPLAY_OVERTAKES"))),
+    (
+        Stream::SessionData,
+        include_str!(env!("REPLAY_SESSION_DATA")),
+    ),
+    (Stream::TimingData, include_str!(env!("REPLAY_TIMING_DATA"))),
 ];
 
 /// How the web server reaches the replay thread.

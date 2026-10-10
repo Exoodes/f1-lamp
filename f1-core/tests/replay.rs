@@ -251,11 +251,11 @@ fn driver_events(inputs: &[Input]) -> Vec<RaceEvent> {
 }
 
 #[test]
-fn race_has_ten_fastest_laps_nine_pit_stops_and_327_overtakes() {
+fn race_has_eleven_fastest_laps_nine_pit_stops_and_327_overtakes() {
     let (inputs, _) = play_to_end(60);
     let events = driver_events(&inputs);
     let count = |f: fn(&RaceEvent) -> bool| events.iter().filter(|e| f(e)).count();
-    assert_eq!(count(|e| matches!(e, RaceEvent::FastestLap { .. })), 10);
+    assert_eq!(count(|e| matches!(e, RaceEvent::FastestLap { .. })), 11);
     assert_eq!(count(|e| matches!(e, RaceEvent::PitStop { .. })), 9);
     assert_eq!(count(|e| matches!(e, RaceEvent::Overtake { .. })), 327);
 }

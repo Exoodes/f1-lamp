@@ -38,7 +38,13 @@ pub enum RaceEvent {
         driver: u8,
         team_color: Rgb,
     },
+    /// The race's winner, or pole at the end of qualifying.
     Winner {
+        driver: u8,
+        team_color: Rgb,
+    },
+    /// Out of qualifying at the end of Q1 or Q2.
+    KnockedOut {
         driver: u8,
         team_color: Rgb,
     },

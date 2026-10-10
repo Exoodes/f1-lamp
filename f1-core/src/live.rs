@@ -21,8 +21,9 @@ use crate::{
 /// Race control is left out on purpose: late in a race it holds hundreds of
 /// messages, which would cost tens of KB to parse, and all they would add is
 /// which sectors have a double yellow at the moment of connecting.
-const INITIAL_ORDER: [Stream; 5] = [
+const INITIAL_ORDER: [Stream; 6] = [
     Stream::SessionInfo,
+    Stream::SessionData,
     Stream::DriverList,
     Stream::TopThree,
     Stream::TrackStatus,
@@ -52,15 +53,20 @@ const DRIVER_EVENTS_CALL: u32 = 3;
 const ACCOUNT_CALL: u32 = 4;
 
 /// The streams whose current state is applied on connecting.
-const STATE_STREAMS: [Stream; 5] = [
+const STATE_STREAMS: [Stream; 6] = [
     Stream::SessionInfo,
+    Stream::SessionData,
     Stream::TrackStatus,
     Stream::SessionStatus,
     Stream::DriverList,
     Stream::TopThree,
 ];
-/// Public streams with driver events: pit stops and fastest laps.
-const DRIVER_EVENT_STREAMS: [Stream; 2] = [Stream::PitLane, Stream::TimingStats];
+/// Public streams with driver events: pit stops, fastest laps and
+/// qualifying knockouts. TimingData's answer to `Subscribe` (the whole
+/// timing screen) is larger than a frame and skipped; only its updates
+/// count.
+const DRIVER_EVENT_STREAMS: [Stream; 3] =
+    [Stream::PitLane, Stream::TimingStats, Stream::TimingData];
 /// Streams that only answer with an F1TV token: overtakes.
 const ACCOUNT_STREAMS: [Stream; 1] = [Stream::Overtakes];
 

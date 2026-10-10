@@ -7,8 +7,8 @@ use std::collections::HashSet;
 
 use crate::{
     feed::{
-        DriverList, OvertakeSeries, PitLaneTimes, RcMessage, SessionInfo, SessionState,
-        SessionStatus, TimingStats, TopThree, TrackCode, TrackStatus,
+        DriverList, OvertakeSeries, PitLaneTimes, RcMessage, SessionData, SessionInfo,
+        SessionState, SessionStatus, TimingData, TimingStats, TopThree, TrackCode, TrackStatus,
     },
     input::{RaceEvent, TrackFlag},
 };
@@ -24,6 +24,8 @@ pub enum FeedMessage {
     PitLane(PitLaneTimes),
     TimingStats(TimingStats),
     Overtakes(OvertakeSeries),
+    SessionData(SessionData),
+    TimingData(TimingData),
 }
 
 #[derive(Debug, Default)]
@@ -61,7 +63,9 @@ impl TrackState {
             | FeedMessage::TopThree(_)
             | FeedMessage::PitLane(_)
             | FeedMessage::TimingStats(_)
-            | FeedMessage::Overtakes(_) => None,
+            | FeedMessage::Overtakes(_)
+            | FeedMessage::SessionData(_)
+            | FeedMessage::TimingData(_) => None,
         };
         own.into_iter().chain(self.flag_change()).collect()
     }

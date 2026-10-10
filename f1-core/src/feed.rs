@@ -193,6 +193,11 @@ impl SessionInfo {
     pub fn is_race(&self) -> Option<bool> {
         self.kind.as_deref().map(|k| k == "Race")
     }
+
+    /// Sprint qualifying is of type "Qualifying" too.
+    pub fn is_qualifying(&self) -> Option<bool> {
+        self.kind.as_deref().map(|k| k == "Qualifying")
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -293,6 +298,55 @@ impl Overtakes {
 #[serde(rename_all = "PascalCase")]
 pub struct OvertakeEntry {
     pub timestamp: Option<String>,
+}
+
+/// The session's parts and status changes. Only the qualifying part is read:
+/// `Series` gets an entry with `QualifyingPart` 1, 2 and 3 before each part.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct SessionData {
+    pub series: Option<Series>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum Series {
+    List(Vec<SeriesEntry>),
+    Map(Numbered<u32, SeriesEntry>),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct SeriesEntry {
+    pub qualifying_part: Option<u8>,
+}
+
+impl SessionData {
+    /// The latest qualifying part this message names.
+    pub fn qualifying_part(&self) -> Option<u8> {
+        let parts = |entries: &mut dyn Iterator<Item = &SeriesEntry>| {
+            entries.filter_map(|e| e.qualifying_part).max()
+        };
+        match self.series.as_ref()? {
+            Series::List(v) => parts(&mut v.iter()),
+            Series::Map(m) => parts(&mut m.values()),
+        }
+    }
+}
+
+/// The timing screen. Only who is knocked out of qualifying is read: the
+/// feed sets `KnockedOut` for a part's slowest drivers when the next part
+/// is announced, about six minutes after its chequered flag.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct TimingData {
+    pub lines: Option<Numbered<u8, TimingLine>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct TimingLine {
+    pub knocked_out: Option<bool>,
 }
 
 #[cfg(test)]
@@ -581,5 +635,37 @@ mod tests {
         )
         .unwrap();
         assert_eq!(update.overtakes.unwrap()[&44].len(), 1);
+    }
+
+    #[test]
+    fn session_data_gives_the_latest_qualifying_part_in_both_shapes() {
+        let first: SessionData = serde_json::from_str(
+            r#"{"Series":[{"Utc":"t","QualifyingPart":1},{"Utc":"t","QualifyingPart":2}],"StatusSeries":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(first.qualifying_part(), Some(2));
+        let update: SessionData =
+            serde_json::from_str(r#"{"Series":{"2":{"Utc":"t","QualifyingPart":3}}}"#).unwrap();
+        assert_eq!(update.qualifying_part(), Some(3));
+    }
+
+    #[test]
+    fn session_data_without_parts_has_none() {
+        let status: SessionData =
+            serde_json::from_str(r#"{"StatusSeries":{"4":{"TrackStatus":"Yellow"}}}"#).unwrap();
+        assert_eq!(status.qualifying_part(), None);
+        let race: SessionData = serde_json::from_str(r#"{"Series":[]}"#).unwrap();
+        assert_eq!(race.qualifying_part(), None);
+    }
+
+    #[test]
+    fn timing_data_reads_knocked_out_by_car() {
+        let t: TimingData = serde_json::from_str(
+            r#"{"SessionPart":2,"Lines":{"22":{"KnockedOut":true,"Position":"17"},"63":{"Position":"1"}},"_kf":true}"#,
+        )
+        .unwrap();
+        let lines = t.lines.unwrap();
+        assert_eq!(lines[&22].knocked_out, Some(true));
+        assert_eq!(lines[&63].knocked_out, None);
     }
 }
