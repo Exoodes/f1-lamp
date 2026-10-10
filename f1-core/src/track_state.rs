@@ -36,6 +36,9 @@ pub struct TrackState {
     shown: Option<TrackFlag>,
     started: bool,
     is_race: Option<bool>,
+    /// Stopped by a red flag (`Aborted`) and not restarted yet: before the
+    /// restart the session goes `Inactive`, still under the red flag.
+    suspended: bool,
 }
 
 impl TrackState {
@@ -75,6 +78,11 @@ impl TrackState {
     fn apply_session(&mut self, s: &SessionStatus) -> Option<RaceEvent> {
         let state = s.status?;
         self.session = Some(state);
+        match state {
+            SessionState::Aborted => self.suspended = true,
+            SessionState::Inactive => {}
+            _ => self.suspended = false,
+        }
         if state != SessionState::Started || self.started {
             return None;
         }
@@ -136,15 +144,15 @@ impl TrackState {
     }
 
     /// The flag the session's state and the track status mean together. A
-    /// suspended session (`Aborted`) is red whatever the track status says.
-    /// While the session runs the track status decides, a yellow becoming a
-    /// double yellow while any sector has one. Before the start and after
-    /// the finish there is no flag.
+    /// suspended session (`Aborted`, then `Inactive` until the restart) is
+    /// red whatever the track status says. While the session runs the track
+    /// status decides, a yellow becoming a double yellow while any sector
+    /// has one. Before the start and after the finish there is no flag.
     fn derive(&self) -> Option<TrackFlag> {
-        use SessionState::{Aborted, Started};
+        use SessionState::Started;
 
         match (self.session, self.track) {
-            (Some(Aborted), _) => Some(TrackFlag::Red),
+            _ if self.suspended => Some(TrackFlag::Red),
             (Some(Started), Some(TrackCode::Red)) => Some(TrackFlag::Red),
             (Some(Started), Some(TrackCode::ScDeployed)) => Some(TrackFlag::SafetyCar),
             (Some(Started), Some(TrackCode::VscDeployed | TrackCode::VscEnding)) => {
@@ -421,6 +429,40 @@ mod tests {
         assert_eq!(
             s.apply(session(SessionState::Started)),
             flag(TrackFlag::SafetyCar)
+        );
+    }
+
+    #[test]
+    fn red_stays_until_the_restart_through_inactive() {
+        // Singapore 2026 sprint qualifying: Aborted, all clear on track,
+        // Inactive ("SQ1 WILL RESUME AT 20:46"), then Started.
+        let mut s = racing();
+        s.apply(session(SessionState::Aborted));
+        s.apply(track("1"));
+        assert!(s.apply(session(SessionState::Inactive)).is_empty());
+        assert_eq!(s.flag(), Some(TrackFlag::Red));
+        assert_eq!(
+            s.apply(session(SessionState::Started)),
+            flag(TrackFlag::Green)
+        );
+    }
+
+    #[test]
+    fn inactive_between_qualifying_parts_has_no_flag() {
+        let mut s = racing();
+        s.apply(session(SessionState::Finished));
+        s.apply(session(SessionState::Inactive));
+        assert_eq!(s.flag(), None);
+    }
+
+    #[test]
+    fn a_session_ended_under_red_has_no_flag() {
+        let mut s = racing();
+        s.apply(session(SessionState::Aborted));
+        s.apply(session(SessionState::Inactive));
+        assert_eq!(
+            s.apply(session(SessionState::Finished)),
+            [RaceEvent::FlagCleared]
         );
     }
 

@@ -5,7 +5,7 @@
 use std::time::{Duration, Instant};
 
 use f1_core::{
-    input::{Input, RaceEvent},
+    input::{Input, RaceEvent, TrackFlag},
     replay::{Replayer, Step},
     timeline::Stream,
 };
@@ -93,4 +93,20 @@ fn pole_comes_when_the_last_car_has_finished_its_lap() {
     assert!(at >= LAST_CAR_DONE, "{at:?}");
     assert!(at < SQ3_FLAG + Duration::from_secs(120), "{at:?}");
     assert!(at < FINALISED);
+}
+
+#[test]
+fn the_red_flag_in_sq1_stays_until_the_restart() {
+    let flags: Vec<(Duration, RaceEvent)> = events()
+        .into_iter()
+        .filter(|(_, e)| matches!(e, RaceEvent::TrackFlag(_) | RaceEvent::FlagCleared))
+        .collect();
+    let red = flags
+        .iter()
+        .position(|(_, e)| *e == RaceEvent::TrackFlag(TrackFlag::Red))
+        .expect("a red flag");
+    // Aborted at 00:18:21, Inactive at 00:24:49, Started at 00:28:30.
+    let (after, next) = flags[red + 1];
+    assert_eq!(next, RaceEvent::TrackFlag(TrackFlag::Green));
+    assert!(after >= Duration::from_millis(1_710_125), "{after:?}");
 }
