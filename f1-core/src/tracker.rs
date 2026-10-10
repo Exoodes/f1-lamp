@@ -34,10 +34,6 @@ const UNKNOWN_TEAM: Rgb = Rgb::WHITE;
 /// A pit-lane time longer than this isn't a pit stop: during a red flag every
 /// car waits in the pit lane, for half an hour at Monza.
 const MAX_PIT_LANE_SECS: f32 = 120.0;
-/// Fastest laps from this lap on: lap 1 starts from the grid or the pit
-/// lane, so it's never a real lap time. Lap 2 is already a driver's first
-/// timed lap in practice and qualifying.
-const FIRST_FASTEST_LAP: u32 = 2;
 /// Qualifying (and sprint qualifying) ends with its third part.
 const LAST_QUALIFYING_PART: u8 = 3;
 /// After qualifying's last flag, pole waits at most this long for the cars
@@ -266,11 +262,10 @@ impl Tracker {
             let Some(best) = &line.personal_best_lap_time else {
                 continue;
             };
-            // A new time (not just a position shuffled by someone else's),
-            // the best of the session, and not a first-lap burst.
+            // A new time (not just a position shuffled by someone else's)
+            // and the best of the session, on any lap.
             let new_time = best.value.as_deref().is_some_and(|v| !v.is_empty());
-            let late_enough = best.lap.is_none_or(|lap| lap >= FIRST_FASTEST_LAP);
-            if new_time && best.position == Some(1) && late_enough {
+            if new_time && best.position == Some(1) {
                 events.push(RaceEvent::FastestLap {
                     driver,
                     team_color: self.colour(driver),
@@ -616,26 +611,13 @@ mod tests {
     }
 
     #[test]
-    fn fastest_lap_on_lap_one_is_ignored() {
+    fn fastest_lap_on_lap_one_counts_too() {
         let mut t = race();
         assert_eq!(
             feed(
                 &mut t,
                 Stream::TimingStats,
                 r#"{"Lines":{"63":{"PersonalBestLapTime":{"Lap":1,"Position":1,"Value":"1:31.002"}}}}"#
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn fastest_lap_counts_from_lap_two() {
-        let mut t = race();
-        assert_eq!(
-            feed(
-                &mut t,
-                Stream::TimingStats,
-                r#"{"Lines":{"63":{"PersonalBestLapTime":{"Lap":2,"Position":1,"Value":"1:26.651"}}}}"#
             ),
             Some(RaceEvent::FastestLap {
                 driver: 63,
