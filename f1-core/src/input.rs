@@ -15,6 +15,8 @@ pub enum TrackFlag {
     DoubleYellow,
     SafetyCar,
     VirtualSafetyCar,
+    /// The VSC ends in about 15 s (track status 7, `VSCEnding`).
+    VscEnding,
     Red,
 }
 

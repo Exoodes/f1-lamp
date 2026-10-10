@@ -119,6 +119,7 @@ fn replayed_race_gives_the_same_flags_as_the_track_state_test() {
             Green,
             Yellow,
             VirtualSafetyCar,
+            VscEnding,
             Green
         ]
     );

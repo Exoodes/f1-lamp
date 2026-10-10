@@ -53,6 +53,7 @@ mod tests {
             ("double_yellow", TrackFlag::DoubleYellow),
             ("safety_car", TrackFlag::SafetyCar),
             ("virtual_safety_car", TrackFlag::VirtualSafetyCar),
+            ("vsc_ending", TrackFlag::VscEnding),
             ("red", TrackFlag::Red),
         ];
         for (name, flag) in flags {

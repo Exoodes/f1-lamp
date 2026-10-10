@@ -65,6 +65,7 @@ fn whole_race_gives_the_expected_events_at_the_right_times() {
             (hms(1, 40, 5, 991), flag(Green)),
             (hms(2, 10, 55, 234), flag(Yellow)),
             (hms(2, 11, 9, 379), flag(VirtualSafetyCar)),
+            (hms(2, 12, 56, 105), flag(VscEnding)),
             (hms(2, 13, 6, 880), flag(Green)),
             (hms(2, 48, 10, 829), ChequeredFlag),
             (hms(2, 48, 11, 236), FlagCleared),
@@ -78,7 +79,10 @@ fn every_safety_car_vsc_and_red_ends_in_green() {
     for (i, f) in flags.iter().enumerate() {
         if matches!(
             f,
-            TrackFlag::SafetyCar | TrackFlag::VirtualSafetyCar | TrackFlag::Red
+            TrackFlag::SafetyCar
+                | TrackFlag::VirtualSafetyCar
+                | TrackFlag::VscEnding
+                | TrackFlag::Red
         ) {
             // Only neutralisations or a red flag may come before the next green.
             let next_green = flags[i..]
@@ -88,7 +92,10 @@ fn every_safety_car_vsc_and_red_ends_in_green() {
             assert!(
                 flags[i..i + next_green].iter().all(|f| matches!(
                     f,
-                    TrackFlag::SafetyCar | TrackFlag::VirtualSafetyCar | TrackFlag::Red
+                    TrackFlag::SafetyCar
+                        | TrackFlag::VirtualSafetyCar
+                        | TrackFlag::VscEnding
+                        | TrackFlag::Red
                 )),
                 "{:?}",
                 &flags[i..=i + next_green]

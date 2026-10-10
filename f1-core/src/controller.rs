@@ -1198,6 +1198,7 @@ mod tests {
             TrackFlag::DoubleYellow,
             TrackFlag::SafetyCar,
             TrackFlag::VirtualSafetyCar,
+            TrackFlag::VscEnding,
             TrackFlag::Red,
         ] {
             let mut c = live(t0);

@@ -155,9 +155,8 @@ impl TrackState {
             _ if self.suspended => Some(TrackFlag::Red),
             (Some(Started), Some(TrackCode::Red)) => Some(TrackFlag::Red),
             (Some(Started), Some(TrackCode::ScDeployed)) => Some(TrackFlag::SafetyCar),
-            (Some(Started), Some(TrackCode::VscDeployed | TrackCode::VscEnding)) => {
-                Some(TrackFlag::VirtualSafetyCar)
-            }
+            (Some(Started), Some(TrackCode::VscDeployed)) => Some(TrackFlag::VirtualSafetyCar),
+            (Some(Started), Some(TrackCode::VscEnding)) => Some(TrackFlag::VscEnding),
             (Some(Started), Some(TrackCode::Yellow)) if !self.double_yellow.is_empty() => {
                 Some(TrackFlag::DoubleYellow)
             }
@@ -293,6 +292,7 @@ mod tests {
             ("4", TrackFlag::SafetyCar),
             ("5", TrackFlag::Red),
             ("6", TrackFlag::VirtualSafetyCar),
+            ("7", TrackFlag::VscEnding),
         ];
         for (code, expected) in cases {
             let mut s = racing();
@@ -305,14 +305,6 @@ mod tests {
         let mut s = racing();
         assert_eq!(s.apply(track("2")), flag(TrackFlag::Yellow));
         assert!(s.apply(track("2")).is_empty());
-    }
-
-    #[test]
-    fn vsc_ending_stays_vsc_until_all_clear() {
-        let mut s = racing();
-        s.apply(track("6"));
-        assert!(s.apply(track("7")).is_empty());
-        assert_eq!(s.apply(track("1")), flag(TrackFlag::Green));
     }
 
     #[test]
@@ -430,6 +422,14 @@ mod tests {
             s.apply(session(SessionState::Started)),
             flag(TrackFlag::SafetyCar)
         );
+    }
+
+    #[test]
+    fn vsc_ending_follows_the_vsc_then_green() {
+        let mut s = racing();
+        assert_eq!(s.apply(track("6")), flag(TrackFlag::VirtualSafetyCar));
+        assert_eq!(s.apply(track("7")), flag(TrackFlag::VscEnding));
+        assert_eq!(s.apply(track("1")), flag(TrackFlag::Green));
     }
 
     #[test]

@@ -136,6 +136,7 @@ fn showcase_plays_every_flag_and_the_winner_in_order() {
             ),
             (secs(75.0), flag(Green)),
             (secs(85.5), flag(VirtualSafetyCar)),
+            (secs(95.5), flag(VscEnding)),
             (secs(100.0), flag(Green)),
             (
                 secs(102.0),

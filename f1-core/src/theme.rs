@@ -16,6 +16,8 @@ const DOUBLE_YELLOW_PERIOD_MS: u32 = 400;
 const SC_CHASE_SPEED: f32 = 12.0;
 const SC_CHASE_TAIL: u8 = 4;
 const VSC_PERIOD_MS: u32 = 3000;
+/// Faster than the VSC: green is coming.
+const VSC_ENDING_PERIOD_MS: u32 = 1000;
 
 const FASTEST_LAP_FLASHES: u8 = 3;
 const PIT_STOP_FLASHES: u8 = 2;
@@ -47,6 +49,10 @@ pub fn flag_effect(flag: TrackFlag) -> Effect {
         TrackFlag::VirtualSafetyCar => Effect::Breathe {
             color: Rgb::YELLOW,
             period_ms: VSC_PERIOD_MS,
+        },
+        TrackFlag::VscEnding => Effect::Breathe {
+            color: Rgb::YELLOW,
+            period_ms: VSC_ENDING_PERIOD_MS,
         },
         TrackFlag::Red => Effect::Solid(Rgb::RED),
     }
@@ -101,13 +107,14 @@ mod tests {
 
     const TEAM: Rgb = Rgb::new(0, 210, 190);
 
-    fn all_flags() -> [TrackFlag; 6] {
+    fn all_flags() -> [TrackFlag; 7] {
         [
             TrackFlag::Green,
             TrackFlag::Yellow,
             TrackFlag::DoubleYellow,
             TrackFlag::SafetyCar,
             TrackFlag::VirtualSafetyCar,
+            TrackFlag::VscEnding,
             TrackFlag::Red,
         ]
     }
