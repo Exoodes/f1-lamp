@@ -13,8 +13,40 @@ Ideas for after the course, in no particular order of size.
   the effects without waiting for a session.
 - **A "winner" for practice.** E.g. the team colour of the driver with the
   fastest lap when the session ends, like pole after qualifying.
-- **Rework the effects.** Some are too fast, and some look too much alike.
-  The chequered flag doesn't look good and is too short (10 s).
+- **Rework the effects.** Some are too fast (seen again in sprint
+  qualifying, Singapore 2026-10-09), and some look too much alike.
+- **A new chequered flag.** The current one (one lit pixel in four, swapping
+  every 500 ms) doesn't look good and is too short (10 s).
+- **Red flag until the restart.** After a red flag the session goes
+  `Aborted` → `Inactive` → `Started`; in `Inactive` the lamp shows no flag,
+  so it went white while the red flag was still out. Sprint qualifying
+  Singapore: red at 20:35:51, `Inactive` at 20:42:19 ("SQ1 WILL RESUME AT
+  20:46"), `Started` at 20:46:00, so about 3.5 minutes of white. Keep red
+  in an `Inactive` that follows `Aborted` (not the `Inactive` between
+  qualifying parts, which follows `Finished`).
+- **Pole once every car has finished its lap, at most 2 minutes after the
+  flag.** Now pole waits for `Finalised`, which can be very late (Singapore
+  sprint qualifying: 18 min 51 s after SQ3's flag; Monza: 3 min 28 s).
+  Instead, from qualifying's `Finished` (the flag), a car is done when it is
+  `KnockedOut`, `Retired`, `Stopped` or `InPit`, or when its `NumberOfLaps`
+  (TimingData) goes up: every car on track crosses the line once more. When
+  all are done, or 2 minutes after the flag, TopThree's leader is pole.
+  Checked on Singapore SQ3: 10 cars on track at the flag, 9 crossed the line
+  and #44 went into the pits; all done 88 s after the flag, pole (#3)
+  correct. The same "done" check could end each part for the item below.
+- **Winner after the chequered flag, not before.** The winner comes from
+  SessionStatus `Finished`, the chequered flag from race control, and
+  `Finished` arrives first (Singapore sprint 2026-10-10: 109 ms earlier). So
+  the lamp showed the winner, then the chequered flag on top of it, then the
+  winner again for what was left of its time. Start the winner only once
+  the chequered flag has finished.
+- **Fastest driver of each qualifying part.** At the end of Q1 and Q2 (and
+  SQ1/SQ2) show the team colour of the part's quickest driver, like pole
+  after Q3. The leader is only certain once the last cars finish their laps
+  after the flag (Singapore SQ1: a new P1 48 s after the flag); the next
+  `QualifyingPart` in SessionData or the knockouts could be the trigger.
+- **Every fastest lap.** Drop `FIRST_FASTEST_LAP` (now lap 2) and flash for
+  every new session-best lap, whatever the lap number.
 - **VSC ending.** The feed sends it (`TrackStatus` 7, `VSCEnding`, ~15 s
   before green; FP1 Singapore had one), but the lamp treats it like VSC and
   keeps breathing yellow. Give it a look of its own, e.g. faster breathing.
@@ -62,6 +94,11 @@ Ideas for after the course, in no particular order of size.
   minutes after the chequered flag (Monza 2026). Pole, too, is only certain
   at `Finalised`: at Monza a new leader came 70 s after Q3's clock ran out.
 
+- **Sprint qualifying Singapore, 2026-10-09:** pole came too early, right
+  after the chequered flag, while many drivers were still on their flying
+  laps (that build was older than 28ce6c2). Since 28ce6c2 pole waits for
+  `Finalised`, which is too late; see "Pole once every car has finished its
+  lap" under Wanted.
 - **FP1 Singapore, 2026-10-09:** the TV delay is about 43 s. The logs and
   everything else worked.
 - **Pit stops in practice** mostly don't show, and that's the feed: of 78
