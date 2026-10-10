@@ -35,6 +35,10 @@ Ideas for after the course, in no particular order of size.
 - **VSC ending.** The feed sends it (`TrackStatus` 7, `VSCEnding`, ~15 s
   before green; FP1 Singapore had one), but the lamp treats it like VSC and
   keeps breathing yellow. Give it a look of its own, e.g. faster breathing.
+- **Retry the feed at once when WiFi is back.** After a WiFi drop the feed
+  keeps waiting out its backoff: qualifying Singapore 2026-10-10, WiFi up at
+  16:24:41, the feed waited for its 40 s retry and connected at 16:25:17,
+  about 36 s lost in Q3. Reset the feed's backoff when WiFi comes up.
 - **No calendar downloads during a session.** In pre-session and live, OpenF1
   answers 401 anyway ("Live F1 session in progress"; every 30 min in FP1),
   and each try costs a TLS handshake while the feed is open. Skip them while
@@ -80,6 +84,12 @@ Ideas for after the course, in no particular order of size.
     (`LapCount`), which could be logged the same way.
   - Before a race the feed sends "GREEN LIGHT - PIT EXIT OPEN" about 40
     minutes before the start, when the TV shows the cars leaving the pits.
+  - The TV's countdown to a race start is only a graphic: the feed has no
+    countdown (checked on the Singapore sprint 2026-10-10, whose start was
+    delayed). The nearest thing is the start of the formation lap:
+    SessionStatus `Started` and `ExtrapolatedClock` starting to count down
+    from 1:00:00 come together (09:36:31.0 UTC there), when the TV shows the
+    cars pulling away. A good moment for the "now" button.
 
 ## Seen in sessions
 
@@ -96,6 +106,17 @@ Ideas for after the course, in no particular order of size.
   car on track has finished its lap, at most 2 minutes (88 s in this
   session). Also seen: the lamp went white during SQ1's red flag while the
   session was `Inactive` before the restart; fixed, it stays red now.
+- **Qualifying Singapore, 2026-10-10:** TV delay 44 s all session (feed
+  green 15:30:02, lamp 15:30:46; each chequered flag the same). Pole (#3)
+  came 2 min after Q3's flag, at the cap: the lamp had reconnected at
+  16:25:20, mid-Q3, so it knew nothing about cars already in the garage
+  (the timing snapshot is too large and is dropped). To check against the
+  archive once it's up: when every car was done without the reconnect.
+  No red flag, so that fix is still untested live. Two WiFi drops an hour
+  apart (15:22, 16:23; the router's fault), ~1 min 45 s without the feed
+  each. Lowest heap since boot 46,576 B, reached before 15:21 (earlier
+  measurements ~120 KB); worth finding what took it. Largest block right
+  after the mid-session reconnect: 32,768 B.
 - **FP1 Singapore, 2026-10-09:** the TV delay is about 43 s. The logs and
   everything else worked.
 - **Pit stops in practice** mostly don't show, and that's the feed: of 78
