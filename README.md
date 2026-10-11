@@ -165,6 +165,8 @@ only the lines the lamp uses, so a whole race fits in the firmware.
 `http://f1-lightbox.local` (same network only):
 
 - what the lamp shows, the session phase and the network state;
+- the race log: what the lamp showed, in words ("Yellow flag", "VER in the
+  pits", "Fastest lap: NOR"), with the time it showed, in step with your TV;
 - TV sync: the session clock and the lap as your TV should show them with
   the delay set, and buttons to move the delay by 0.1, 0.5 or 1 second,
   until they change together with the TV's;
@@ -200,6 +202,7 @@ The page uses these, and scripts can too:
 | `POST /api/settings` | All the settings as JSON: get them from `/api/state`, change, send back |
 | `POST /api/override` | `{"kind":"flag","flag":"red"}`, `{"kind":"color","color":"#ff8800"}` or `{"kind":"release"}`; or plays one effect at once: `{"kind":"event","event":"pit_stop","team":"mclaren"}` (`start_lights`, `chequered_flag`, `last_lap`, `fastest_lap`, `pit_stop`, `overtake`, `winner`, `knocked_out`; teams `alpine`, `aston_martin`, `audi`, `cadillac`, `ferrari`, `haas`, `mclaren`, `mercedes`, `racing_bulls`, `red_bull`, `williams`) |
 | `GET /api/token`, `POST /api/token` | The F1TV token's state; post a token (plain text) to set it, an empty one to remove it |
+| `GET /api/racelog?after=<n>` | The race log's lines after number `n` (all kept lines without it): time, text, colour |
 | `GET /api/log?after=<n>` | The log lines after number `n` |
 | `POST /api/ota/nonce` | A one-time nonce (hex) for the next upload, valid for 2 minutes |
 | `POST /api/ota` | A firmware image, with `X-F1-Nonce` and its tag in `X-F1-Auth` (see `cargo ota`) |

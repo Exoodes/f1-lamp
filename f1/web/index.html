@@ -117,6 +117,17 @@
   .status dd::first-letter { text-transform: uppercase; }
   body.offline .hero-layer, body.offline .status dd { opacity: .4; }
 
+  /* ---- Race log ---- */
+  .racelog { list-style: none; margin: 0; padding: 0; max-height: 18rem; overflow-y: auto; }
+  .racelog li {
+    display: grid; grid-template-columns: auto auto 1fr; gap: 8px; align-items: center;
+    padding: 5px 0; border-top: 1px solid var(--line);
+  }
+  .racelog li:first-child { border-top: 0; }
+  .racelog .time { color: var(--muted); font-size: .85rem; font-variant-numeric: tabular-nums; }
+  .racelog .swatch { width: .7rem; height: .7rem; }
+  .racelog .swatch.none { visibility: hidden; }
+
   /* ---- This weekend ---- */
   .weekend-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
   .weekend-head .now { color: var(--muted); font-size: .9rem; font-variant-numeric: tabular-nums; }
@@ -300,6 +311,12 @@
         <button data-nudge="1">+1 s</button>
       </div>
       <p class="hint">The session clock and lap as your TV should show them now. If they change before your TV's, add delay; if after, take some away.</p>
+    </section>
+
+    <section>
+      <h2>Race log</h2>
+      <ol class="racelog" id="racelog"></ol>
+      <p class="hint" id="racelog-empty">What the lamp shows, as it shows it (in step with your TV). Newest first.</p>
     </section>
 
     <section>
@@ -754,6 +771,43 @@ async function tryEvent(body, label) {
   }
 }
 
+// ---- Race log ----
+
+// The number of the last line shown; null before the first answer.
+let raceLogNext = null;
+
+async function refreshRaceLog() {
+  try {
+    const query = raceLogNext === null ? "" : "?after=" + raceLogNext;
+    const r = await fetch("/api/racelog" + query);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const page = await r.json();
+    // A lamp that restarted starts its numbers again: show its log afresh.
+    if (raceLogNext !== null && page.next < raceLogNext) $("racelog").replaceChildren();
+    for (const line of page.lines) addRaceLogLine(line);
+    raceLogNext = page.next;
+    $("racelog-empty").hidden = $("racelog").children.length > 0;
+  } catch {
+    // The next refresh tries again.
+  }
+}
+
+function addRaceLogLine(line) {
+  const li = document.createElement("li");
+  const time = document.createElement("span");
+  time.className = "time";
+  time.textContent = line.time;
+  const dot = document.createElement("span");
+  dot.className = line.color ? "swatch" : "swatch none";
+  if (line.color) dot.style.background = line.color;
+  const text = document.createElement("span");
+  text.textContent = line.text;
+  li.append(time, dot, text);
+  $("racelog").prepend(li);
+  // The lamp keeps 120 lines; so does the page.
+  while ($("racelog").children.length > 120) $("racelog").lastChild.remove();
+}
+
 // ---- This weekend ----
 
 // The lamp's clock minus this device's, so the countdown follows the lamp.
@@ -1127,6 +1181,8 @@ async function start() {
 
   setInterval(refreshStatus, 2000);
   startSchedule();
+  refreshRaceLog();
+  setInterval(refreshRaceLog, 2000);
   startReplay();
 
   $("token-save").addEventListener("click", () => {

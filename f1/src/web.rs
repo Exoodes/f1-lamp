@@ -33,7 +33,7 @@ use serde::de::DeserializeOwned;
 
 use crate::io::{
     body::{read_capped, Body},
-    clock, mdns, ota, system,
+    clock, mdns, ota, racelog, system,
     token_store::TokenKeeper,
     weblog,
 };
@@ -127,6 +127,12 @@ fn page_routes(
             JSON,
             &serde_json::to_vec(&ScheduleReply { now, weekend })?,
         )
+    })?;
+
+    // `?after=<n>`: the race log's lines after number n; without it, all.
+    server.fn_handler::<anyhow::Error, _>("/api/racelog", Method::Get, |req| {
+        let after = query_number(req.uri(), "after");
+        reply(req, 200, JSON, &serde_json::to_vec(&racelog::page(after))?)
     })?;
 
     // `?after=<n>`: the lines after number n; without it, only where to start.

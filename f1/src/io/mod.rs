@@ -10,6 +10,7 @@ pub mod led;
 pub mod live;
 pub mod mdns;
 pub mod ota;
+pub mod racelog;
 pub mod storage;
 pub mod system;
 pub mod token_store;

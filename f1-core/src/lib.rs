@@ -43,6 +43,7 @@ pub mod ota_trial;
 pub mod overlays;
 pub mod playback;
 pub mod post;
+pub mod racelog;
 pub mod replay;
 pub mod schedule;
 pub mod settings;

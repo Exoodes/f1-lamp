@@ -97,6 +97,8 @@ pub struct Received {
     pub running: Option<bool>,
     /// Clock and lap readings, for the page's TV clock and lap.
     pub timing: Vec<TimingInfo>,
+    /// Drivers' short names (`"VER"`) by car number, for the race log.
+    pub names: Vec<(u8, String)>,
 }
 
 pub struct LiveSession {
@@ -229,6 +231,7 @@ impl LiveSession {
                     for msg in messages {
                         self.note(&msg);
                         out.timing.extend(timing(&msg));
+                        out.names.extend(names(&msg));
                         // Silently: the events of the past are not shown.
                         self.tracker.apply(&msg);
                         self.state.apply(msg);
@@ -253,6 +256,7 @@ impl LiveSession {
                 for msg in messages {
                     self.note(&msg);
                     out.timing.extend(timing(&msg));
+                    out.names.extend(names(&msg));
                     out.events.extend(self.tracker.apply(&msg));
                     out.events.extend(self.state.apply(msg));
                 }
@@ -268,6 +272,16 @@ impl LiveSession {
             }
         }
     }
+}
+
+/// The short names in a driver list message.
+fn names(msg: &FeedMessage) -> Vec<(u8, String)> {
+    let FeedMessage::DriverList(list) = msg else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|(number, driver)| Some((*number, driver.tla.clone()?)))
+        .collect()
 }
 
 /// The clock or lap reading in `msg`, if any.
@@ -646,5 +660,16 @@ mod tests {
             .as_bytes(),
         );
         assert_eq!(received.timing.len(), 1);
+    }
+
+    #[test]
+    fn short_names_are_passed_on_for_the_race_log() {
+        let mut live = LiveSession::new(64 * 1024);
+        live.receive(format!("{{}}{RS}").as_bytes());
+        let received = live.receive(
+            completion(r#"{"DriverList":{"1":{"Tla":"VER","TeamColour":"4781D7"},"_kf":true}}"#)
+                .as_bytes(),
+        );
+        assert_eq!(received.names, [(1, "VER".to_owned())]);
     }
 }

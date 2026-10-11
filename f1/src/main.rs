@@ -120,6 +120,7 @@ fn run() -> anyhow::Result<()> {
         }
         lamp.take_inputs(&rx, now);
         lamp.show(now);
+        io::racelog::record(lamp.controller.take_log());
         lamp.publish_snapshot();
         lamp.storage.save_if_due(now);
         pacer.wait();

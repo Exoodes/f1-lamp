@@ -35,15 +35,6 @@ Ideas for after the course, in no particular order of size.
   minus pit stops (`PitLaneTimeCollection`). Only if `OvertakeSeries` with a
   token isn't enough.
 
-- **Race log on the page.** A readable list of what happened, in step with
-  the TV (after the delay, when the lamp shows it): "Yellow flag", "NOR in
-  the pits", "Fastest lap: VER", "PIA overtook". Names from DriverList
-  (`Tla`, `LastName`). Today the page's log has only the raw lines, logged
-  when the feed sends them, not when the lamp shows them, e.g.
-  `live: FastestLap { driver: 1, .. }`, and keeps only a few dozen lines.
-  `OvertakeSeries` names only who overtook; who was passed would have to
-  come from position swaps.
-
 ## Open questions
 
 - **How to sync the TV delay easily, also before a race?** Ideas, most

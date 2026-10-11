@@ -1,0 +1,253 @@
+//! The race log on the web page: what the lamp showed, in words, in step
+//! with the TV. The controller hands over a [`LogItem`] when something shows
+//! (after the TV delay); [`text`] says it with the drivers' short names, and
+//! [`RaceLog`] keeps the latest lines for the page.
+
+use std::collections::VecDeque;
+
+use serde::Serialize;
+
+use crate::{
+    color::Rgb,
+    input::{RaceEvent, TrackFlag},
+    theme::PURPLE,
+};
+
+/// Lines kept: a race with every pit stop and flag fits; with every
+/// driver's overtakes followed, only the latest.
+pub const LINES: usize = 120;
+
+/// What the controller logs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogItem {
+    /// A race event the lamp shows.
+    Event(RaceEvent),
+    SessionStarted,
+    SessionEnded,
+}
+
+/// The line for `item`, with `name` giving a driver's short name; `None`
+/// for what isn't worth a line (a flag being cleared).
+pub fn text(item: LogItem, name: &dyn Fn(u8) -> String) -> Option<String> {
+    let event = match item {
+        LogItem::SessionStarted => return Some("Session started".to_owned()),
+        LogItem::SessionEnded => return Some("Session ended".to_owned()),
+        LogItem::Event(event) => event,
+    };
+    Some(match event {
+        RaceEvent::TrackFlag(flag) => match flag {
+            TrackFlag::Green => "Green flag",
+            TrackFlag::Yellow => "Yellow flag",
+            TrackFlag::DoubleYellow => "Double yellow flag",
+            TrackFlag::SafetyCar => "Safety car",
+            TrackFlag::VirtualSafetyCar => "Virtual safety car",
+            TrackFlag::VscEnding => "Virtual safety car ending",
+            TrackFlag::Red => "Red flag",
+        }
+        .to_owned(),
+        RaceEvent::FlagCleared => return None,
+        RaceEvent::StartLights => "Start lights".to_owned(),
+        RaceEvent::ChequeredFlag => "Chequered flag".to_owned(),
+        RaceEvent::LastLap => "Last lap".to_owned(),
+        RaceEvent::FastestLap { driver, .. } => format!("Fastest lap: {}", name(driver)),
+        RaceEvent::PitStop { driver, .. } => format!("{} in the pits", name(driver)),
+        RaceEvent::Overtake { driver, .. } => format!("{} overtakes", name(driver)),
+        // The race's winner, or pole after qualifying.
+        RaceEvent::Winner { driver, .. } => format!("P1: {}", name(driver)),
+        RaceEvent::KnockedOut { driver, .. } => format!("{} knocked out", name(driver)),
+    })
+}
+
+/// The colour of the dot next to a line: the flag's, or the team's.
+pub fn color(item: LogItem) -> Option<Rgb> {
+    let LogItem::Event(event) = item else {
+        return None;
+    };
+    match event {
+        RaceEvent::TrackFlag(TrackFlag::Green) => Some(Rgb::GREEN),
+        RaceEvent::TrackFlag(TrackFlag::Red) => Some(Rgb::RED),
+        RaceEvent::TrackFlag(_) => Some(Rgb::YELLOW),
+        RaceEvent::ChequeredFlag | RaceEvent::LastLap => Some(Rgb::WHITE),
+        RaceEvent::FastestLap { .. } => Some(PURPLE),
+        RaceEvent::PitStop { team_color, .. }
+        | RaceEvent::Overtake { team_color, .. }
+        | RaceEvent::Winner { team_color, .. }
+        | RaceEvent::KnockedOut { team_color, .. } => Some(team_color),
+        RaceEvent::FlagCleared | RaceEvent::StartLights => None,
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LogLine {
+    pub seq: u64,
+    /// Local time of day when the lamp showed it: `14:03:21`.
+    pub time: String,
+    pub text: String,
+    pub color: Option<Rgb>,
+}
+
+/// One answer to the page.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct RaceLogPage {
+    pub lines: Vec<LogLine>,
+    /// Ask for lines after this next time.
+    pub next: u64,
+}
+
+#[derive(Debug)]
+pub struct RaceLog {
+    lines: VecDeque<LogLine>,
+    next: u64,
+}
+
+impl RaceLog {
+    pub const fn new() -> Self {
+        RaceLog {
+            lines: VecDeque::new(),
+            next: 0,
+        }
+    }
+
+    pub fn push(&mut self, time: String, text: String, color: Option<Rgb>) {
+        if self.lines.len() == LINES {
+            self.lines.pop_front();
+        }
+        self.lines.push_back(LogLine {
+            seq: self.next,
+            time,
+            text,
+            color,
+        });
+        self.next += 1;
+    }
+
+    /// The lines after `after`; every line kept for a page that just opened
+    /// (`None`), or one whose number is from before a restart.
+    pub fn since(&self, after: Option<u64>) -> RaceLogPage {
+        let after = after.filter(|&a| a < self.next);
+        RaceLogPage {
+            lines: self
+                .lines
+                .iter()
+                .filter(|l| after.is_none_or(|a| l.seq > a))
+                .cloned()
+                .collect(),
+            next: self.next,
+        }
+    }
+}
+
+impl Default for RaceLog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEAM: Rgb = Rgb::new(0x47, 0x81, 0xD7);
+
+    fn names(n: u8) -> String {
+        if n == 1 {
+            "VER".to_owned()
+        } else {
+            format!("#{n}")
+        }
+    }
+
+    fn say(event: RaceEvent) -> Option<String> {
+        text(LogItem::Event(event), &names)
+    }
+
+    #[test]
+    fn driver_events_name_the_driver() {
+        let ver = |f: fn(u8, Rgb) -> RaceEvent| say(f(1, TEAM)).unwrap();
+        assert_eq!(
+            ver(|driver, team_color| RaceEvent::FastestLap { driver, team_color }),
+            "Fastest lap: VER"
+        );
+        assert_eq!(
+            ver(|driver, team_color| RaceEvent::PitStop { driver, team_color }),
+            "VER in the pits"
+        );
+        assert_eq!(
+            ver(|driver, team_color| RaceEvent::Winner { driver, team_color }),
+            "P1: VER"
+        );
+        assert_eq!(
+            say(RaceEvent::Overtake {
+                driver: 44,
+                team_color: TEAM
+            })
+            .unwrap(),
+            "#44 overtakes"
+        );
+    }
+
+    #[test]
+    fn flags_and_race_moments_read_plainly() {
+        assert_eq!(
+            say(RaceEvent::TrackFlag(TrackFlag::Red)).unwrap(),
+            "Red flag"
+        );
+        assert_eq!(say(RaceEvent::ChequeredFlag).unwrap(), "Chequered flag");
+        assert_eq!(say(RaceEvent::LastLap).unwrap(), "Last lap");
+        assert_eq!(say(RaceEvent::FlagCleared), None);
+        assert_eq!(
+            text(LogItem::SessionStarted, &names).unwrap(),
+            "Session started"
+        );
+    }
+
+    #[test]
+    fn dots_have_the_flag_or_team_colour() {
+        assert_eq!(
+            color(LogItem::Event(RaceEvent::TrackFlag(TrackFlag::SafetyCar))),
+            Some(Rgb::YELLOW)
+        );
+        assert_eq!(
+            color(LogItem::Event(RaceEvent::PitStop {
+                driver: 1,
+                team_color: TEAM
+            })),
+            Some(TEAM)
+        );
+        assert_eq!(color(LogItem::SessionEnded), None);
+    }
+
+    fn log_with(n: u64) -> RaceLog {
+        let mut log = RaceLog::new();
+        for i in 0..n {
+            log.push(format!("14:00:{i:02}"), format!("line {i}"), None);
+        }
+        log
+    }
+
+    #[test]
+    fn a_page_that_just_opened_gets_every_line() {
+        let page = log_with(3).since(None);
+        assert_eq!(page.lines.len(), 3);
+        assert_eq!(page.next, 3);
+    }
+
+    #[test]
+    fn later_asks_get_only_new_lines() {
+        let page = log_with(5).since(Some(2));
+        let seqs: Vec<u64> = page.lines.iter().map(|l| l.seq).collect();
+        assert_eq!(seqs, [3, 4]);
+    }
+
+    #[test]
+    fn a_number_from_before_a_restart_gets_every_line() {
+        assert_eq!(log_with(2).since(Some(500)).lines.len(), 2);
+    }
+
+    #[test]
+    fn only_the_latest_lines_are_kept() {
+        let page = log_with(LINES as u64 + 10).since(None);
+        assert_eq!(page.lines.len(), LINES);
+        assert_eq!(page.lines[0].seq, 10);
+    }
+}

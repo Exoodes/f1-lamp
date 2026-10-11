@@ -18,6 +18,7 @@ use crate::{
     input::{Input, NetStatus, RaceEvent, SessionPhase, TrackFlag},
     overlays::Overlays,
     post,
+    racelog::{self, LogItem},
     settings::Settings,
     snapshot::Snapshot,
     theme::{countdown_effect, event_overlay, flag_effect, net_effect, winner_effect, COUNTDOWN},
@@ -118,6 +119,8 @@ pub struct Controller {
     tv: TvTiming,
     /// The last tick's time, for the snapshot.
     now: Instant,
+    /// What showed since `take_log` was last called, for the race log.
+    log: Vec<LogItem>,
 }
 
 type Layer = fn(&Controller) -> Option<Scene>;
@@ -154,6 +157,7 @@ impl Controller {
             delayed: DelayQueue::new(),
             tv: TvTiming::default(),
             now,
+            log: Vec::new(),
         }
     }
 
@@ -309,6 +313,12 @@ impl Controller {
             match item {
                 Delayed::Race(event) => self.apply_race_event(event, now),
                 Delayed::Phase(phase) => {
+                    let was_live = self.layers.phase == SessionPhase::Live;
+                    if phase == SessionPhase::Live && !was_live {
+                        self.note(LogItem::SessionStarted);
+                    } else if was_live && phase != SessionPhase::Live {
+                        self.note(LogItem::SessionEnded);
+                    }
                     self.layers.phase = phase;
                     // A flag belongs to the live session it came from; the
                     // next session must not start with it.
@@ -325,9 +335,30 @@ impl Controller {
 
     fn apply_race_event(&mut self, event: RaceEvent, now: Instant) {
         // Switched off, or a driver nobody follows: as if it never arrived.
-        if self.layers.settings.shows(event) {
-            self.play_race_event(event, now);
+        if !self.layers.settings.shows(event) {
+            return;
         }
+        // The same flag again changes nothing on the lamp, and in the log.
+        let repeated = matches!(event, RaceEvent::TrackFlag(flag)
+            if self.layers.flag.is_some_and(|f| f.value == flag));
+        if !repeated {
+            self.note(LogItem::Event(event));
+        }
+        self.play_race_event(event, now);
+    }
+
+    fn note(&mut self, item: LogItem) {
+        // Taken every frame by the render loop; the cap only matters if
+        // nobody takes them (tests, a stalled loop).
+        if self.log.len() < racelog::LINES {
+            self.log.push(item);
+        }
+    }
+
+    /// What showed since the last call, for the race log. Tried effects
+    /// (`Input::Preview`) aren't in it.
+    pub fn take_log(&mut self) -> Vec<LogItem> {
+        std::mem::take(&mut self.log)
     }
 
     fn play_race_event(&mut self, event: RaceEvent, now: Instant) {
@@ -1493,5 +1524,58 @@ mod tests {
         c.apply(Input::Phase(SessionPhase::Idle), t0 + ms(10));
         c.tick(t0 + ms(10));
         assert_eq!(c.snapshot().tv.lap, None);
+    }
+
+    // ---- Race log ----
+
+    #[test]
+    fn the_log_gets_what_shows_after_the_tv_delay() {
+        let t0 = Instant::now();
+        let mut c = live_delayed(t0);
+        c.take_log();
+        c.apply(flag(TrackFlag::Yellow, t0), t0);
+        c.tick(t0 + ms(9_999));
+        assert!(c.take_log().is_empty());
+        c.tick(t0 + ms(10_000));
+        assert_eq!(
+            c.take_log(),
+            [LogItem::Event(RaceEvent::TrackFlag(TrackFlag::Yellow))]
+        );
+    }
+
+    #[test]
+    fn a_repeated_flag_is_logged_once() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.take_log();
+        c.apply(flag(TrackFlag::Yellow, t0), t0);
+        c.apply(flag(TrackFlag::Yellow, t0 + ms(10)), t0 + ms(10));
+        assert_eq!(c.take_log().len(), 1);
+    }
+
+    #[test]
+    fn switched_off_and_tried_events_are_not_logged() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        let mut settings = Settings::default();
+        settings.effects.last_lap = false;
+        c.apply(Input::Settings(settings), t0);
+        c.take_log();
+        c.apply(race(RaceEvent::LastLap, t0), t0);
+        c.apply(Input::Preview(RaceEvent::ChequeredFlag), t0);
+        assert!(c.take_log().is_empty());
+    }
+
+    #[test]
+    fn sessions_starting_and_ending_are_logged() {
+        let t0 = Instant::now();
+        let mut c = Controller::new(t0);
+        c.apply(Input::Phase(SessionPhase::PreSession), t0);
+        c.apply(Input::Phase(SessionPhase::Live), t0);
+        c.apply(Input::Phase(SessionPhase::PostSession), t0);
+        assert_eq!(
+            c.take_log(),
+            [LogItem::SessionStarted, LogItem::SessionEnded]
+        );
     }
 }

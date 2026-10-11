@@ -32,7 +32,7 @@ use f1_core::{
 use crate::{
     config,
     io::{
-        clock, http, system,
+        clock, http, racelog, system,
         token_store::TokenKeeper,
         ws::{WebSocket, WsEvent},
     },
@@ -401,6 +401,9 @@ fn handle(
     }
     if let Some(running) = received.running {
         control.set_running(running);
+    }
+    for (number, name) in received.names {
+        racelog::set_name(number, name);
     }
     for info in received.timing {
         let arrival = Instant::now();
