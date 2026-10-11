@@ -18,8 +18,8 @@ use f1_core::{
     backoff::Backoff,
     color::Rgb,
     heartbeat::Heartbeat,
-    input::{Input, NetStatus, RaceEvent, SessionPhase},
-    net_schedule::{in_words, Calendar, Deadlines},
+    input::{Input, NetStatus, RaceEvent},
+    net_schedule::{in_words, Calendar, Deadlines, PhaseUpdate},
     openf1::{self, DriverDto, ResultDto, SessionDto, CALENDAR_DAYS},
     schedule::{self, Session, WinnerLookup},
     snapshot::Snapshot,
@@ -126,21 +126,21 @@ impl Schedule {
     }
 
     /// Works out the phase at `now_unix` and sends it, but only when it
-    /// changed. Returns it either way.
+    /// changed. Returns what was found either way.
     fn update_phase(
         &mut self,
         now_unix: i64,
         feed_running: bool,
         tx: &SyncSender<Input>,
-    ) -> anyhow::Result<SessionPhase> {
-        let (phase, changed) = self.calendar.phase(now_unix, feed_running);
+    ) -> anyhow::Result<PhaseUpdate> {
+        let update = self.calendar.phase(now_unix, feed_running);
         // A replay owns the phase; two producers would fight over it.
-        if changed && !cfg!(feature = "player") {
-            tx.send(Input::Phase(phase))
+        if update.changed && !cfg!(feature = "player") {
+            tx.send(Input::Phase(update.phase))
                 .context("render loop is gone")?;
             log_phase(self.calendar.sessions(), now_unix, feed_running);
         }
-        Ok(phase)
+        Ok(update)
     }
 }
 
@@ -343,12 +343,19 @@ impl<'a> Net<'a> {
         })
     }
 
-    /// Downloads the calendar once WiFi and the clock are ready. Returns when
-    /// it's next due. Never fails: the lamp works without a calendar.
+    /// Downloads the calendar once WiFi and the clock are ready, but not
+    /// just before or during a session. Returns when it's next due. Never
+    /// fails: the lamp works without a calendar.
     fn update_calendar(&mut self, now: Instant) -> Instant {
         let (Some(unix), true) = (clock::unix_now(), self.wifi_up()) else {
             return now + CALENDAR_WAITING_EVERY;
         };
+        let feed_running = self.shared.live.feed_running();
+        if !self.schedule.calendar.may_download(unix, feed_running) {
+            log::info!("calendar: not during a session; downloading after it");
+            // `update_phase` makes it due again when the session is over.
+            return now + CALENDAR_EVERY;
+        }
         match fetch_calendar(unix) {
             Ok(sessions) => {
                 self.schedule.replace(sessions, unix);
@@ -374,10 +381,15 @@ impl<'a> Net<'a> {
             return Ok(now + PHASE_WAITING_EVERY);
         };
         let feed_running = self.shared.live.feed_running();
-        let phase = self.schedule.update_phase(unix, feed_running, self.tx)?;
+        let update = self.schedule.update_phase(unix, feed_running, self.tx)?;
         self.shared
             .live
-            .set_wanted(cfg!(feature = "live-now") || schedule::feed_wanted(phase));
+            .set_wanted(cfg!(feature = "live-now") || schedule::feed_wanted(update.phase));
+        if update.session_over {
+            // The download skipped during it, and any session that moved.
+            self.due.calendar = now;
+            self.calendar_retry.reset();
+        }
         Ok(now + schedule::phase_wait(self.schedule.calendar.sessions(), unix))
     }
 

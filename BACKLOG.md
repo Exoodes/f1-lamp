@@ -36,10 +36,6 @@ Ideas for after the course, in no particular order of size.
   `pole_after_last_laps`, at most `LAST_LAPS_MAX` after the flag); the same
   check can end Q1 and Q2. To decide: the same look as the winner or one of
   its own, and whether the winner's on/off setting covers it.
-- **No calendar downloads during a session.** In pre-session and live, OpenF1
-  answers 401 anyway ("Live F1 session in progress"; every 30 min in FP1),
-  and each try costs a TLS handshake while the feed is open. Skip them while
-  the feed is wanted and download once right after the session.
 
 ## Later
 

@@ -45,6 +45,17 @@ impl Deadlines {
     }
 }
 
+/// What [`Calendar::phase`] found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PhaseUpdate {
+    pub phase: SessionPhase,
+    /// It differs from the phase last returned, which now counts as sent.
+    pub changed: bool,
+    /// The feed was wanted with the last phase and isn't any more: a session
+    /// is over, and the calendar download skipped during it can happen.
+    pub session_over: bool,
+}
+
 /// The sessions the lamp knows, what of them is saved in flash, and the
 /// phase last sent.
 #[derive(Debug, Default)]
@@ -83,13 +94,26 @@ impl Calendar {
         self.saved = sessions;
     }
 
-    /// The phase at `now_unix`, and whether it differs from the one last
-    /// returned as changed, which then counts as sent.
-    pub fn phase(&mut self, now_unix: i64, feed_running: bool) -> (SessionPhase, bool) {
+    /// The phase at `now_unix`, compared with the one last returned.
+    pub fn phase(&mut self, now_unix: i64, feed_running: bool) -> PhaseUpdate {
         let phase = schedule::phase_at(&self.sessions, now_unix, feed_running);
-        let changed = self.sent_phase != Some(phase);
-        self.sent_phase = Some(phase);
-        (phase, changed)
+        let before = self.sent_phase.replace(phase);
+        PhaseUpdate {
+            phase,
+            changed: before != Some(phase),
+            session_over: before.is_some_and(schedule::feed_wanted)
+                && !schedule::feed_wanted(phase),
+        }
+    }
+
+    /// Whether the calendar may be downloaded at `now_unix`: not just before
+    /// or during a session, when OpenF1 refuses free requests anyway
+    /// (HTTP 401, "Live F1 session in progress") and each try would cost a
+    /// TLS handshake next to the open feed. Worked out afresh, so it holds
+    /// right after a boot too, before any phase was sent.
+    pub fn may_download(&self, now_unix: i64, feed_running: bool) -> bool {
+        let phase = schedule::phase_at(&self.sessions, now_unix, feed_running);
+        !schedule::feed_wanted(phase)
     }
 }
 
@@ -109,7 +133,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::schedule::{SessionKind, LIVE_GRACE, POST_SESSION};
+    use crate::schedule::{SessionKind, LIVE_GRACE, POST_SESSION, PRE_SESSION};
 
     const HOUR: i64 = 60 * 60;
 
@@ -131,25 +155,78 @@ mod tests {
         assert_eq!(due.earliest(), t0 + Duration::from_secs(5));
     }
 
+    fn phase_and_change(calendar: &mut Calendar, now: i64) -> (SessionPhase, bool) {
+        let update = calendar.phase(now, false);
+        (update.phase, update.changed)
+    }
+
     #[test]
     fn the_first_phase_is_always_sent() {
         let mut calendar = Calendar::new(vec![]);
-        assert_eq!(calendar.phase(0, false), (SessionPhase::Idle, true));
+        assert_eq!(
+            phase_and_change(&mut calendar, 0),
+            (SessionPhase::Idle, true)
+        );
     }
 
     #[test]
     fn an_unchanged_phase_is_sent_once() {
         let mut calendar = Calendar::new(vec![race(1, 10 * HOUR)]);
-        assert_eq!(calendar.phase(10 * HOUR, false), (SessionPhase::Live, true));
         assert_eq!(
-            calendar.phase(10 * HOUR + 60, false),
+            phase_and_change(&mut calendar, 10 * HOUR),
+            (SessionPhase::Live, true)
+        );
+        assert_eq!(
+            phase_and_change(&mut calendar, 10 * HOUR + 60),
             (SessionPhase::Live, false)
         );
         let after = 12 * HOUR + LIVE_GRACE;
         assert_eq!(
-            calendar.phase(after, false),
+            phase_and_change(&mut calendar, after),
             (SessionPhase::PostSession, true)
         );
+    }
+
+    #[test]
+    fn no_download_just_before_or_during_a_session() {
+        let calendar = Calendar::new(vec![race(1, 10 * HOUR)]);
+        assert!(calendar.may_download(10 * HOUR - PRE_SESSION - 1, false));
+        assert!(!calendar.may_download(10 * HOUR - PRE_SESSION, false));
+        assert!(!calendar.may_download(11 * HOUR, false));
+        let live_ends = 12 * HOUR + LIVE_GRACE;
+        assert!(!calendar.may_download(live_ends - 1, false));
+        assert!(calendar.may_download(live_ends, false));
+    }
+
+    #[test]
+    fn no_download_while_the_feed_says_the_session_overruns() {
+        let calendar = Calendar::new(vec![race(1, 10 * HOUR)]);
+        let live_ends = 12 * HOUR + LIVE_GRACE;
+        assert!(!calendar.may_download(live_ends + 60, true));
+    }
+
+    #[test]
+    fn downloads_work_without_any_sessions() {
+        assert!(Calendar::new(vec![]).may_download(0, false));
+    }
+
+    #[test]
+    fn a_session_is_over_once_when_the_feed_stops_being_wanted() {
+        let mut calendar = Calendar::new(vec![race(1, 10 * HOUR)]);
+        let mut over = |now| calendar.phase(now, false).session_over;
+        assert!(!over(0));
+        assert!(!over(10 * HOUR - PRE_SESSION));
+        assert!(!over(11 * HOUR));
+        let live_ends = 12 * HOUR + LIVE_GRACE;
+        assert!(over(live_ends));
+        assert!(!over(live_ends + 60));
+    }
+
+    #[test]
+    fn a_boot_after_a_session_is_not_a_session_ending() {
+        let mut calendar = Calendar::new(vec![race(1, 10 * HOUR)]);
+        let after = 12 * HOUR + LIVE_GRACE;
+        assert!(!calendar.phase(after, false).session_over);
     }
 
     #[test]

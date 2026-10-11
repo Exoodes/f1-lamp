@@ -251,7 +251,8 @@ With `$env:F1TV_TOKEN` set, the probe sends the token as well.
   the PC first.
 - **OpenF1** (`api.openf1.org`): the session calendar, and the winner as a
   fallback after a reboot. Its free tier is closed during live sessions, so
-  the calendar is fetched ahead and kept in flash.
+  the calendar is fetched ahead, kept in flash, and not fetched from 30
+  minutes before a session until it ends (then once straight away).
 
 This is a personal project, not affiliated with Formula 1. F1, Formula 1 and
 F1TV are trademarks of Formula One Licensing B.V.
