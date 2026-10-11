@@ -459,8 +459,15 @@ impl Controller {
     /// What the web page shows. Call after `render`, which ticks, so expired
     /// overlays and winners are not reported.
     pub fn snapshot(&self) -> Snapshot {
+        let (layer, scene) = self.arbitrate();
+        let color = if layer == "lamp" {
+            Some(self.layers.settings.lamp_color)
+        } else {
+            scene.effect.main_color()
+        };
         Snapshot {
-            layer: self.arbitrate().0,
+            layer,
+            color,
             phase: self.layers.phase,
             net: self.net_status().value,
             override_active: self.layers.override_effect.is_some(),

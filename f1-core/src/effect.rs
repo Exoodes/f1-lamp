@@ -97,6 +97,21 @@ impl Effect {
         }
     }
 
+    /// The one colour the effect shows, for the web page; `None` for the
+    /// chequered flag, which is a pattern rather than a colour.
+    pub fn main_color(&self) -> Option<Rgb> {
+        match self {
+            Effect::Solid(color)
+            | Effect::Blink { color, .. }
+            | Effect::Chase { color, .. }
+            | Effect::Breathe { color, .. }
+            | Effect::Fade { color, .. }
+            | Effect::Quickening { color, .. } => Some(*color),
+            Effect::StartLights { .. } => Some(Rgb::RED),
+            Effect::Chequered { .. } => None,
+        }
+    }
+
     pub fn duration(&self) -> Option<Duration> {
         match self {
             Effect::Solid(_) => None,
@@ -741,5 +756,16 @@ mod tests {
         for ms in [0, 500, 1000, 1500, 6000] {
             assert_eq!(level(even, ms), level(breathe, ms), "{ms}");
         }
+    }
+
+    #[test]
+    fn the_main_colour_is_the_effects_colour() {
+        assert_eq!(Effect::Solid(Rgb::GREEN).main_color(), Some(Rgb::GREEN));
+        assert_eq!(QUICKENING.main_color(), Some(Rgb::WHITE));
+        assert_eq!(
+            Effect::StartLights { hold_ms: 2000 }.main_color(),
+            Some(Rgb::RED)
+        );
+        assert_eq!(Effect::Chequered { duration_ms: 1 }.main_color(), None);
     }
 }

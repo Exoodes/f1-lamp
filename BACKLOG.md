@@ -18,12 +18,15 @@ Ideas for after the course, in no particular order of size.
   `pole_after_last_laps`, at most `LAST_LAPS_MAX` after the flag); the same
   check can end Q1 and Q2. To decide: the same look as the winner or one of
   its own, and whether the winner's on/off setting covers it.
-- **The web page's panel in the colour the lamp shows.** `GET /api/state`
-  only names the winning layer ("live track", "status", "winner"…), not its
-  colour (`f1-core/src/snapshot.rs`), so the "lamp is showing" panel is
-  always lit in the lamp colour, even during a yellow flag. A `color` field
-  in `Snapshot` (the scene's main colour, `null` for effects with no single
-  one, like the chequered flag) would let the page light the panel in it.
+- **The panel animated like the lamp.** Today it only takes the shown
+  colour. `GET /api/state` could also send which effect shows, its settings
+  and how long ago it started (e.g. breathe, yellow, 3 s a breath, started
+  1.2 s ago), and the page play it with CSS/JS: the safety car's chase could
+  run across the panel's dot grid. About 1-2 h. The page asks every 2 s, so
+  short flashes (pit stop, fastest lap: under a second) would often be
+  missed; to show those too, either ask a small dedicated endpoint every
+  ~250 ms, or have the lamp keep the effects started in the last few seconds
+  for the page to play a little late (about half a day with this part).
 
 ## Later
 

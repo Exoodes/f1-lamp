@@ -5,6 +5,7 @@ use std::time::Instant;
 use serde::Serialize;
 
 use crate::{
+    color::Rgb,
     input::{NetStatus, SessionPhase},
     settings::Settings,
     tv_timing::TvView,
@@ -13,6 +14,10 @@ use crate::{
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct Snapshot {
     pub layer: &'static str,
+    /// The colour the lamp shows (`"#ffd100"`), for the page's panel; `null`
+    /// for the chequered flag, a pattern. The lamp's own colour unscaled, so
+    /// a dim lamp still lights the panel.
+    pub color: Option<Rgb>,
     pub phase: SessionPhase,
     pub net: NetStatus,
     pub override_active: bool,
@@ -131,7 +136,14 @@ mod tests {
         keys.sort_unstable();
         assert_eq!(
             keys,
-            ["layer", "net", "override_active", "phase", "settings"]
+            [
+                "color",
+                "layer",
+                "net",
+                "override_active",
+                "phase",
+                "settings"
+            ]
         );
     }
 
@@ -174,5 +186,41 @@ mod tests {
             "{json}"
         );
         assert!(json.contains(r#""layer":"#), "{json}");
+    }
+
+    #[test]
+    fn the_snapshot_has_the_colour_shown() {
+        use crate::input::{RaceEvent, TrackFlag};
+        let online = Input::Net(crate::input::NetStatus::Online);
+        let now = Instant::now();
+        let yellow = Input::Race {
+            event: RaceEvent::TrackFlag(TrackFlag::Yellow),
+            received: now,
+        };
+        let live = Input::Phase(SessionPhase::Live);
+        assert_eq!(
+            snapshot_after(&[online, live, yellow]).color,
+            Some(Rgb::YELLOW)
+        );
+        // An overlay starts on the next tick.
+        let mut c = Controller::new(now);
+        c.apply(online, now);
+        c.apply(Input::Preview(RaceEvent::ChequeredFlag), now);
+        c.tick(now);
+        assert_eq!(c.snapshot().layer, "overlay");
+        assert_eq!(c.snapshot().color, None);
+    }
+
+    #[test]
+    fn the_lamp_colour_is_sent_at_full_strength() {
+        let online = Input::Net(crate::input::NetStatus::Online);
+        let settings = Settings {
+            lamp_color: Rgb::new(0, 200, 100),
+            lamp_brightness: 0.1,
+            ..Settings::default()
+        };
+        let snap = snapshot_after(&[online, Input::Settings(settings)]);
+        assert_eq!(snap.layer, "lamp");
+        assert_eq!(snap.color, Some(Rgb::new(0, 200, 100)));
     }
 }

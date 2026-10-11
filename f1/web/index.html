@@ -113,8 +113,8 @@
   .hero-layer {
     position: relative; margin: 0; padding: 14px 12px 12px; border-radius: 4px;
     font: 700 clamp(2.8rem, 13vw, 3.6rem)/1 var(--tight); letter-spacing: .02em;
-    overflow-wrap: anywhere; color: var(--accent);
-    text-shadow: 0 0 14px color-mix(in srgb, var(--accent) 55%, transparent);
+    overflow-wrap: anywhere; color: var(--shown, var(--accent));
+    text-shadow: 0 0 14px color-mix(in srgb, var(--shown, var(--accent)) 55%, transparent);
     /* The unlit dots behind the word. */
     background: radial-gradient(circle, var(--led-off) 1.3px, transparent 1.7px) 0 0 / 4px 4px;
   }
@@ -621,12 +621,24 @@ function showPercent(id) {
 // The page's accent is the lamp colour. A very dark colour is lifted towards
 // white so it stays visible, and text on it is black or white, whichever reads.
 function setAccent(hex) {
+  const { css, light } = lifted(hex);
+  const root = document.documentElement.style;
+  root.setProperty("--accent", css);
+  root.setProperty("--on-accent", light > 0.55 ? "#1c1c1a" : "#fff");
+}
+
+// "#0000ff" -> the CSS colour, lifted if very dark, and how light it is.
+function lifted(hex) {
   let [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
   const light = (r, g, b) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
   if (light(r, g, b) < 0.25) [r, g, b] = [r, g, b].map((c) => Math.round(c + (255 - c) * 0.35));
-  const root = document.documentElement.style;
-  root.setProperty("--accent", `rgb(${r}, ${g}, ${b})`);
-  root.setProperty("--on-accent", light(r, g, b) > 0.55 ? "#1c1c1a" : "#fff");
+  return { css: `rgb(${r}, ${g}, ${b})`, light: light(r, g, b) };
+}
+
+// The panel lit in the colour the lamp shows; the chequered flag (no single
+// colour) in white.
+function showPanelColor(color) {
+  $("s-layer").style.setProperty("--shown", color ? lifted(color).css : "var(--text)");
 }
 
 // Device settings (JSON from /api/state) -> form fields.
@@ -703,6 +715,7 @@ function showStatus(state) {
   $("dot").className = "dot on";
   $("link").textContent = "connected";
   $("s-layer").textContent = state.layer;
+  showPanelColor(state.color);
   $("s-phase").textContent = words(state.phase);
   $("s-net").textContent = words(state.net);
   $("s-override").textContent = state.override_active ? "active" : "none";
