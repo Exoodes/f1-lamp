@@ -6,6 +6,22 @@ Ideas for after the course, in no particular order of size.
 
 - **Weekend schedule on the page.** The upcoming sessions with their times and
   a countdown; the lamp already has them from OpenF1.
+- **The Grand Prix name and circuit** on the page and in the log
+  ("Singapore — Race in 2 h 10 min"). OpenF1's sessions carry `location`,
+  `country_name` and `circuit_short_name`; the lamp drops them today. The
+  saved calendar must still fit `schedule::MAX_JSON` (2 KB, 12 sessions).
+- **The weekend's results on the schedule page.** Pole, sprint and race
+  winners next to their sessions, in the team colour; the lamp already asks
+  OpenF1's `session_result` for race winners.
+- **Countdown before a session.** E.g. from 10 minutes before the start the
+  lamp breathes slowly in white, faster towards the start; or a short
+  reminder pulse 1 h and 10 min before qualifying and the race.
+- **Choose which sessions the lamp follows.** A switch per kind (practice,
+  qualifying, sprint qualifying, sprint, race) on the page; e.g. practice off
+  keeps Fridays calm. Today every session is followed.
+- **Say when a session moves.** When a new calendar download changes a
+  session's start, log it and show it on the page ("Qualifying moved to
+  15:30"; Singapore's qualifying moved by half an hour, 2026-10-10).
 - **A "winner" for practice.** E.g. the team colour of the driver with the
   fastest lap when the session ends, like pole after qualifying.
 - **Rework the effects.** Some are too fast (seen again in sprint
@@ -27,8 +43,6 @@ Ideas for after the course, in no particular order of size.
 
 ## Later
 
-- **Countdown before a session.** E.g. from 10 minutes before the start the
-  lamp breathes slowly in white, faster towards the start.
 - **Home Assistant over MQTT.** Written by me: the lamp's state out,
   the web page's commands in.
 
