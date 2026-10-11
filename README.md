@@ -202,7 +202,7 @@ The page uses these, and scripts can too:
 | `POST /api/settings` | All the settings as JSON: get them from `/api/state`, change, send back |
 | `POST /api/override` | `{"kind":"flag","flag":"red"}`, `{"kind":"color","color":"#ff8800"}` or `{"kind":"release"}`; or plays one effect at once: `{"kind":"event","event":"pit_stop","team":"mclaren"}` (`start_lights`, `chequered_flag`, `last_lap`, `fastest_lap`, `pit_stop`, `overtake`, `winner`, `knocked_out`; teams `alpine`, `aston_martin`, `audi`, `cadillac`, `ferrari`, `haas`, `mclaren`, `mercedes`, `racing_bulls`, `red_bull`, `williams`) |
 | `GET /api/token`, `POST /api/token` | The F1TV token's state; post a token (plain text) to set it, an empty one to remove it |
-| `GET /api/racelog?after=<n>` | The race log's lines after number `n` (all kept lines without it): time, text, colour |
+| `GET /api/racelog?after=<n>` | The race log's lines from number `n` on, where `n` is the last answer's `next` (all kept lines without it): time, text, colour |
 | `GET /api/log?after=<n>` | The log lines after number `n` |
 | `POST /api/ota/nonce` | A one-time nonce (hex) for the next upload, valid for 2 minutes |
 | `POST /api/ota` | A firmware image, with `X-F1-Nonce` and its tag in `X-F1-Auth` (see `cargo ota`) |

@@ -90,7 +90,7 @@ pub struct LogLine {
 #[derive(Debug, PartialEq, Eq, Serialize)]
 pub struct RaceLogPage {
     pub lines: Vec<LogLine>,
-    /// Ask for lines after this next time.
+    /// The number the next line will get: ask from it next time.
     pub next: u64,
 }
 
@@ -121,15 +121,17 @@ impl RaceLog {
         self.next += 1;
     }
 
-    /// The lines after `after`; every line kept for a page that just opened
-    /// (`None`), or one whose number is from before a restart.
-    pub fn since(&self, after: Option<u64>) -> RaceLogPage {
-        let after = after.filter(|&a| a < self.next);
+    /// The lines numbered `from` on, where `from` is the `next` of the
+    /// page's last answer: none when nothing is new. Every line kept for a
+    /// page that just opened (`None`), or one whose number is from before a
+    /// restart (beyond `next`).
+    pub fn since(&self, from: Option<u64>) -> RaceLogPage {
+        let from = from.filter(|&f| f <= self.next);
         RaceLogPage {
             lines: self
                 .lines
                 .iter()
-                .filter(|l| after.is_none_or(|a| l.seq > a))
+                .filter(|l| from.is_none_or(|f| l.seq >= f))
                 .cloned()
                 .collect(),
             next: self.next,
@@ -234,9 +236,28 @@ mod tests {
 
     #[test]
     fn later_asks_get_only_new_lines() {
-        let page = log_with(5).since(Some(2));
+        let page = log_with(5).since(Some(3));
         let seqs: Vec<u64> = page.lines.iter().map(|l| l.seq).collect();
         assert_eq!(seqs, [3, 4]);
+    }
+
+    #[test]
+    fn nothing_new_gets_no_lines() {
+        // Race day 2026-10-11: this sent every line again, every 2 s.
+        let log = log_with(1);
+        let first = log.since(None);
+        assert_eq!(first.lines.len(), 1);
+        assert!(log.since(Some(first.next)).lines.is_empty());
+    }
+
+    #[test]
+    fn the_next_line_is_not_skipped() {
+        let mut log = log_with(1);
+        let next = log.since(None).next;
+        log.push("14:01:00".to_owned(), "Green flag".to_owned(), None);
+        let page = log.since(Some(next));
+        assert_eq!(page.lines.len(), 1);
+        assert_eq!(page.lines[0].text, "Green flag");
     }
 
     #[test]

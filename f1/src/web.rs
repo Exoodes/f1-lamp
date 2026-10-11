@@ -129,7 +129,8 @@ fn page_routes(
         )
     })?;
 
-    // `?after=<n>`: the race log's lines after number n; without it, all.
+    // `?after=<n>`: the race log's lines from number n on (n is the last
+    // answer's `next`); without it, all.
     server.fn_handler::<anyhow::Error, _>("/api/racelog", Method::Get, |req| {
         let after = query_number(req.uri(), "after");
         reply(req, 200, JSON, &serde_json::to_vec(&racelog::page(after))?)
