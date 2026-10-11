@@ -7,6 +7,7 @@ use f1_core::{
     schedule::{
         current_session, next_session, phase_at, Session, SessionKind, LIVE_GRACE, POST_SESSION,
     },
+    settings::SessionToggles,
     weekend::{weekend, SessionState},
 };
 
@@ -116,7 +117,12 @@ fn after_monza_the_next_session_is_madrid_practice_1() {
 #[test]
 fn singapore_race_morning_shows_the_whole_sprint_weekend() {
     // 2026-10-11 08:00 UTC, four hours before the race.
-    let w = weekend(&usable_sessions(dtos()), 1_791_705_600).unwrap();
+    let w = weekend(
+        &usable_sessions(dtos()),
+        1_791_705_600,
+        SessionToggles::default(),
+    )
+    .unwrap();
     assert_eq!(
         (w.country.as_str(), w.circuit.as_str()),
         ("Singapore", "Singapore")

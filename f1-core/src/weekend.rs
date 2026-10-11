@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 
-use crate::schedule::Session;
+use crate::{schedule::Session, settings::SessionToggles};
 
 /// What `GET /api/schedule` answers.
 #[derive(Debug, PartialEq, Serialize)]
@@ -29,6 +29,8 @@ pub struct WeekendSession {
     /// Unix seconds, UTC.
     pub end: i64,
     pub state: SessionState,
+    /// Switched off in the settings: the lamp ignores it.
+    pub followed: bool,
 }
 
 /// By the scheduled times: a session running late still says `Done`.
@@ -46,7 +48,7 @@ pub enum SessionState {
 ///
 /// A session without a weekend (from a calendar saved before weekends were
 /// kept) stands alone; the next download fills them in.
-pub fn weekend(sessions: &[Session], now: i64) -> Option<Weekend> {
+pub fn weekend(sessions: &[Session], now: i64, follow: SessionToggles) -> Option<Weekend> {
     let first = sessions.iter().find(|s| s.end > now)?;
     let same_weekend = |s: &&Session| {
         if first.meeting == 0 {
@@ -66,6 +68,7 @@ pub fn weekend(sessions: &[Session], now: i64) -> Option<Weekend> {
                 start: s.start,
                 end: s.end,
                 state: state(s, now),
+                followed: follow.follows(s.kind),
             })
             .collect(),
     })
@@ -86,6 +89,13 @@ mod tests {
     use super::*;
     use crate::schedule::SessionKind;
 
+    const ALL: SessionToggles = SessionToggles {
+        practice: true,
+        qualifying: true,
+        sprint_qualifying: true,
+        sprint: true,
+        race: true,
+    };
     const HOUR: i64 = 60 * 60;
     const DAY: i64 = 24 * HOUR;
 
@@ -131,7 +141,7 @@ mod tests {
 
     #[test]
     fn before_the_weekend_every_session_is_coming() {
-        let w = weekend(&calendar(), -DAY).unwrap();
+        let w = weekend(&calendar(), -DAY, ALL).unwrap();
         assert_eq!(
             (w.country.as_str(), w.circuit.as_str()),
             ("Singapore", "Singapore")
@@ -148,7 +158,7 @@ mod tests {
 
     #[test]
     fn during_the_weekend_finished_and_live_sessions_show_too() {
-        let w = weekend(&calendar(), DAY + HOUR / 2).unwrap();
+        let w = weekend(&calendar(), DAY + HOUR / 2, ALL).unwrap();
         assert_eq!(
             names_and_states(&w),
             [
@@ -162,7 +172,7 @@ mod tests {
     #[test]
     fn a_session_is_live_from_its_start_until_its_end() {
         let race = 2 * DAY;
-        let state_at = |now| weekend(&calendar(), now).unwrap().sessions[2].state;
+        let state_at = |now| weekend(&calendar(), now, ALL).unwrap().sessions[2].state;
         assert_eq!(state_at(race - 1), SessionState::Coming);
         assert_eq!(state_at(race), SessionState::Live);
         assert_eq!(state_at(race + HOUR - 1), SessionState::Live);
@@ -170,15 +180,15 @@ mod tests {
 
     #[test]
     fn after_the_race_the_next_weekend_shows() {
-        let w = weekend(&calendar(), 2 * DAY + HOUR).unwrap();
+        let w = weekend(&calendar(), 2 * DAY + HOUR, ALL).unwrap();
         assert_eq!(w.circuit, "Austin");
         assert_eq!(w.sessions.len(), 2);
     }
 
     #[test]
     fn nothing_when_no_session_is_coming() {
-        assert_eq!(weekend(&calendar(), 17 * DAY), None);
-        assert_eq!(weekend(&[], 0), None);
+        assert_eq!(weekend(&calendar(), 17 * DAY, ALL), None);
+        assert_eq!(weekend(&[], 0, ALL), None);
     }
 
     #[test]
@@ -187,20 +197,31 @@ mod tests {
             Session::new(1, SessionKind::Qualifying, DAY, DAY + HOUR),
             Session::new(2, SessionKind::Race, 2 * DAY, 2 * DAY + HOUR),
         ];
-        let w = weekend(&old, 0).unwrap();
+        let w = weekend(&old, 0, ALL).unwrap();
         assert_eq!(names_and_states(&w), [("Qualifying", SessionState::Coming)]);
         assert_eq!(w.country, "");
+    }
+
+    #[test]
+    fn sessions_switched_off_show_as_not_followed() {
+        let follow = SessionToggles {
+            practice: false,
+            ..ALL
+        };
+        let w = weekend(&calendar(), -DAY, follow).unwrap();
+        let followed: Vec<bool> = w.sessions.iter().map(|s| s.followed).collect();
+        assert_eq!(followed, [false, true, true]);
     }
 
     #[test]
     fn the_reply_reads_as_the_page_expects() {
         let reply = ScheduleReply {
             now: Some(10),
-            weekend: weekend(&calendar()[2..3], 0),
+            weekend: weekend(&calendar()[2..3], 0, ALL),
         };
         assert_eq!(
             serde_json::to_string(&reply).unwrap(),
-            r#"{"now":10,"weekend":{"country":"Singapore","circuit":"Singapore","sessions":[{"name":"Race","start":172800,"end":176400,"state":"coming"}]}}"#
+            r#"{"now":10,"weekend":{"country":"Singapore","circuit":"Singapore","sessions":[{"name":"Race","start":172800,"end":176400,"state":"coming","followed":true}]}}"#
         );
     }
 }

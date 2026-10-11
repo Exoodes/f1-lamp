@@ -32,9 +32,9 @@ Rust: the course*, with some extras of its own.
 | Overtake | one flash in the team colour (followed drivers, needs F1TV) |
 | No network | breathing blue (WiFi connecting) or blinking red (the live feed failed 3 times in a row), only around a session |
 
-Practice, qualifying, sprint and race are all followed. A TV delay setting
-holds everything back so the lamp changes when your TV does, not when the
-feed does.
+Practice, qualifying, sprint and race are all followed; each kind can be
+switched off on the page. A TV delay setting holds everything back so the
+lamp changes when your TV does, not when the feed does.
 
 ## Hardware
 
@@ -169,7 +169,8 @@ only the lines the lamp uses, so a whole race fits in the firmware.
   one, and which are done or live;
 - lamp colour and brightness, night mode (in Central European time), TV
   delay, how long green and the winner show;
-- which events show, and the followed drivers (or all of them);
+- which events show, which kinds of session the lamp follows, and the
+  followed drivers (or all of them);
 - forcing a flag or a colour by hand, and trying any effect once;
 - the F1TV token (see below);
 - in replay builds, the replay controls;

@@ -7,9 +7,6 @@ Ideas for after the course, in no particular order of size.
 - **The weekend's results on the schedule page.** Pole, sprint and race
   winners next to their sessions, in the team colour; the lamp already asks
   OpenF1's `session_result` for race winners.
-- **Choose which sessions the lamp follows.** A switch per kind (practice,
-  qualifying, sprint qualifying, sprint, race) on the page; e.g. practice off
-  keeps Fridays calm. Today every session is followed.
 - **Say when a session moves.** When a new calendar download changes a
   session's start, log it and show it on the page ("Qualifying moved to
   15:30"; Singapore's qualifying moved by half an hour, 2026-10-10).

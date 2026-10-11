@@ -98,6 +98,7 @@ fn page_routes(
         reply(req, 200, HTML, INDEX_HTML.as_bytes())
     })?;
 
+    let follow_from = Arc::clone(&snapshot);
     server.fn_handler::<anyhow::Error, _>("/api/state", Method::Get, move |req| {
         // Copied out, so the lock is released before serialising.
         let state = *snapshot.lock().unwrap();
@@ -106,7 +107,8 @@ fn page_routes(
 
     server.fn_handler::<anyhow::Error, _>("/api/schedule", Method::Get, move |req| {
         let now = clock::unix_now();
-        let weekend = now.and_then(|now| weekend(&schedule.lock().unwrap(), now));
+        let follow = follow_from.lock().unwrap().settings.sessions;
+        let weekend = now.and_then(|now| weekend(&schedule.lock().unwrap(), now, follow));
         reply(
             req,
             200,

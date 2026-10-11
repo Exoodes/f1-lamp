@@ -130,6 +130,7 @@
   .sessions .done .name { text-decoration: line-through; }
   .sessions .live .state { color: var(--accent); font-weight: 600; }
   .sessions .next .state { font-weight: 600; }
+  .sessions .off { color: var(--muted); }
 
   /* ---- Controls ---- */
   button {
@@ -414,6 +415,16 @@
     </section>
 
     <section class="settings">
+      <h2>Sessions</h2>
+      <p class="hint">The lamp ignores sessions switched off here: no countdown, no flags, no winner.</p>
+      <label>Practice <input type="checkbox" id="ses_practice"></label>
+      <label>Sprint qualifying <input type="checkbox" id="ses_sprint_qualifying"></label>
+      <label>Sprint <input type="checkbox" id="ses_sprint"></label>
+      <label>Qualifying <input type="checkbox" id="ses_qualifying"></label>
+      <label>Race <input type="checkbox" id="ses_race"></label>
+    </section>
+
+    <section class="settings">
       <h2>Drivers</h2>
       <p class="hint">Pit stops and overtakes flash only for these drivers.</p>
       <label>Followed drivers <input type="text" id="followed_drivers" inputmode="numeric" placeholder="e.g. 1, 44, 63"></label>
@@ -457,6 +468,8 @@ const $ = (id) => document.getElementById(id);
 
 const SLIDERS = ["lamp_brightness", "global_brightness", "night_brightness"];
 // The device's effect switches; each has a checkbox with id "fx_<name>".
+// The kinds of session; each has a checkbox with id "ses_<name>".
+const SESSIONS = ["practice", "qualifying", "sprint_qualifying", "sprint", "race"];
 const EFFECTS = ["start_lights", "chequered_flag", "fastest_lap", "winner", "pit_stop", "overtake", "knocked_out", "last_lap", "countdown"];
 
 // ---- Converting between what the page shows and what the device stores ----
@@ -521,6 +534,7 @@ function fillForm(s) {
   $("night_start").value = fromMinutes(s.night_start);
   $("night_end").value = fromMinutes(s.night_end);
   for (const name of EFFECTS) $("fx_" + name).checked = s.effects[name];
+  for (const name of SESSIONS) $("ses_" + name).checked = s.sessions[name];
 }
 
 // Form fields -> the full settings object the device expects.
@@ -535,9 +549,11 @@ function readForm() {
     night_start: toMinutes($("night_start").value),
     night_end: toMinutes($("night_end").value),
     effects: {},
+    sessions: {},
   };
   for (const id of SLIDERS) s[id] = Number($(id).value) / 100;
   for (const name of EFFECTS) s.effects[name] = $("fx_" + name).checked;
+  for (const name of SESSIONS) s.sessions[name] = $("ses_" + name).checked;
   return s;
 }
 
@@ -712,17 +728,17 @@ function showWeekend() {
   for (const s of weekend.sessions) {
     // Worked out again here: the reply can be up to a minute old.
     const state = now >= s.end ? "done" : now >= s.start ? "live" : "coming";
-    const isNext = state === "coming" && !nextShown;
+    const isNext = state === "coming" && s.followed && !nextShown;
     nextShown ||= isNext;
     const li = document.createElement("li");
-    li.className = isNext ? "next" : state;
+    li.className = !s.followed && state !== "done" ? "off" : isNext ? "next" : state;
     const name = document.createElement("span");
     name.className = "name";
     name.textContent = s.name;
     const status = document.createElement("span");
     status.className = "state";
-    status.textContent = state === "done" ? "done" : state === "live" ? "live"
-      : isNext ? "in " + countdown(Math.floor(s.start - now)) : "";
+    status.textContent = state === "done" ? "done" : !s.followed ? "not followed"
+      : state === "live" ? "live" : isNext ? "in " + countdown(Math.floor(s.start - now)) : "";
     const time = document.createElement("span");
     time.className = "when";
     time.textContent = when(s.start);

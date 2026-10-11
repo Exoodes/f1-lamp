@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use crate::{
     input::SessionPhase,
     schedule::{self, Session, CACHED_SESSIONS},
+    settings::SessionToggles,
 };
 
 /// When each of the network thread's jobs is next due.
@@ -63,6 +64,10 @@ pub struct Calendar {
     sessions: Vec<Session>,
     saved: Vec<Session>,
     sent_phase: Option<SessionPhase>,
+    follow: SessionToggles,
+    /// The sessions of the kinds in `follow`: those decide the phase, the
+    /// countdown and the winner.
+    followed: Vec<Session>,
 }
 
 impl Calendar {
@@ -71,13 +76,38 @@ impl Calendar {
     pub fn new(saved: Vec<Session>) -> Self {
         Calendar {
             sessions: saved.clone(),
+            followed: saved.clone(),
             saved,
             sent_phase: None,
+            follow: SessionToggles::default(),
         }
     }
 
+    /// Every session downloaded or saved.
     pub fn sessions(&self) -> &[Session] {
         &self.sessions
+    }
+
+    /// The sessions of the kinds followed.
+    pub fn followed(&self) -> &[Session] {
+        &self.followed
+    }
+
+    /// Follows only the kinds of session switched on in `follow`.
+    pub fn follow(&mut self, follow: SessionToggles) {
+        if follow != self.follow {
+            self.follow = follow;
+            self.refilter();
+        }
+    }
+
+    fn refilter(&mut self) {
+        self.followed = self
+            .sessions
+            .iter()
+            .filter(|s| self.follow.follows(s.kind))
+            .cloned()
+            .collect();
     }
 
     /// Swaps in a freshly downloaded list. Returns the part of it that still
@@ -86,6 +116,7 @@ impl Calendar {
     pub fn replace(&mut self, sessions: Vec<Session>, now_unix: i64) -> Option<Vec<Session>> {
         let relevant = schedule::still_relevant(&sessions, now_unix, CACHED_SESSIONS);
         self.sessions = sessions;
+        self.refilter();
         (relevant != self.saved).then_some(relevant)
     }
 
@@ -96,7 +127,7 @@ impl Calendar {
 
     /// The phase at `now_unix`, compared with the one last returned.
     pub fn phase(&mut self, now_unix: i64, feed_running: bool) -> PhaseUpdate {
-        let phase = schedule::phase_at(&self.sessions, now_unix, feed_running);
+        let phase = schedule::phase_at(&self.followed, now_unix, feed_running);
         let before = self.sent_phase.replace(phase);
         PhaseUpdate {
             phase,
@@ -110,7 +141,8 @@ impl Calendar {
     /// or during a session, when OpenF1 refuses free requests anyway
     /// (HTTP 401, "Live F1 session in progress") and each try would cost a
     /// TLS handshake next to the open feed. Worked out afresh, so it holds
-    /// right after a boot too, before any phase was sent.
+    /// right after a boot too, before any phase was sent. Every session
+    /// counts here, followed or not: OpenF1 refuses during all of them.
     pub fn may_download(&self, now_unix: i64, feed_running: bool) -> bool {
         let phase = schedule::phase_at(&self.sessions, now_unix, feed_running);
         !schedule::feed_wanted(phase)
@@ -280,6 +312,50 @@ mod tests {
             Some(now - Duration::from_secs(60))
         );
         assert_eq!(instant_at(now, 5000, 5000), Some(now));
+    }
+
+    fn practice(key: u32, start: i64) -> Session {
+        Session::new(key, SessionKind::Practice, start, start + HOUR)
+    }
+
+    fn no_practice() -> SessionToggles {
+        SessionToggles {
+            practice: false,
+            ..SessionToggles::default()
+        }
+    }
+
+    #[test]
+    fn a_session_not_followed_leaves_the_lamp_idle() {
+        let mut calendar = Calendar::new(vec![practice(1, 10 * HOUR)]);
+        calendar.follow(no_practice());
+        assert_eq!(calendar.phase(10 * HOUR, false).phase, SessionPhase::Idle);
+        assert!(calendar.followed().is_empty());
+        assert_eq!(calendar.sessions().len(), 1);
+    }
+
+    #[test]
+    fn switching_a_kind_back_on_follows_it_again() {
+        let mut calendar = Calendar::new(vec![practice(1, 10 * HOUR)]);
+        calendar.follow(no_practice());
+        calendar.follow(SessionToggles::default());
+        assert_eq!(calendar.phase(10 * HOUR, false).phase, SessionPhase::Live);
+    }
+
+    #[test]
+    fn a_new_download_keeps_what_is_followed() {
+        let mut calendar = Calendar::new(vec![]);
+        calendar.follow(no_practice());
+        calendar.replace(vec![practice(1, 10 * HOUR), race(2, 30 * HOUR)], 0);
+        let keys: Vec<u32> = calendar.followed().iter().map(|s| s.key).collect();
+        assert_eq!(keys, [2]);
+    }
+
+    #[test]
+    fn no_download_during_a_session_even_when_not_followed() {
+        let mut calendar = Calendar::new(vec![practice(1, 10 * HOUR)]);
+        calendar.follow(no_practice());
+        assert!(!calendar.may_download(10 * HOUR, false));
     }
 
     #[test]

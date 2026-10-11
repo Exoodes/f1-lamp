@@ -142,7 +142,7 @@ impl Schedule {
         if update.changed && !cfg!(feature = "player") {
             tx.send(Input::Phase(update.phase))
                 .context("render loop is gone")?;
-            log_phase(self.calendar.sessions(), now_unix, feed_running);
+            log_phase(self.calendar.followed(), now_unix, feed_running);
         }
         Ok(update)
     }
@@ -371,7 +371,7 @@ impl<'a> Net<'a> {
         match fetch_calendar(unix) {
             Ok(sessions) => {
                 self.schedule.replace(sessions, unix);
-                log_calendar(self.schedule.calendar.sessions(), unix);
+                log_calendar(self.schedule.calendar.followed(), unix);
                 // Work out the phase straight away with the new list.
                 self.due.phase = now;
                 self.calendar_retry.reset();
@@ -393,6 +393,9 @@ impl<'a> Net<'a> {
             return Ok(now + PHASE_WAITING_EVERY);
         };
         let feed_running = self.shared.live.feed_running();
+        // From the page's settings, through the render loop's snapshot.
+        let follow = self.shared.snapshot.lock().unwrap().settings.sessions;
+        self.schedule.calendar.follow(follow);
         let update = self.schedule.update_phase(unix, feed_running, self.tx)?;
         self.shared
             .live
@@ -412,7 +415,7 @@ impl<'a> Net<'a> {
     /// Tells the render loop when the next session starts, for the
     /// countdown, each time that changes.
     fn send_next_start(&mut self, now: Instant, unix: i64) -> anyhow::Result<()> {
-        let target = schedule::countdown_target(self.schedule.calendar.sessions(), unix)
+        let target = schedule::countdown_target(self.schedule.calendar.followed(), unix)
             .map(|s| (s.key, s.start));
         if target == self.countdown_sent {
             return Ok(());
@@ -429,7 +432,7 @@ impl<'a> Net<'a> {
     fn look_for_winner(&mut self) -> anyhow::Result<()> {
         if let (Some(unix), true) = (clock::unix_now(), self.wifi_up()) {
             check_winner(
-                self.schedule.calendar.sessions(),
+                self.schedule.calendar.followed(),
                 unix,
                 &mut self.winner_sent,
                 &self.shared.live,

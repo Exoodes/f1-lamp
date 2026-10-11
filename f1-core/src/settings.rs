@@ -6,7 +6,7 @@ use core::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{color::Rgb, drivers::DriverSet, input::RaceEvent, theme::LAMP};
+use crate::{color::Rgb, drivers::DriverSet, input::RaceEvent, schedule::SessionKind, theme::LAMP};
 
 /// The most bytes the settings JSON may take. The firmware reads saved
 /// settings into a buffer this big; a longer entry can't be read and the lamp
@@ -58,6 +58,45 @@ pub struct Settings {
     pub green_display_ms: u32,
     /// Which race events the lamp shows.
     pub effects: EffectToggles,
+    /// Which kinds of session the lamp follows.
+    pub sessions: SessionToggles,
+}
+
+/// One switch per kind of session, all on by default. A session switched
+/// off is as if it weren't in the calendar: no countdown, no live feed, no
+/// winner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionToggles {
+    pub practice: bool,
+    pub qualifying: bool,
+    pub sprint_qualifying: bool,
+    pub sprint: bool,
+    pub race: bool,
+}
+
+impl Default for SessionToggles {
+    fn default() -> Self {
+        Self {
+            practice: true,
+            qualifying: true,
+            sprint_qualifying: true,
+            sprint: true,
+            race: true,
+        }
+    }
+}
+
+impl SessionToggles {
+    pub fn follows(self, kind: SessionKind) -> bool {
+        match kind {
+            SessionKind::Practice => self.practice,
+            SessionKind::Qualifying => self.qualifying,
+            SessionKind::SprintQualifying => self.sprint_qualifying,
+            SessionKind::Sprint => self.sprint,
+            SessionKind::Race => self.race,
+        }
+    }
 }
 
 /// One switch per kind of race event, all on by default. Track flags aren't
@@ -190,6 +229,7 @@ impl Default for Settings {
             winner_display_ms: 60000,
             green_display_ms: 10_000,
             effects: EffectToggles::default(),
+            sessions: SessionToggles::default(),
         }
     }
 }
@@ -222,6 +262,10 @@ mod tests {
                 fastest_lap: false,
                 overtake: false,
                 ..EffectToggles::default()
+            },
+            sessions: SessionToggles {
+                practice: false,
+                ..SessionToggles::default()
             },
         };
         let json = serde_json::to_string(&settings).unwrap();
@@ -325,6 +369,13 @@ mod tests {
                 last_lap: false,
                 countdown: false,
             },
+            sessions: SessionToggles {
+                practice: false,
+                qualifying: false,
+                sprint_qualifying: false,
+                sprint: false,
+                race: false,
+            },
         };
         let json = serde_json::to_string(&settings).unwrap();
         assert!(json.len() < MAX_JSON, "{} bytes: {json}", json.len());
@@ -353,6 +404,32 @@ mod tests {
         let settings: Settings = serde_json::from_str(json).unwrap();
         assert!(settings.effects.last_lap);
         assert!(!settings.effects.chequered_flag);
+    }
+
+    #[test]
+    fn settings_saved_before_session_switches_follow_every_session() {
+        let settings: Settings = serde_json::from_str(r#"{"tv_delay_ms":500}"#).unwrap();
+        assert_eq!(settings.sessions, SessionToggles::default());
+    }
+
+    #[test]
+    fn each_session_switch_covers_its_own_kind() {
+        let practice_off = SessionToggles {
+            practice: false,
+            ..SessionToggles::default()
+        };
+        assert!(!practice_off.follows(SessionKind::Practice));
+        for kind in [
+            SessionKind::Qualifying,
+            SessionKind::SprintQualifying,
+            SessionKind::Sprint,
+            SessionKind::Race,
+        ] {
+            assert!(practice_off.follows(kind), "{kind:?}");
+        }
+        let sprint_off: SessionToggles = serde_json::from_str(r#"{"sprint":false}"#).unwrap();
+        assert!(!sprint_off.follows(SessionKind::Sprint));
+        assert!(sprint_off.follows(SessionKind::Race));
     }
 
     #[test]
