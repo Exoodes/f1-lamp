@@ -5,20 +5,28 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>F1 Lightbox</title>
 <!-- Inline icon, so the browser doesn't ask the server for /favicon.ico. -->
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%23e10600'/></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3'/><g fill='%23ebe9e3'><circle cx='4' cy='8' r='1.5'/><circle cx='8' cy='8' r='1.5'/><circle cx='12' cy='8' r='1.5'/></g></svg>">
 <style>
   /* Colours used everywhere, defined once. --accent follows the lamp colour
      (set from the script); the flag colours only appear where they mean a flag. */
   :root {
-    --bg: #25272b; --panel: #303338; --well: #1f2124; --line: #45484f;
-    --text: #ecece6; --muted: #9ca1a8;
+    --bg: #232529;          /* asphalt: the page */
+    --well: #2f3237;        /* pit wall: inputs, buttons */
+    --line: #3e4147;        /* hairlines between rows */
+    --housing: #000;        /* the marshal panel's body, nothing else */
+    --led-off: #1a1c1f;     /* an unlit dot on the panel */
+    --text: #ebe9e3;        /* white line paint */
+    --muted: #8e939a;       /* gantry grey */
     --accent: #e10600; --on-accent: #fff;
     --green: #00a651; --yellow: #ffd100; --orange: #ff9100; --red: #e10600;
     --err: #ff6b6b; --warn: #ffd100;
     /* No web fonts: the page must work with only the lamp reachable.
-       DIN-style condensed faces that ship with Windows / Apple / Android. */
+       DIN-style condensed faces that ship with Windows / Apple / Android
+       ("sans-serif-condensed" is Android's Roboto Condensed). */
     --display: "Bahnschrift SemiCondensed", "Bahnschrift", "DIN Condensed", "DIN Alternate",
-               "Roboto Condensed", "Arial Narrow", sans-serif;
+               "sans-serif-condensed", "Roboto Condensed", "Arial Narrow", sans-serif;
+    --tight: "Bahnschrift Condensed", "DIN Condensed", "sans-serif-condensed",
+             "Roboto Condensed", "Arial Narrow", sans-serif;
     --body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
     color-scheme: dark;
@@ -28,20 +36,16 @@
     margin: 0; background: var(--bg); color: var(--text);
     font: 1rem/1.45 var(--body);
   }
-  h1, h2, .tab, .hero-layer, .flag { font-family: var(--display); }
+  h1, h2, .tab, .flag, .tries button, .nudges button { font-family: var(--display); }
   :focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 
   /* ---- Top bar: name, connection (always visible) ---- */
   .top {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    max-width: 1120px; margin: 0 auto; padding: 14px 16px 10px;
+    max-width: 1120px; margin: 0 auto; padding: 14px 16px 8px;
   }
-  h1 { margin: 0; font-size: 1.5rem; font-weight: 600; letter-spacing: .01em; }
-  h1::before {
-    content: ""; display: inline-block; width: .55em; height: .55em; margin-right: .4em;
-    border-radius: 2px; background: var(--accent); vertical-align: .08em;
-  }
-  .conn { margin: 0; font-size: .875rem; color: var(--muted); text-align: right; }
+  h1 { margin: 0; font: 600 1.5rem/1 var(--tight); letter-spacing: .01em; }
+  .conn { margin: 0; font-size: .875rem; color: var(--muted); text-align: right; line-height: 1.3; }
   .host { display: block; font-size: .75rem; }
   .dot {
     display: inline-block; width: .55rem; height: .55rem; border-radius: 50%;
@@ -63,8 +67,9 @@
     margin: 0 -16px 16px; padding: 0 8px;
   }
   .tab {
-    flex: 1; padding: 12px 4px 10px; margin-bottom: -1px; border: 0; border-bottom: 3px solid transparent;
-    background: none; color: var(--muted); font-size: 1.05rem; cursor: pointer;
+    flex: 1; min-height: 44px; padding: 12px 4px 9px; margin-bottom: -1px;
+    border: 0; border-bottom: 3px solid transparent; border-radius: 0;
+    background: none; color: var(--muted); font-size: 1.1rem; cursor: pointer;
   }
   .tab:hover { color: var(--text); }
   .tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
@@ -73,87 +78,136 @@
 
   @media (min-width: 960px) {
     .layout {
-      grid-template-columns: 400px minmax(0, 1fr); column-gap: 32px;
+      grid-template-columns: 400px minmax(0, 1fr); column-gap: 48px;
       /* The tab bar keeps its height; a short tab next to the taller race
          panel leaves the extra space below it, not in the tab bar. */
       grid-template-rows: auto 1fr;
       grid-template-areas: "race tabs" "race panel";
     }
-    .tabs { margin: 0 0 16px; padding: 0; justify-content: flex-start; }
-    .tab { flex: 0 0 auto; padding: 12px 18px 10px; }
+    .tabs { margin: 0 0 20px; padding: 0; justify-content: flex-start; }
+    .tab { flex: 0 0 auto; padding: 12px 18px 9px; }
     .tab[data-tab="race"] { display: none; }
     #tab-race { display: block; grid-area: race; align-self: start; position: sticky; top: 16px; }
     main.layout { padding-top: 6px; }
   }
 
-  /* ---- Blocks and headings ---- */
-  section { background: var(--panel); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
-  h2 { margin: 0 0 10px; font-size: 1.2rem; font-weight: 600; }
-  .note, .hint { color: var(--muted); font-size: .85rem; margin: 0 0 12px; max-width: 60ch; }
+  /* ---- Blocks and headings: no cards; type size and space give the order.
+     Only the marshal panel is a solid object. ---- */
+  section { margin: 0 0 32px; }
+  h2 { margin: 0 0 8px; font-size: 1.25rem; font-weight: 600; line-height: 1.2; }
+  .note, .hint { color: var(--muted); font-size: .85rem; margin: 8px 0 12px; max-width: 60ch; }
   .note { margin: 0 0 16px; }
   .msg { min-height: 1.2em; margin: 10px 0 0; color: var(--muted); font-size: .875rem; }
   .msg:empty { display: none; }
   .msg.err { color: var(--err); }
   code { font-family: var(--mono); font-size: .85em; }
 
-  /* ---- Now showing: the one loud thing on the page ---- */
-  .hero { position: relative; overflow: hidden; padding: 18px 18px 16px; }
-  .hero::before {
-    content: ""; position: absolute; inset: -40% -20% auto auto; width: 70%; aspect-ratio: 1;
-    background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 45%, transparent), transparent);
-    pointer-events: none;
+  /* ---- The lamp is showing: a marshal light panel, the one loud thing.
+     A black housing; the word is lit in the lamp colour and a fixed grid of
+     dots lies over it, so it reads as LEDs. Nothing moves: cheap to redraw. ---- */
+  .hero {
+    background: var(--housing); border-radius: 12px; padding: 14px 14px 0;
+    margin-bottom: 28px;
   }
-  .hero > * { position: relative; }
-  .hero-label { margin: 0; color: var(--muted); font-size: .875rem; }
+  .hero-label { margin: 0 0 10px; color: var(--muted); font-size: .875rem; }
   .hero-layer {
-    margin: 0 0 14px; font-size: clamp(2.6rem, 11vw, 3.4rem); line-height: 1;
-    font-weight: 700; font-family: "Bahnschrift Condensed", var(--display);
+    position: relative; margin: 0; padding: 14px 12px 12px; border-radius: 4px;
+    font: 700 clamp(2.8rem, 13vw, 3.6rem)/1 var(--tight); letter-spacing: .02em;
+    overflow-wrap: anywhere; color: var(--accent);
+    text-shadow: 0 0 14px color-mix(in srgb, var(--accent) 55%, transparent);
+    /* The unlit dots behind the word. */
+    background: radial-gradient(circle, var(--led-off) 1.3px, transparent 1.7px) 0 0 / 4px 4px;
+  }
+  /* The same grid of holes laid over the word: what shows through is dots. */
+  .hero-layer::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(circle, transparent 1.5px, var(--housing) 1.9px) 0 0 / 4px 4px;
   }
   .hero-layer::first-letter { text-transform: uppercase; }
-  .status { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 0; }
-  .status div { border-top: 1px solid var(--line); padding-top: 6px; }
+  /* The status strip sits on the panel's lower edge. */
+  .status { display: grid; grid-template-columns: repeat(3, 1fr); margin: 0; }
   .status dt { color: var(--muted); font-size: .75rem; }
   .status dd { margin: 0; font-weight: 600; }
   .status dd::first-letter { text-transform: uppercase; }
-  body.offline .hero-layer, body.offline .status dd { opacity: .4; }
+  .hero .status { margin: 12px -14px 0; border-top: 1px solid var(--led-off); }
+  .hero .status div { padding: 8px 14px 10px; }
+  .hero .status div + div { border-left: 1px solid var(--led-off); }
+  /* A forced flag or colour: a white bar across the panel's foot, there only
+     while it lasts (the script disables the button otherwise). */
+  #release {
+    display: block; width: calc(100% + 28px); margin: 0 -14px; border: 0; border-radius: 0 0 12px 12px;
+    background: var(--text); color: #000; font: 600 1.1rem var(--display);
+  }
+  #release:disabled { display: none; }
+  /* Lamp out of reach: the panel goes dark. */
+  body.offline .hero-layer { color: #3a3d42; text-shadow: none; }
+  body.offline .status dd { opacity: .4; }
 
-  /* ---- Race log ---- */
-  .racelog { list-style: none; margin: 0; padding: 0; max-height: 18rem; overflow-y: auto; }
+  /* ---- TV sync: the numbers you compare with the TV, timing-screen size ---- */
+  .tv-now { grid-template-columns: 1fr 1fr; }
+  .tv-now dd {
+    font: 600 2.4rem/1.05 var(--tight); font-variant-numeric: tabular-nums; letter-spacing: .01em;
+  }
+  /* The delay is typed or nudged here; it saves like any setting. */
+  .sync .delay {
+    justify-content: flex-start; gap: 12px; min-height: 0; margin: 14px 0 8px; padding: 0;
+    border-top: 0; color: var(--muted);
+  }
+  .delay .unit {
+    display: inline-flex; align-items: center; gap: 6px; color: var(--text);
+    font: 600 1.4rem/1 var(--tight);
+  }
+  #tv_delay { width: 5.5rem; font: inherit; font-variant-numeric: tabular-nums; }
+  /* Six buttons on one line, with a gap between less and more. */
+  .nudges { display: flex; gap: 6px; }
+  .nudges button { flex: 1; min-width: 0; padding: 0 2px; font-size: 1rem; font-variant-numeric: tabular-nums; }
+  .nudges button:nth-child(4) { margin-left: 10px; }
+
+  /* ---- Race log: rows like a timing tower, a colour bar on the left ---- */
+  .racelog {
+    list-style: none; margin: 0; padding: 0; max-height: 18rem; overflow-y: auto;
+    border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  }
   .racelog li {
-    display: grid; grid-template-columns: auto auto 1fr; gap: 8px; align-items: center;
-    padding: 5px 0; border-top: 1px solid var(--line);
+    display: grid; grid-template-columns: 4px auto 1fr; column-gap: 10px; align-items: center;
+    min-height: 2.25rem; padding: 4px 0; border-top: 1px solid var(--line);
   }
   .racelog li:first-child { border-top: 0; }
-  .racelog .time { color: var(--muted); font-size: .85rem; font-variant-numeric: tabular-nums; }
-  .racelog .swatch { width: .7rem; height: .7rem; }
+  .racelog .time {
+    color: var(--muted); font: 1rem/1 var(--tight); font-variant-numeric: tabular-nums;
+  }
+  .racelog .swatch { order: -1; width: 4px; height: auto; align-self: stretch; border: 0; border-radius: 0; }
   .racelog .swatch.none { visibility: hidden; }
 
   /* ---- This weekend ---- */
   .weekend-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-  .weekend-head .now { color: var(--muted); font-size: .9rem; font-variant-numeric: tabular-nums; }
-  .sessions { list-style: none; margin: 0; padding: 0; }
+  .weekend-head .now { color: var(--muted); font: 1rem var(--tight); font-variant-numeric: tabular-nums; }
+  .sessions { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
   .sessions li {
     display: grid; grid-template-columns: 1fr auto; column-gap: 12px; align-items: baseline;
-    padding: 8px 0; border-top: 1px solid var(--line);
+    padding: 8px 0; border-bottom: 1px solid var(--line);
   }
-  .sessions li:first-child { border-top: 0; }
+  .sessions .name { font-weight: 600; }
   .sessions .when { color: var(--muted); font-size: .85rem; }
-  .sessions .state { grid-row: span 2; align-self: center; font-size: .9rem; font-variant-numeric: tabular-nums; }
+  .sessions .state {
+    grid-row: span 2; align-self: center; font: 1.05rem var(--tight); font-variant-numeric: tabular-nums;
+  }
   .sessions .done { color: var(--muted); }
-  .sessions .done .name { text-decoration: line-through; }
+  .sessions .done .name { text-decoration: line-through; font-weight: 400; }
   .sessions .live .state { color: var(--accent); font-weight: 600; }
   .sessions .next .state { font-weight: 600; }
   .sessions .off { color: var(--muted); }
+  .sessions .off .name { font-weight: 400; }
   .sessions .moved { color: var(--warn); }
   .sessions .cancelled { color: var(--muted); }
-  .sessions .cancelled .name { text-decoration: line-through; }
+  .sessions .cancelled .name { text-decoration: line-through; font-weight: 400; }
   .sessions .cancelled .state { color: var(--warn); }
-  .sessions .result { display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
-  .sessions .result .swatch { width: .7rem; height: .7rem; }
+  .sessions .result { display: inline-flex; align-items: center; gap: 8px; color: var(--text); }
+  .sessions .result .swatch { width: 4px; height: 1.1em; border: 0; border-radius: 0; }
 
   /* ---- Controls ---- */
   button {
-    font: inherit; padding: 10px 14px; border: 1px solid var(--line); border-radius: 6px;
+    font: inherit; min-height: 44px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 6px;
     background: var(--well); color: var(--text); cursor: pointer;
   }
   button:hover:not(:disabled) { border-color: var(--muted); }
@@ -164,22 +218,24 @@
   .row button { flex: 1; }
 
   input[type=number], input[type=time], input[type=text], input[type=password], select {
-    width: 8.5rem; padding: 7px 9px; font: inherit; font-variant-numeric: tabular-nums;
+    width: 8.5rem; min-height: 44px; padding: 7px 9px; font: inherit; font-variant-numeric: tabular-nums;
     background: var(--well); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
   }
   input:disabled { opacity: .4; }
   input[type=color] {
-    width: 3.2rem; height: 2.4rem; padding: 2px; border: 1px solid var(--line);
+    width: 3.2rem; height: 44px; flex: none; padding: 3px; border: 1px solid var(--line);
     border-radius: 6px; background: var(--well); cursor: pointer;
   }
-  input[type=range] { accent-color: var(--accent); }
+  input[type=range] { height: 44px; margin: 0; accent-color: var(--accent); }
 
   /* Settings: one per row, name left and control right, divided by lines. */
   .settings label, .rowed label {
     display: flex; justify-content: space-between; align-items: center; gap: 12px;
-    min-height: 3rem; padding: 6px 0; border-top: 1px solid var(--line);
+    min-height: 3.25rem; padding: 4px 0; border-top: 1px solid var(--line);
   }
   .settings h2 + label, .settings .hint + label { border-top: 0; }
+  /* A setting that belongs to the switch above it. */
+  .settings label.sub { padding-left: 1rem; color: var(--muted); }
   .settings .hint { margin: 10px 0 2px; }
   .slider { display: flex; align-items: center; gap: 10px; flex: 1; max-width: 60%; }
   .slider input { flex: 1; min-width: 0; }
@@ -196,18 +252,19 @@
     background: radial-gradient(circle at calc(100% - .78rem) 50%, var(--on-accent) .5rem, transparent .55rem) var(--accent);
   }
 
-  /* ---- Force a flag: tiles that look like the flags ---- */
-  .flags, .tries { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  /* Force a flag: tiles that look like the flags. */
+  .flags, .tries { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .tries button { font-size: 1.05rem; }
   .team-pick { display: flex; align-items: center; gap: 8px; }
-  .swatch { width: 1rem; height: 1rem; border-radius: 50%; border: 1px solid var(--line); }
+  .swatch { width: 6px; height: 1.6rem; border-radius: 1px; }
   .flag {
-    position: relative; height: 4.75rem; padding: 8px 10px; border: 0; border-radius: 6px;
+    position: relative; height: 3.5rem; padding: 6px 10px; border: 0; border-radius: 4px;
     display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start;
-    font-size: 1.1rem; font-weight: 600; text-align: left; line-height: 1.1;
+    font-size: 1.05rem; font-weight: 600; text-align: left; line-height: 1.1;
   }
   .flag:hover:not(:disabled) { filter: brightness(1.08); }
   .flag b {
-    position: absolute; top: 4px; right: 10px; font-size: 2.1rem; font-weight: 700; letter-spacing: .02em;
+    position: absolute; top: 3px; right: 10px; font-size: 1.6rem; font-weight: 700; letter-spacing: .02em;
   }
   .f-green { background: var(--green); color: #fff; }
   .f-yellow { background: var(--yellow); color: #1c1c1a; }
@@ -224,11 +281,11 @@
 
   /* ---- Replay (only shown when the firmware was built with a replay) ---- */
   #replay[hidden] { display: none; }
-  .replay-name { margin: 0 0 10px; font-weight: 600; word-break: break-all; }
-  #r-seek { width: 100%; margin: 0; }
+  .replay-name { margin: 0 0 4px; font-weight: 600; word-break: break-all; }
+  #r-seek { width: 100%; }
   .replay-time {
     display: flex; justify-content: space-between; color: var(--muted);
-    font-size: .875rem; font-variant-numeric: tabular-nums;
+    font: 1rem var(--tight); font-variant-numeric: tabular-nums;
   }
   #r-state { color: var(--text); }
 
@@ -241,11 +298,11 @@
   .token-state.bad { color: var(--err); }
 
   /* ---- Live log: collected from page load, shown in its tab ---- */
-  .log-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-  .log-head button { padding: 6px 12px; }
+  .log-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .log-head h2 { margin: 0; }
   #log {
     margin: 4px 0 0; height: 60vh; overflow: auto; padding: 10px 12px; border-radius: 6px;
-    background: var(--well); font: .75rem/1.4 var(--mono);
+    background: var(--housing); font: .75rem/1.4 var(--mono);
     white-space: pre-wrap; word-break: break-all;
   }
   #log .w { color: var(--warn); }
@@ -256,7 +313,7 @@
   .toast {
     position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 3;
     margin: 0; padding: 8px 14px; border-radius: 6px; font-size: .875rem;
-    background: var(--panel); border: 1px solid var(--line); color: var(--text);
+    background: var(--well); border: 1px solid var(--line); color: var(--text);
     box-shadow: 0 6px 20px rgba(0, 0, 0, .35);
     opacity: 0; transition: opacity .25s; pointer-events: none;
   }
@@ -265,6 +322,7 @@
 
   @media (prefers-reduced-motion: reduce) {
     .toast { transition: none; }
+    button:active:not(:disabled) { transform: none; }
   }
 </style>
 </head>
@@ -279,11 +337,11 @@
     <button class="tab" role="tab" data-tab="race" aria-controls="tab-race">Race</button>
     <button class="tab" role="tab" data-tab="lamp" aria-controls="tab-lamp">Lamp</button>
     <button class="tab" role="tab" data-tab="events" aria-controls="tab-events">Events</button>
-    <button class="tab" role="tab" data-tab="f1tv" aria-controls="tab-f1tv">F1TV</button>
+    <button class="tab" role="tab" data-tab="test" aria-controls="tab-test">Test</button>
     <button class="tab" role="tab" data-tab="log" aria-controls="tab-log">Log</button>
   </nav>
 
-  <!-- Race: what's happening now and what you can do about it. -->
+  <!-- Race: only what you glance at during a session. -->
   <div class="panel" id="tab-race" data-tab="race" role="tabpanel">
     <section class="hero">
       <p class="hero-label">The lamp is showing</p>
@@ -293,16 +351,22 @@
         <div><dt>Network</dt><dd id="s-net">–</dd></div>
         <div><dt>Override</dt><dd id="s-override">–</dd></div>
       </dl>
+      <!-- Shown only while a flag or colour is forced: the lamp ignores the
+           real flags until then, so the way out sits right here. -->
+      <button id="release" disabled>Release override</button>
     </section>
 
-    <section>
+    <!-- A settings block, so typing a delay saves it like any other setting. -->
+    <section class="settings sync">
       <h2>TV sync</h2>
-      <dl class="status">
+      <dl class="status tv-now">
         <div><dt>TV clock</dt><dd id="tv-clock">–</dd></div>
         <div><dt>TV lap</dt><dd id="tv-lap">–</dd></div>
-        <div><dt>Delay</dt><dd id="tv-delay">–</dd></div>
       </dl>
-      <div class="row">
+      <label class="delay">Delay <span class="unit"><input type="number" id="tv_delay" min="0" max="120" step="0.1"> s</span></label>
+      <!-- The script also writes the delay here; the field above shows it. -->
+      <span id="tv-delay" hidden></span>
+      <div class="nudges">
         <button data-nudge="-1">−1 s</button>
         <button data-nudge="-0.5">−0.5 s</button>
         <button data-nudge="-0.1">−0.1 s</button>
@@ -327,7 +391,94 @@
       <ol class="sessions" id="w-sessions"></ol>
       <p class="hint" id="w-empty">No session coming up, or the lamp has no calendar yet.</p>
     </section>
+  </div>
 
+  <!-- Lamp: how it looks. -->
+  <div class="panel" id="tab-lamp" data-tab="lamp" role="tabpanel">
+    <p class="note">Changes save automatically.</p>
+    <section class="settings">
+      <h2>Lamp</h2>
+      <label>Colour <input type="color" id="lamp_color"></label>
+      <label>Brightness
+        <span class="slider"><input type="range" id="lamp_brightness" min="0" max="100"><output id="lamp_brightness_out"></output></span>
+      </label>
+      <label>Overall brightness
+        <span class="slider"><input type="range" id="global_brightness" min="0" max="100"><output id="global_brightness_out"></output></span>
+      </label>
+      <p class="hint">Brightness is for the lamp's own colour. Overall brightness dims everything, flags too; at night, outside a live session, night mode's brightness is used instead.</p>
+    </section>
+
+    <section class="settings">
+      <h2>Night mode</h2>
+      <p class="hint">Leave both times empty to turn night mode off.</p>
+      <label>Starts <input type="time" id="night_start"></label>
+      <label>Ends <input type="time" id="night_end"></label>
+      <label>Brightness
+        <span class="slider"><input type="range" id="night_brightness" min="0" max="100"><output id="night_brightness_out"></output></span>
+      </label>
+    </section>
+  </div>
+
+  <!-- Events: what the lamp reacts to, and for how long. -->
+  <div class="panel" id="tab-events" data-tab="events" role="tabpanel">
+    <p class="note">Changes save automatically.</p>
+    <section class="settings">
+      <h2>Track flags</h2>
+      <p class="hint">Always shown. After a green flag the lamp returns to its own colour; 0 keeps it green.</p>
+      <label>Green shown (s) <input type="number" id="green_seconds" min="0" max="600" step="1"></label>
+    </section>
+
+    <section class="settings">
+      <h2>Show on the lamp</h2>
+      <p class="hint">Switched-off events are ignored.</p>
+      <label>Start lights <input type="checkbox" id="fx_start_lights"></label>
+      <label>Chequered flag <input type="checkbox" id="fx_chequered_flag"></label>
+      <label>Fastest lap <input type="checkbox" id="fx_fastest_lap"></label>
+      <label>Winner <input type="checkbox" id="fx_winner"></label>
+      <label class="sub">Winner shown (min) <input type="number" id="winner_minutes" min="0" max="60" step="0.5"></label>
+      <label>Pit stops <input type="checkbox" id="fx_pit_stop"></label>
+      <label>Overtakes <input type="checkbox" id="fx_overtake"></label>
+      <label>Knocked out (qualifying) <input type="checkbox" id="fx_knocked_out"></label>
+      <label>Last lap (race) <input type="checkbox" id="fx_last_lap"></label>
+      <label>Countdown, 10 min before a session <input type="checkbox" id="fx_countdown"></label>
+    </section>
+
+    <section class="settings">
+      <h2>Sessions</h2>
+      <p class="hint">The lamp ignores sessions switched off here: no countdown, no flags, no winner.</p>
+      <label>Practice <input type="checkbox" id="ses_practice"></label>
+      <label>Sprint qualifying <input type="checkbox" id="ses_sprint_qualifying"></label>
+      <label>Sprint <input type="checkbox" id="ses_sprint"></label>
+      <label>Qualifying <input type="checkbox" id="ses_qualifying"></label>
+      <label>Race <input type="checkbox" id="ses_race"></label>
+    </section>
+
+    <section class="settings">
+      <h2>Drivers</h2>
+      <p class="hint">Pit stops and overtakes flash only for these drivers.</p>
+      <label>Followed drivers <input type="text" id="followed_drivers" inputmode="numeric" placeholder="e.g. 1, 44, 63"></label>
+      <label>All drivers <input type="checkbox" id="follow_all"></label>
+      <p class="hint">For the showcase. In a race, every driver means hundreds of overtake flashes.</p>
+    </section>
+
+    <!-- F1TV: optional account for extra live data. Not a settings block:
+         the token is sent with its own button, never saved automatically. -->
+    <section>
+      <h2>F1TV account</h2>
+      <p class="hint">Optional. Unlocks extra live data such as pit stops. Paste your token, or the whole value of formula1.com's <code>loginSession</code> cookie. The lamp never shows it again.</p>
+      <p class="token-line">Status: <span class="token-state" id="token-state">–</span></p>
+      <input type="password" id="token-input" autocomplete="off" placeholder="Paste token here" aria-label="F1TV token">
+      <div class="row">
+        <button class="primary" id="token-save">Save token</button>
+        <button id="token-remove">Remove</button>
+      </div>
+      <p class="msg" id="token-msg"></p>
+    </section>
+  </div>
+
+  <!-- Test: trying the lamp out, never needed during a session. -->
+  <div class="panel" id="tab-test" data-tab="test" role="tabpanel">
+    <p class="note">A forced flag or colour stays until you press Release under the lamp panel.</p>
     <section>
       <h2>Force a flag</h2>
       <div class="flags">
@@ -342,7 +493,6 @@
       <div class="row">
         <input type="color" id="override_color" value="#ffffff" aria-label="Colour to force">
         <button id="force-color">Force colour</button>
-        <button id="release">Release</button>
       </div>
       <p class="msg" id="override-msg"></p>
     </section>
@@ -407,90 +557,6 @@
       </div>
       <p class="hint">To watch a recording with the lamp: 1×, Lights out −10 s, then Play when your video is 10 s before lights out.</p>
       <p class="msg" id="replay-msg"></p>
-    </section>
-  </div>
-
-  <!-- Lamp: how it looks. -->
-  <div class="panel" id="tab-lamp" data-tab="lamp" role="tabpanel">
-    <p class="note">Changes save automatically.</p>
-    <section class="settings">
-      <h2>Lamp</h2>
-      <label>Colour <input type="color" id="lamp_color"></label>
-      <label>Brightness
-        <span class="slider"><input type="range" id="lamp_brightness" min="0" max="100"><output id="lamp_brightness_out"></output></span>
-      </label>
-    </section>
-
-    <section class="settings">
-      <h2>Display</h2>
-      <label>Overall brightness
-        <span class="slider"><input type="range" id="global_brightness" min="0" max="100"><output id="global_brightness_out"></output></span>
-      </label>
-      <label>Winner shown (min) <input type="number" id="winner_minutes" min="0" max="60" step="0.5"></label>
-      <label>Green shown (s) <input type="number" id="green_seconds" min="0" max="600" step="1"></label>
-      <p class="hint">After a green flag the lamp returns to its own colour; 0 keeps it green.</p>
-      <label>TV delay (s) <input type="number" id="tv_delay" min="0" max="120" step="0.1"></label>
-    </section>
-
-    <section class="settings">
-      <h2>Night mode</h2>
-      <p class="hint">Leave both times empty to turn night mode off.</p>
-      <label>Starts <input type="time" id="night_start"></label>
-      <label>Ends <input type="time" id="night_end"></label>
-      <label>Brightness
-        <span class="slider"><input type="range" id="night_brightness" min="0" max="100"><output id="night_brightness_out"></output></span>
-      </label>
-    </section>
-  </div>
-
-  <!-- Events: what the lamp reacts to. -->
-  <div class="panel" id="tab-events" data-tab="events" role="tabpanel">
-    <p class="note">Changes save automatically.</p>
-    <section class="settings">
-      <h2>Show on the lamp</h2>
-      <p class="hint">Track flags always show. Switched-off events are ignored.</p>
-      <label>Start lights <input type="checkbox" id="fx_start_lights"></label>
-      <label>Chequered flag <input type="checkbox" id="fx_chequered_flag"></label>
-      <label>Fastest lap <input type="checkbox" id="fx_fastest_lap"></label>
-      <label>Winner <input type="checkbox" id="fx_winner"></label>
-      <label>Pit stops <input type="checkbox" id="fx_pit_stop"></label>
-      <label>Overtakes <input type="checkbox" id="fx_overtake"></label>
-      <label>Knocked out (qualifying) <input type="checkbox" id="fx_knocked_out"></label>
-      <label>Last lap (race) <input type="checkbox" id="fx_last_lap"></label>
-      <label>Countdown, 10 min before a session <input type="checkbox" id="fx_countdown"></label>
-    </section>
-
-    <section class="settings">
-      <h2>Sessions</h2>
-      <p class="hint">The lamp ignores sessions switched off here: no countdown, no flags, no winner.</p>
-      <label>Practice <input type="checkbox" id="ses_practice"></label>
-      <label>Sprint qualifying <input type="checkbox" id="ses_sprint_qualifying"></label>
-      <label>Sprint <input type="checkbox" id="ses_sprint"></label>
-      <label>Qualifying <input type="checkbox" id="ses_qualifying"></label>
-      <label>Race <input type="checkbox" id="ses_race"></label>
-    </section>
-
-    <section class="settings">
-      <h2>Drivers</h2>
-      <p class="hint">Pit stops and overtakes flash only for these drivers.</p>
-      <label>Followed drivers <input type="text" id="followed_drivers" inputmode="numeric" placeholder="e.g. 1, 44, 63"></label>
-      <label>All drivers <input type="checkbox" id="follow_all"></label>
-      <p class="hint">For the showcase. In a race, every driver means hundreds of overtake flashes.</p>
-    </section>
-  </div>
-
-  <!-- F1TV: optional account for extra live data. -->
-  <div class="panel" id="tab-f1tv" data-tab="f1tv" role="tabpanel">
-    <section>
-      <h2>F1TV account</h2>
-      <p class="hint">Optional. Unlocks extra live data such as pit stops. Paste your token, or the whole value of formula1.com's <code>loginSession</code> cookie. The lamp never shows it again.</p>
-      <p class="token-line">Status: <span class="token-state" id="token-state">–</span></p>
-      <input type="password" id="token-input" autocomplete="off" placeholder="Paste token here" aria-label="F1TV token">
-      <div class="row">
-        <button class="primary" id="token-save">Save token</button>
-        <button id="token-remove">Remove</button>
-      </div>
-      <p class="msg" id="token-msg"></p>
     </section>
   </div>
 

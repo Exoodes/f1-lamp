@@ -18,6 +18,12 @@ Ideas for after the course, in no particular order of size.
   `pole_after_last_laps`, at most `LAST_LAPS_MAX` after the flag); the same
   check can end Q1 and Q2. To decide: the same look as the winner or one of
   its own, and whether the winner's on/off setting covers it.
+- **The web page's panel in the colour the lamp shows.** `GET /api/state`
+  only names the winning layer ("live track", "status", "winner"…), not its
+  colour (`f1-core/src/snapshot.rs`), so the "lamp is showing" panel is
+  always lit in the lamp colour, even during a yellow flag. A `color` field
+  in `Snapshot` (the scene's main colour, `null` for effects with no single
+  one, like the chequered flag) would let the page light the panel in it.
 
 ## Later
 
