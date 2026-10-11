@@ -118,6 +118,8 @@
   body.offline .hero-layer, body.offline .status dd { opacity: .4; }
 
   /* ---- This weekend ---- */
+  .weekend-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .weekend-head .now { color: var(--muted); font-size: .9rem; font-variant-numeric: tabular-nums; }
   .sessions { list-style: none; margin: 0; padding: 0; }
   .sessions li {
     display: grid; grid-template-columns: 1fr auto; column-gap: 12px; align-items: baseline;
@@ -131,6 +133,8 @@
   .sessions .live .state { color: var(--accent); font-weight: 600; }
   .sessions .next .state { font-weight: 600; }
   .sessions .off { color: var(--muted); }
+  .sessions .result { display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
+  .sessions .result .swatch { width: .7rem; height: .7rem; }
 
   /* ---- Controls ---- */
   button {
@@ -277,7 +281,10 @@
     </section>
 
     <section>
-      <h2 id="w-title">This weekend</h2>
+      <div class="weekend-head">
+        <h2 id="w-title">This weekend</h2>
+        <span class="now" id="w-now"></span>
+      </div>
       <ol class="sessions" id="w-sessions"></ol>
       <p class="hint" id="w-empty">No session coming up, or the lamp has no calendar yet.</p>
     </section>
@@ -684,6 +691,11 @@ async function tryEvent(body, label) {
 let lampOffsetMs = 0;
 let weekend = null;
 
+// Asked again soon while a finished session waits for its result (the lamp
+// fetches them one by one after a session), otherwise once a minute.
+const SCHEDULE_WAITING_MS = 10000;
+const SCHEDULE_EVERY_MS = 60000;
+
 async function refreshSchedule() {
   try {
     const r = await fetch("/api/schedule");
@@ -695,12 +707,31 @@ async function refreshSchedule() {
   } catch {
     // Keep what is shown; the next refresh tries again.
   }
+  const waiting = weekend !== null
+    && weekend.sessions.some((s) => s.state === "done" && !s.result);
+  setTimeout(refreshSchedule, waiting ? SCHEDULE_WAITING_MS : SCHEDULE_EVERY_MS);
 }
 
-// 1 791 734 400 -> "Sun 14:00", in this device's time zone.
-function when(unix) {
-  return new Date(unix * 1000).toLocaleString(undefined,
-    { weekday: "short", hour: "2-digit", minute: "2-digit" });
+// The lamp's time now -> "09:34".
+function clockNow(unix) {
+  return new Date(unix * 1000).toLocaleTimeString("en-GB",
+    { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+}
+
+// What P1 means in each kind of session.
+const RESULT_WORD = {
+  Practice: "Fastest", Qualifying: "Pole", SprintQualifying: "Pole", Sprint: "Winner", Race: "Winner",
+};
+
+// "Pole LEC" with a dot in Ferrari red.
+function resultBadge(kind, result) {
+  const badge = document.createElement("span");
+  badge.className = "result";
+  const dot = document.createElement("span");
+  dot.className = "swatch";
+  dot.style.background = result.color;
+  badge.append(dot, (RESULT_WORD[kind] || "P1") + " " + result.name);
+  return badge;
 }
 
 // Seconds -> "2 d 5 h", "3 h 20 min", "12:05".
@@ -712,6 +743,8 @@ function countdown(s) {
 }
 
 function showWeekend() {
+  const now = (Date.now() + lampOffsetMs) / 1000;
+  $("w-now").textContent = "now " + clockNow(now);
   const list = $("w-sessions");
   list.replaceChildren();
   $("w-empty").hidden = weekend !== null;
@@ -723,7 +756,6 @@ function showWeekend() {
   $("w-title").textContent = !country ? "This weekend"
     : circuit && circuit !== country ? country + " · " + circuit : country;
 
-  const now = (Date.now() + lampOffsetMs) / 1000;
   let nextShown = false;
   for (const s of weekend.sessions) {
     // Worked out again here: the reply can be up to a minute old.
@@ -737,7 +769,8 @@ function showWeekend() {
     name.textContent = s.name;
     const status = document.createElement("span");
     status.className = "state";
-    status.textContent = state === "done" ? "done" : !s.followed ? "not followed"
+    if (state === "done" && s.result) status.append(resultBadge(s.kind, s.result));
+    else status.textContent = state === "done" ? "done" : !s.followed ? "not followed"
       : state === "live" ? "live" : isNext ? "in " + countdown(Math.floor(s.start - now)) : "";
     const time = document.createElement("span");
     time.className = "when";
@@ -749,7 +782,6 @@ function showWeekend() {
 
 function startSchedule() {
   refreshSchedule();
-  setInterval(refreshSchedule, 60000);
   setInterval(showWeekend, 1000);
 }
 
@@ -823,10 +855,11 @@ async function startReplay() {
 
 // ---- F1TV token (the page only ever sees its status) ----
 
-// 1791530993 -> "Fri 9 Oct, 09:29" in the browser's time zone.
+// 1791530993 -> "Fri 9 Oct, 09:29" in the browser's time zone, 24-hour.
 function when(unix) {
-  return new Date(unix * 1000).toLocaleString(undefined, {
-    weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+  return new Date(unix * 1000).toLocaleString("en-GB", {
+    weekday: "short", day: "numeric", month: "short",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
   });
 }
 

@@ -247,15 +247,26 @@ pub fn countdown_target(sessions: &[Session], now: i64) -> Option<&Session> {
 }
 
 /// The sessions that can still affect the lamp at `now` (not fully over,
-/// including their post-session window): the soonest `max`, in start order.
+/// including their post-session window), with the finished sessions of the
+/// first one's weekend for the page: the soonest `max`, in start order.
 /// `sessions` must be sorted by start.
 pub fn still_relevant(sessions: &[Session], now: i64, max: usize) -> Vec<Session> {
-    sessions
+    let Some(first) = sessions
         .iter()
-        .filter(|s| s.end + LIVE_GRACE + POST_SESSION > now)
-        .take(max)
-        .cloned()
-        .collect()
+        .position(|s| s.end + LIVE_GRACE + POST_SESSION > now)
+    else {
+        return Vec::new();
+    };
+    let meeting = sessions[first].meeting;
+    let from = if meeting == 0 {
+        first
+    } else {
+        sessions[..first]
+            .iter()
+            .rposition(|s| s.meeting != meeting)
+            .map_or(0, |i| i + 1)
+    };
+    sessions[from..].iter().take(max).cloned().collect()
 }
 
 /// A race or sprint whose post-session (winner) window contains `now`. Unlike
@@ -535,6 +546,32 @@ mod tests {
             still_relevant(std::slice::from_ref(&quali), RACE_OVER - 1, 10),
             [quali]
         );
+    }
+
+    #[test]
+    fn the_finished_sessions_of_the_weekend_on_are_kept() {
+        let weekend = |key, start| Session {
+            meeting: 7,
+            ..session(key, SessionKind::Practice, start, start + HOUR)
+        };
+        let earlier = Session {
+            meeting: 6,
+            ..session(
+                1,
+                SessionKind::Race,
+                START - 7 * 24 * HOUR,
+                END - 7 * 24 * HOUR,
+            )
+        };
+        let friday = weekend(2, START);
+        let sunday = weekend(3, START + 48 * HOUR);
+        let saturday_evening = START + 34 * HOUR;
+        let kept = still_relevant(
+            &[earlier, friday.clone(), sunday.clone()],
+            saturday_evening,
+            10,
+        );
+        assert_eq!(kept, [friday, sunday]);
     }
 
     #[test]

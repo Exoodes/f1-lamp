@@ -166,7 +166,8 @@ only the lines the lamp uses, so a whole race fits in the firmware.
 
 - what the lamp shows, the session phase and the network state;
 - this race weekend: its sessions in your time zone, a countdown to the next
-  one, and which are done or live;
+  one, which are live, and who was fastest, on pole or won (until a day
+  after the race);
 - lamp colour and brightness, night mode (in Central European time), TV
   delay, how long green and the winner show;
 - which events show, which kinds of session the lamp follows, and the
@@ -192,7 +193,7 @@ The page uses these, and scripts can too:
 | Request | What it does |
 |---|---|
 | `GET /api/state` | What the lamp shows: layer, phase, network, override, settings (JSON) |
-| `GET /api/schedule` | This race weekend: the lamp's time, the country, the circuit and the sessions with their state (`done`, `live`, `coming`) |
+| `GET /api/schedule` | This race weekend: the lamp's time, the country, the circuit and the sessions with their state (`done`, `live`, `coming`), whether they're followed, and P1 of each finished one |
 | `POST /api/settings` | All the settings as JSON: get them from `/api/state`, change, send back |
 | `POST /api/override` | `{"kind":"flag","flag":"red"}`, `{"kind":"color","color":"#ff8800"}` or `{"kind":"release"}`; or plays one effect at once: `{"kind":"event","event":"pit_stop","team":"mclaren"}` (`start_lights`, `chequered_flag`, `last_lap`, `fastest_lap`, `pit_stop`, `overtake`, `winner`, `knocked_out`; teams `alpine`, `aston_martin`, `audi`, `cadillac`, `ferrari`, `haas`, `mclaren`, `mercedes`, `racing_bulls`, `red_bull`, `williams`) |
 | `GET /api/token`, `POST /api/token` | The F1TV token's state; post a token (plain text) to set it, an empty one to remove it |
@@ -254,10 +255,11 @@ With `$env:F1TV_TOKEN` set, the probe sends the token as well.
   (timing data). Unofficial and undocumented; it changes without
   notice. When the lamp stops reacting on a race weekend, run the probe on
   the PC first.
-- **OpenF1** (`api.openf1.org`): the session calendar, and the winner as a
-  fallback after a reboot. Its free tier is closed during live sessions, so
-  the calendar is fetched ahead, kept in flash, and not fetched from 30
-  minutes before a session until it ends (then once straight away).
+- **OpenF1** (`api.openf1.org`): the session calendar, each session's P1
+  for the page, and the winner as a fallback after a reboot. Its free tier
+  is closed during live sessions, so the calendar is fetched ahead, kept in
+  flash, and not fetched from 30 minutes before a session until it ends
+  (then once straight away); results wait for the session to end too.
 
 This is a personal project, not affiliated with Formula 1. F1, Formula 1 and
 F1TV are trademarks of Formula One Licensing B.V.

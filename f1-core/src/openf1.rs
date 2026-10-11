@@ -10,6 +10,7 @@ use serde::Deserialize;
 use crate::{
     color::Rgb,
     schedule::{Session, SessionKind},
+    weekend::SessionResult,
 };
 
 const SESSIONS_URL: &str = "https://api.openf1.org/v1/sessions";
@@ -19,13 +20,16 @@ const DRIVERS_URL: &str = "https://api.openf1.org/v1/drivers";
 /// race weekend, short enough to keep the response small (about 7 KB at most,
 /// where a whole season is about 48 KB).
 pub const CALENDAR_DAYS: i64 = 35;
+/// The calendar also looks this far back, so a weekend's finished sessions
+/// stay on the page until it's over.
+pub const CALENDAR_PAST_DAYS: i64 = 4;
 const DAY: i64 = 24 * 60 * 60;
 
-/// The OpenF1 query for sessions starting from the UTC day of `now` (Unix
-/// seconds) until `CALENDAR_DAYS` later. Whole days, so a session that is
-/// live or just over today is still included.
+/// The OpenF1 query for sessions starting from the UTC day `CALENDAR_PAST_DAYS`
+/// before `now` (Unix seconds) until `CALENDAR_DAYS` after it. Whole days,
+/// so a session that is live or just over is still included.
 pub fn sessions_url(now: i64) -> String {
-    let from = DateTime::from_timestamp(now, 0);
+    let from = DateTime::from_timestamp(now - CALENDAR_PAST_DAYS * DAY, 0);
     let to = DateTime::from_timestamp(now + CALENDAR_DAYS * DAY, 0);
     match (from, to) {
         (Some(from), Some(to)) => format!(
@@ -46,6 +50,11 @@ pub fn results_url(session_key: u32) -> String {
 /// Every driver in a session, with their team colour (about 8 KB).
 pub fn drivers_url(session_key: u32) -> String {
     format!("{DRIVERS_URL}?session_key={session_key}")
+}
+
+/// One driver of a session, with their short name and team colour.
+pub fn driver_url(session_key: u32, driver: u8) -> String {
+    format!("{DRIVERS_URL}?session_key={session_key}&driver_number={driver}")
 }
 
 /// `2026-10-04`. Built by hand: chrono's `format` needs its `alloc` feature.
@@ -90,6 +99,22 @@ pub struct DriverDto {
     pub driver_number: u8,
     /// Hex without `#`, e.g. `"00D7B6"`.
     pub team_colour: Option<String>,
+    /// `"VER"`.
+    #[serde(default)]
+    pub name_acronym: Option<String>,
+}
+
+/// A session's P1 for the page, from their line of `/v1/drivers`. `None`
+/// without a readable team colour: better to ask again than show a wrong one.
+pub fn session_result(driver: &DriverDto) -> Option<SessionResult> {
+    Some(SessionResult {
+        driver: driver.driver_number,
+        name: driver
+            .name_acronym
+            .clone()
+            .unwrap_or_else(|| format!("#{}", driver.driver_number)),
+        color: driver.team_colour.as_deref()?.parse().ok()?,
+    })
 }
 
 /// The driver number of whoever finished first.
@@ -310,10 +335,10 @@ mod tests {
     const OCT_4_NOON: i64 = 1_791_115_200;
 
     #[test]
-    fn sessions_url_covers_the_next_35_days() {
+    fn sessions_url_covers_the_last_4_and_the_next_35_days() {
         assert_eq!(
             sessions_url(OCT_4_NOON),
-            "https://api.openf1.org/v1/sessions?date_start>=2026-10-04&date_start<2026-11-08"
+            "https://api.openf1.org/v1/sessions?date_start>=2026-09-30&date_start<2026-11-08"
         );
     }
 
@@ -322,7 +347,7 @@ mod tests {
         // 23:59:59 UTC, already 5 October in Prague: OpenF1's times are UTC.
         assert_eq!(
             sessions_url(1_791_158_399),
-            "https://api.openf1.org/v1/sessions?date_start>=2026-10-04&date_start<2026-11-08"
+            "https://api.openf1.org/v1/sessions?date_start>=2026-09-30&date_start<2026-11-08"
         );
     }
 
@@ -331,7 +356,7 @@ mod tests {
         // 2026-12-21 00:00 UTC; no year filter, so January 2027 is included.
         assert_eq!(
             sessions_url(1_797_811_200),
-            "https://api.openf1.org/v1/sessions?date_start>=2026-12-21&date_start<2027-01-25"
+            "https://api.openf1.org/v1/sessions?date_start>=2026-12-17&date_start<2027-01-25"
         );
     }
 
@@ -340,7 +365,7 @@ mod tests {
         // 2026-01-02 00:00 UTC.
         assert_eq!(
             sessions_url(1_767_312_000),
-            "https://api.openf1.org/v1/sessions?date_start>=2026-01-02&date_start<2026-02-06"
+            "https://api.openf1.org/v1/sessions?date_start>=2025-12-29&date_start<2026-02-06"
         );
     }
 
@@ -362,7 +387,42 @@ mod tests {
         DriverDto {
             driver_number,
             team_colour: team_colour.map(str::to_string),
+            name_acronym: None,
         }
+    }
+
+    #[test]
+    fn driver_url_asks_for_one_driver() {
+        assert_eq!(
+            driver_url(11388, 1),
+            "https://api.openf1.org/v1/drivers?session_key=11388&driver_number=1"
+        );
+    }
+
+    #[test]
+    fn a_result_has_the_short_name_and_the_team_colour() {
+        let line = r#"[{"driver_number":16,"name_acronym":"LEC","team_colour":"ED1131","full_name":"Charles LECLERC"}]"#;
+        let drivers: Vec<DriverDto> = serde_json::from_str(line).unwrap();
+        assert_eq!(
+            session_result(&drivers[0]),
+            Some(SessionResult {
+                driver: 16,
+                name: "LEC".to_string(),
+                color: Rgb::new(0xED, 0x11, 0x31),
+            })
+        );
+    }
+
+    #[test]
+    fn a_result_without_a_name_uses_the_number() {
+        let result = session_result(&driver(16, Some("ED1131"))).unwrap();
+        assert_eq!(result.name, "#16");
+    }
+
+    #[test]
+    fn no_result_without_a_team_colour() {
+        assert_eq!(session_result(&driver(16, None)), None);
+        assert_eq!(session_result(&driver(16, Some("red"))), None);
     }
 
     #[test]

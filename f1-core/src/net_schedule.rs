@@ -20,6 +20,7 @@ pub struct Deadlines {
     pub calendar: Instant,
     pub phase: Instant,
     pub winner: Instant,
+    pub results: Instant,
 }
 
 impl Deadlines {
@@ -32,6 +33,7 @@ impl Deadlines {
             calendar: now,
             phase: now,
             winner: now,
+            results: now,
         }
     }
 
@@ -43,6 +45,7 @@ impl Deadlines {
             .min(self.calendar)
             .min(self.phase)
             .min(self.winner)
+            .min(self.results)
     }
 }
 

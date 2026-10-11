@@ -8,7 +8,7 @@ use f1_core::{
         current_session, next_session, phase_at, Session, SessionKind, LIVE_GRACE, POST_SESSION,
     },
     settings::SessionToggles,
-    weekend::{weekend, SessionState},
+    weekend::{weekend, Results, SessionState},
 };
 
 const SESSIONS: &str = include_str!("data/sessions.json");
@@ -121,6 +121,7 @@ fn singapore_race_morning_shows_the_whole_sprint_weekend() {
         &usable_sessions(dtos()),
         1_791_705_600,
         SessionToggles::default(),
+        &Results::new(),
     )
     .unwrap();
     assert_eq!(

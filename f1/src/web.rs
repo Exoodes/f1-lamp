@@ -27,7 +27,7 @@ use f1_core::{
     snapshot::Snapshot,
     token::TokenStatus,
     web_api::is_lamp_host,
-    weekend::{weekend, ScheduleReply},
+    weekend::{weekend, Results, ScheduleReply},
 };
 use serde::de::DeserializeOwned;
 
@@ -66,6 +66,7 @@ const TEXT: &str = "text/plain; charset=utf-8";
 pub fn start(
     snapshot: Arc<Mutex<Snapshot>>,
     schedule: Arc<Mutex<Vec<Session>>>,
+    results: Arc<Mutex<Results>>,
     tx: SyncSender<Input>,
     tokens: Arc<TokenKeeper>,
 ) -> anyhow::Result<EspHttpServer<'static>> {
@@ -75,7 +76,7 @@ pub fn start(
     };
 
     let mut server = EspHttpServer::new(&config)?;
-    page_routes(&mut server, snapshot, schedule)?;
+    page_routes(&mut server, snapshot, schedule, results)?;
     command_routes(&mut server, tx)?;
     token_routes(&mut server, tokens)?;
     ota_route(&mut server)?;
@@ -93,6 +94,7 @@ fn page_routes(
     server: &mut EspHttpServer<'static>,
     snapshot: Arc<Mutex<Snapshot>>,
     schedule: Arc<Mutex<Vec<Session>>>,
+    results: Arc<Mutex<Results>>,
 ) -> anyhow::Result<()> {
     server.fn_handler::<anyhow::Error, _>("/", Method::Get, |req| {
         reply(req, 200, HTML, INDEX_HTML.as_bytes())
@@ -108,7 +110,14 @@ fn page_routes(
     server.fn_handler::<anyhow::Error, _>("/api/schedule", Method::Get, move |req| {
         let now = clock::unix_now();
         let follow = follow_from.lock().unwrap().settings.sessions;
-        let weekend = now.and_then(|now| weekend(&schedule.lock().unwrap(), now, follow));
+        let weekend = now.and_then(|now| {
+            weekend(
+                &schedule.lock().unwrap(),
+                now,
+                follow,
+                &results.lock().unwrap(),
+            )
+        });
         reply(
             req,
             200,

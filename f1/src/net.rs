@@ -4,6 +4,7 @@
 //! (`Net::round`).
 
 use std::{
+    collections::HashSet,
     sync::{mpsc::SyncSender, Arc, Mutex},
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -23,6 +24,7 @@ use f1_core::{
     openf1::{self, DriverDto, ResultDto, SessionDto, CALENDAR_DAYS},
     schedule::{self, Session, WinnerLookup},
     snapshot::Snapshot,
+    weekend::{self, ResultDue, Results, SessionResult},
 };
 
 use crate::{
@@ -94,6 +96,9 @@ const PHASE_WAITING_EVERY: Duration = Duration::from_secs(1);
 /// How often to look for a race's winner while it's due; results can take a
 /// while to appear after the flag.
 const WINNER_EVERY: Duration = Duration::from_secs(60);
+/// How often to look for the weekend's session results for the page while
+/// one is missing; OpenF1 publishes them a while after each session.
+const RESULTS_EVERY: Duration = Duration::from_secs(5 * 60);
 
 /// The calendar, its copy in flash, and the copy the web page reads.
 struct Schedule {
@@ -195,6 +200,10 @@ struct Net<'a> {
     winner_sent: Option<u32>,
     /// The session and start last sent for the countdown.
     countdown_sent: Option<(u32, i64)>,
+    /// The weekend's session results, for the web page.
+    results: Arc<Mutex<Results>>,
+    /// Sessions OpenF1 had no result for on their last try.
+    results_given_up: HashSet<u32>,
     due: Deadlines,
 }
 
@@ -230,6 +239,8 @@ impl<'a> Net<'a> {
             calendar_retry: Backoff::new(FIRST_CALENDAR_RETRY, MAX_CALENDAR_RETRY),
             winner_sent: None,
             countdown_sent: None,
+            results: Arc::new(Mutex::new(Results::new())),
+            results_given_up: HashSet::new(),
             due: Deadlines::all(Instant::now()),
         })
     }
@@ -257,6 +268,10 @@ impl<'a> Net<'a> {
             self.beat();
             self.look_for_winner()?;
             self.due.winner = now + WINNER_EVERY;
+        }
+        if now >= self.due.results {
+            self.beat();
+            self.due.results = self.update_results(now);
         }
         if now >= self.due.heap_log {
             let heap = system::heap();
@@ -319,6 +334,7 @@ impl<'a> Net<'a> {
                 web::start(
                     Arc::clone(snapshot),
                     Arc::clone(&self.schedule.page),
+                    Arc::clone(&self.results),
                     self.tx.clone(),
                     Arc::clone(tokens),
                 )
@@ -428,6 +444,56 @@ impl<'a> Net<'a> {
         Ok(())
     }
 
+    /// Fetches one missing result of the weekend shown on the page, once WiFi
+    /// and the clock are ready and no session is on (OpenF1 refuses then).
+    /// Returns when to look again: at once after a success, as more may be
+    /// missing. Never fails: the page works without results.
+    fn update_results(&mut self, now: Instant) -> Instant {
+        let (Some(unix), true) = (clock::unix_now(), self.wifi_up()) else {
+            return now + RESULTS_EVERY;
+        };
+        let calendar = &self.schedule.calendar;
+        if !calendar.may_download(unix, self.shared.live.feed_running()) {
+            return now + RESULTS_EVERY;
+        }
+        let due = weekend::result_due(
+            calendar.sessions(),
+            unix,
+            &self.results.lock().unwrap(),
+            &self.results_given_up,
+        );
+        let Some(ResultDue { key, last_try }) = due else {
+            return now + RESULTS_EVERY;
+        };
+        match fetch_result(key, self.heartbeat) {
+            Ok(Some(result)) => {
+                log::info!(
+                    "result: session {key}: {} (#{})",
+                    result.name,
+                    result.driver
+                );
+                let mut results = self.results.lock().unwrap();
+                // Only this calendar's sessions, so the map can't grow all season.
+                results.retain(|k, _| calendar.sessions().iter().any(|s| s.key == *k));
+                results.insert(key, result);
+                now
+            }
+            Ok(None) if last_try => {
+                log::info!("result: none for session {key}; not asking again");
+                self.results_given_up.insert(key);
+                now
+            }
+            Ok(None) => {
+                log::info!("result: session {key} not published yet");
+                now + RESULTS_EVERY
+            }
+            Err(e) => {
+                log::warn!("result: {e:#}");
+                now + RESULTS_EVERY
+            }
+        }
+    }
+
     /// The OpenF1 winner lookup, once WiFi and the clock are ready.
     fn look_for_winner(&mut self) -> anyhow::Result<()> {
         if let (Some(unix), true) = (clock::unix_now(), self.wifi_up()) {
@@ -506,6 +572,20 @@ fn fetch_winner(session_key: u32, heartbeat: &Heartbeat) -> anyhow::Result<Optio
     Ok(openf1::team_colours(drivers)
         .get(&driver)
         .map(|&colour| (driver, colour)))
+}
+
+/// P1 of `session_key` with their short name and team colour; `None` until
+/// OpenF1 has published the result.
+fn fetch_result(session_key: u32, heartbeat: &Heartbeat) -> anyhow::Result<Option<SessionResult>> {
+    let results =
+        http::get_json::<Vec<ResultDto>>(&openf1::results_url(session_key))?.unwrap_or_default();
+    let Some(driver) = openf1::winner(&results) else {
+        return Ok(None);
+    };
+    heartbeat.beat(Instant::now());
+    let drivers = http::get_json::<Vec<DriverDto>>(&openf1::driver_url(session_key, driver))?
+        .unwrap_or_default();
+    Ok(drivers.first().and_then(openf1::session_result))
 }
 
 /// Downloads the sessions of the next `CALENDAR_DAYS` days, ready to use.
