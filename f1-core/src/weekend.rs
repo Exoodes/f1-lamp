@@ -45,6 +45,15 @@ pub struct Move {
     pub to: i64,
 }
 
+/// The sessions cancelled in `new` that weren't in `old`, for the log. A
+/// session first seen already cancelled (e.g. at boot) isn't news.
+pub fn newly_cancelled<'a>(old: &[Session], new: &'a [Session]) -> Vec<&'a Session> {
+    new.iter()
+        .filter(|s| s.cancelled)
+        .filter(|s| old.iter().any(|o| o.key == s.key && !o.cancelled))
+        .collect()
+}
+
 /// Compares a new calendar with the one before it, and keeps in `moved` the
 /// first known start of every session that moved: a session moved twice
 /// still shows where it started from, and one moved back is no longer
@@ -103,6 +112,7 @@ pub struct WeekendSession {
     pub result: Option<SessionResult>,
     /// The start it had before it moved (Unix seconds); `None` if it didn't.
     pub moved_from: Option<i64>,
+    pub cancelled: bool,
 }
 
 /// By the scheduled times: a session running late still says `Done`.
@@ -141,6 +151,7 @@ pub fn weekend(
                 followed: follow.follows(s.kind),
                 result: results.get(&s.key).cloned(),
                 moved_from: moved.get(&s.key).copied(),
+                cancelled: s.cancelled,
             })
             .collect(),
     })
@@ -165,7 +176,12 @@ pub fn result_due(
 ) -> Option<ResultDue> {
     weekend_sessions(sessions, now)
         .iter()
-        .find(|s| s.end <= now && !results.contains_key(&s.key) && !given_up.contains(&s.key))
+        .find(|s| {
+            s.end <= now
+                && !s.cancelled
+                && !results.contains_key(&s.key)
+                && !given_up.contains(&s.key)
+        })
         .map(|s| ResultDue {
             key: s.key,
             last_try: now >= s.end + RESULT_GIVE_UP,
@@ -515,6 +531,44 @@ mod tests {
         assert_eq!(from, [None, Some(DAY - HOUR / 2), None]);
     }
 
+    // ---- Cancelled ----
+
+    fn cancelled(key: u32) -> Session {
+        Session {
+            cancelled: true,
+            ..calendar().into_iter().find(|s| s.key == key).unwrap()
+        }
+    }
+
+    #[test]
+    fn a_cancelled_session_shows_as_cancelled() {
+        let mut sessions = calendar();
+        sessions[1] = cancelled(2);
+        let w = weekend(&sessions, 0, ALL, &Results::new(), &Moved::new()).unwrap();
+        let flags: Vec<bool> = w.sessions.iter().map(|s| s.cancelled).collect();
+        assert_eq!(flags, [false, true, false]);
+    }
+
+    #[test]
+    fn no_result_is_asked_for_a_cancelled_session() {
+        let mut sessions = calendar();
+        sessions[0] = cancelled(1);
+        let due = result_due(&sessions, 2 * HOUR, &Results::new(), &HashSet::new());
+        assert_eq!(due, None);
+    }
+
+    #[test]
+    fn a_session_is_newly_cancelled_once() {
+        let mut new = calendar();
+        new[2] = cancelled(3);
+        let keys = |old: &[Session], new: &[Session]| -> Vec<u32> {
+            newly_cancelled(old, new).iter().map(|s| s.key).collect()
+        };
+        assert_eq!(keys(&calendar(), &new), [3]);
+        assert!(keys(&new, &new).is_empty());
+        assert!(keys(&[], &new).is_empty());
+    }
+
     #[test]
     fn the_reply_reads_as_the_page_expects() {
         let reply = ScheduleReply {
@@ -523,7 +577,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&reply).unwrap(),
-            r#"{"now":10,"weekend":{"country":"Singapore","circuit":"Singapore","sessions":[{"kind":"Race","name":"Race","start":172800,"end":176400,"state":"coming","followed":true,"result":null,"moved_from":null}]}}"#
+            r#"{"now":10,"weekend":{"country":"Singapore","circuit":"Singapore","sessions":[{"kind":"Race","name":"Race","start":172800,"end":176400,"state":"coming","followed":true,"result":null,"moved_from":null,"cancelled":false}]}}"#
         );
     }
 }

@@ -134,6 +134,9 @@
   .sessions .next .state { font-weight: 600; }
   .sessions .off { color: var(--muted); }
   .sessions .moved { color: var(--warn); }
+  .sessions .cancelled { color: var(--muted); }
+  .sessions .cancelled .name { text-decoration: line-through; }
+  .sessions .cancelled .state { color: var(--warn); }
   .sessions .result { display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
   .sessions .result .swatch { width: .7rem; height: .7rem; }
 
@@ -761,16 +764,18 @@ function showWeekend() {
   for (const s of weekend.sessions) {
     // Worked out again here: the reply can be up to a minute old.
     const state = now >= s.end ? "done" : now >= s.start ? "live" : "coming";
-    const isNext = state === "coming" && s.followed && !nextShown;
+    const isNext = state === "coming" && s.followed && !s.cancelled && !nextShown;
     nextShown ||= isNext;
     const li = document.createElement("li");
-    li.className = !s.followed && state !== "done" ? "off" : isNext ? "next" : state;
+    li.className = s.cancelled ? "cancelled"
+      : !s.followed && state !== "done" ? "off" : isNext ? "next" : state;
     const name = document.createElement("span");
     name.className = "name";
     name.textContent = s.name;
     const status = document.createElement("span");
     status.className = "state";
-    if (state === "done" && s.result) status.append(resultBadge(s.kind, s.result));
+    if (s.cancelled) status.textContent = "cancelled";
+    else if (state === "done" && s.result) status.append(resultBadge(s.kind, s.result));
     else status.textContent = state === "done" ? "done" : !s.followed ? "not followed"
       : state === "live" ? "live" : isNext ? "in " + countdown(Math.floor(s.start - now)) : "";
     const time = document.createElement("span");

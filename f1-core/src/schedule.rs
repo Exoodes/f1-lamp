@@ -67,6 +67,14 @@ pub struct Session {
     /// `circuit_short_name`).
     #[serde(default)]
     pub circuit: String,
+    /// Cancelled by F1. Such a session is only shown on the page: the lamp
+    /// follows only the others. Never saved, so left out of the JSON.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cancelled: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 impl Session {
@@ -81,6 +89,7 @@ impl Session {
             name: String::new(),
             country: String::new(),
             circuit: String::new(),
+            cancelled: false,
         }
     }
 

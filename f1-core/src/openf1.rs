@@ -161,21 +161,31 @@ impl TryFrom<SessionDto> for Session {
             name: dto.session_name,
             country: dto.country_name,
             circuit: dto.circuit_short_name,
+            cancelled: dto.is_cancelled,
         })
     }
 }
 
-/// The sessions the lamp can use: not cancelled, converted, sorted by start.
+/// Every session, cancelled ones included, converted and sorted by start.
 /// Sessions that fail to convert are skipped, so one odd entry can't stop the
 /// whole calendar from loading.
-pub fn usable_sessions(dtos: Vec<SessionDto>) -> Vec<Session> {
+pub fn all_sessions(dtos: Vec<SessionDto>) -> Vec<Session> {
     let mut sessions: Vec<Session> = dtos
         .into_iter()
-        .filter(|dto| !dto.is_cancelled)
         .filter_map(|dto| Session::try_from(dto).ok())
         .collect();
     sessions.sort_by_key(|s| s.start);
     sessions
+}
+
+/// The sessions the lamp can use: not cancelled, converted, sorted by start.
+pub fn usable_sessions(dtos: Vec<SessionDto>) -> Vec<Session> {
+    usable(&all_sessions(dtos))
+}
+
+/// The sessions of `sessions` that aren't cancelled.
+pub fn usable(sessions: &[Session]) -> Vec<Session> {
+    sessions.iter().filter(|s| !s.cancelled).cloned().collect()
 }
 
 /// An RFC 3339 timestamp such as `2026-09-06T13:00:00+00:00` as Unix seconds.
@@ -297,6 +307,16 @@ mod tests {
         let mut cancelled = dto("Race", "Race");
         cancelled.is_cancelled = true;
         assert!(usable_sessions(vec![cancelled]).is_empty());
+    }
+
+    #[test]
+    fn cancelled_sessions_are_kept_as_cancelled_for_the_page() {
+        let mut cancelled = dto("Race", "Race");
+        cancelled.is_cancelled = true;
+        let all = all_sessions(vec![cancelled, dto("Qualifying", "Qualifying")]);
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().any(|s| s.cancelled));
+        assert_eq!(usable(&all).len(), 1);
     }
 
     #[test]

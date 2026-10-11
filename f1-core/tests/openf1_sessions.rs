@@ -26,6 +26,18 @@ fn sessions_fixture_parses_every_record() {
 }
 
 #[test]
+fn bahrain_and_saudi_arabia_show_as_cancelled_weekends() {
+    use f1_core::openf1::all_sessions;
+    let all = all_sessions(dtos());
+    let bahrain: Vec<bool> = all
+        .iter()
+        .filter(|s| s.country == "Bahrain" && s.meeting == 1282)
+        .map(|s| s.cancelled)
+        .collect();
+    assert_eq!(bahrain, [true; 5]);
+}
+
+#[test]
 fn cancelled_sessions_are_dropped_from_the_fixture() {
     let cancelled = dtos().iter().filter(|d| d.is_cancelled).count();
     assert_eq!(cancelled, 10);

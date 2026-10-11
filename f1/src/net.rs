@@ -120,14 +120,16 @@ impl Schedule {
         }
     }
 
-    /// Swaps in a freshly downloaded list, and saves the part of it that
-    /// still matters if that changed.
+    /// Swaps in a freshly downloaded list (cancelled sessions included: the
+    /// page shows them, the lamp ignores them), and saves the part of it
+    /// that still matters if that changed.
     fn replace(&mut self, sessions: Vec<Session>, now_unix: i64) {
-        let moves = weekend::track_moves(
-            &mut self.moved.lock().unwrap(),
-            self.calendar.sessions(),
-            &sessions,
-        );
+        // Compared with what the page had: cancelled sessions are only there.
+        let before = self.page.lock().unwrap().clone();
+        for session in weekend::newly_cancelled(&before, &sessions) {
+            log::info!("calendar: {} cancelled", title(session));
+        }
+        let moves = weekend::track_moves(&mut self.moved.lock().unwrap(), &before, &sessions);
         for m in moves {
             if let Some(session) = sessions.iter().find(|s| s.key == m.key) {
                 log::info!(
@@ -138,8 +140,9 @@ impl Schedule {
                 );
             }
         }
-        *self.page.lock().unwrap() = sessions.clone();
-        let Some(relevant) = self.calendar.replace(sessions, now_unix) else {
+        let usable = openf1::usable(&sessions);
+        *self.page.lock().unwrap() = sessions;
+        let Some(relevant) = self.calendar.replace(usable, now_unix) else {
             return;
         };
         match self.store.save(&relevant) {
@@ -607,13 +610,14 @@ fn fetch_result(session_key: u32, heartbeat: &Heartbeat) -> anyhow::Result<Optio
     Ok(drivers.first().and_then(openf1::session_result))
 }
 
-/// Downloads the sessions of the next `CALENDAR_DAYS` days, ready to use.
+/// Downloads the sessions around now (see `openf1::sessions_url`), cancelled
+/// ones included.
 fn fetch_calendar(now_unix: i64) -> anyhow::Result<Vec<Session>> {
     let url = openf1::sessions_url(now_unix);
     log::info!("calendar: GET {url}");
     // `None` is OpenF1's 404 for "no sessions", e.g. in the winter break.
     let dtos = http::get_json::<Vec<SessionDto>>(&url)?.unwrap_or_default();
-    Ok(openf1::usable_sessions(dtos))
+    Ok(openf1::all_sessions(dtos))
 }
 
 fn log_calendar(sessions: &[Session], now_unix: i64) {
