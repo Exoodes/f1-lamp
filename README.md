@@ -14,6 +14,7 @@ Rust: the course*, with some extras of its own.
 
 | Event | Lamp |
 |---|---|
+| Countdown | white breathing that speeds up, from one breath in 4 s to one a second, for the last 10 minutes before a session, until the TV shows the start (scheduled start plus the TV delay); can be switched off |
 | Green flag | green for a few seconds (setting), then the lamp colour again |
 | Yellow | solid yellow |
 | Double yellow | blinking yellow |

@@ -19,7 +19,7 @@ use f1_core::{
     color::Rgb,
     heartbeat::Heartbeat,
     input::{Input, NetStatus, RaceEvent},
-    net_schedule::{in_words, Calendar, Deadlines, PhaseUpdate},
+    net_schedule::{in_words, instant_at, Calendar, Deadlines, PhaseUpdate},
     openf1::{self, DriverDto, ResultDto, SessionDto, CALENDAR_DAYS},
     schedule::{self, Session, WinnerLookup},
     snapshot::Snapshot,
@@ -193,6 +193,8 @@ struct Net<'a> {
     calendar_retry: Backoff,
     /// The session whose winner was sent, so each race is shown once.
     winner_sent: Option<u32>,
+    /// The session and start last sent for the countdown.
+    countdown_sent: Option<(u32, i64)>,
     due: Deadlines,
 }
 
@@ -227,6 +229,7 @@ impl<'a> Net<'a> {
             schedule,
             calendar_retry: Backoff::new(FIRST_CALENDAR_RETRY, MAX_CALENDAR_RETRY),
             winner_sent: None,
+            countdown_sent: None,
             due: Deadlines::all(Instant::now()),
         })
     }
@@ -399,7 +402,27 @@ impl<'a> Net<'a> {
             self.due.calendar = now;
             self.calendar_retry.reset();
         }
+        // A replay owns the phase, and the countdown goes with it.
+        if !cfg!(feature = "player") {
+            self.send_next_start(now, unix)?;
+        }
         Ok(now + schedule::phase_wait(self.schedule.calendar.sessions(), unix))
+    }
+
+    /// Tells the render loop when the next session starts, for the
+    /// countdown, each time that changes.
+    fn send_next_start(&mut self, now: Instant, unix: i64) -> anyhow::Result<()> {
+        let target = schedule::countdown_target(self.schedule.calendar.sessions(), unix)
+            .map(|s| (s.key, s.start));
+        if target == self.countdown_sent {
+            return Ok(());
+        }
+        let start = target.and_then(|(_, start)| instant_at(now, unix, start));
+        self.tx
+            .send(Input::NextStart(start))
+            .context("render loop is gone")?;
+        self.countdown_sent = target;
+        Ok(())
     }
 
     /// The OpenF1 winner lookup, once WiFi and the clock are ready.

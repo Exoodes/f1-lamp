@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::input::SessionPhase;
+use crate::{input::SessionPhase, settings::MAX_TV_DELAY_MS};
 
 /// The phase is checked at the next boundary (`next_change`); this is the
 /// longest it goes unchecked anyway, in case the calendar or the clock
@@ -236,6 +236,14 @@ pub fn winner_lookup(
 /// start, as `openf1::usable_sessions` returns them.
 pub fn next_session(sessions: &[Session], now: i64) -> Option<&Session> {
     sessions.iter().find(|s| s.start > now)
+}
+
+/// The session the countdown leads up to at `now`: the first whose start is
+/// less than the longest TV delay ago. Kept past its start like that, so
+/// the countdown can run on until the TV shows the start.
+pub fn countdown_target(sessions: &[Session], now: i64) -> Option<&Session> {
+    let longest_delay = i64::from(MAX_TV_DELAY_MS / 1000);
+    sessions.iter().find(|s| s.start + longest_delay > now)
 }
 
 /// The sessions that can still affect the lamp at `now` (not fully over,
@@ -587,6 +595,21 @@ mod tests {
             .collect();
         let json = serde_json::to_string(&sessions).unwrap();
         assert!(json.len() < MAX_JSON * 3 / 4, "{} bytes", json.len());
+    }
+
+    // ---- Countdown ----
+
+    #[test]
+    fn the_countdown_leads_up_to_the_next_start() {
+        let quali = session(1, SessionKind::Qualifying, START, END);
+        let race = session(2, SessionKind::Race, START + 24 * HOUR, END + 24 * HOUR);
+        let sessions = [quali, race];
+        let key = |now| countdown_target(&sessions, now).map(|s| s.key);
+        assert_eq!(key(START - HOUR), Some(1));
+        // Kept for the longest TV delay after the start, then the next one.
+        assert_eq!(key(START + 119), Some(1));
+        assert_eq!(key(START + 120), Some(2));
+        assert_eq!(key(START + 24 * HOUR + 120), None);
     }
 
     // ---- Winner window ----

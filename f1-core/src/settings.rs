@@ -74,6 +74,8 @@ pub struct EffectToggles {
     pub winner: bool,
     pub knocked_out: bool,
     pub last_lap: bool,
+    /// The countdown before each session (not a race event).
+    pub countdown: bool,
 }
 
 impl Default for EffectToggles {
@@ -87,6 +89,7 @@ impl Default for EffectToggles {
             winner: true,
             knocked_out: true,
             last_lap: true,
+            countdown: true,
         }
     }
 }
@@ -320,6 +323,7 @@ mod tests {
                 winner: false,
                 knocked_out: false,
                 last_lap: false,
+                countdown: false,
             },
         };
         let json = serde_json::to_string(&settings).unwrap();
@@ -349,6 +353,13 @@ mod tests {
         let settings: Settings = serde_json::from_str(json).unwrap();
         assert!(settings.effects.last_lap);
         assert!(!settings.effects.chequered_flag);
+    }
+
+    #[test]
+    fn effects_saved_before_the_countdown_existed_show_it() {
+        let settings: Settings = serde_json::from_str(r#"{"effects":{"last_lap":false}}"#).unwrap();
+        assert!(settings.effects.countdown);
+        assert!(!settings.effects.last_lap);
     }
 
     #[test]
@@ -515,6 +526,7 @@ mod tests {
             winner: false,
             knocked_out: false,
             last_lap: false,
+            countdown: false,
         };
         assert!(with_effects(all_off).shows(RaceEvent::TrackFlag(TrackFlag::Red)));
     }

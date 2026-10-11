@@ -7,9 +7,6 @@ Ideas for after the course, in no particular order of size.
 - **The weekend's results on the schedule page.** Pole, sprint and race
   winners next to their sessions, in the team colour; the lamp already asks
   OpenF1's `session_result` for race winners.
-- **Countdown before a session.** E.g. from 10 minutes before the start the
-  lamp breathes slowly in white, faster towards the start; or a short
-  reminder pulse 1 h and 10 min before qualifying and the race.
 - **Choose which sessions the lamp follows.** A switch per kind (practice,
   qualifying, sprint qualifying, sprint, race) on the page; e.g. practice off
   keeps Fridays calm. Today every session is followed.

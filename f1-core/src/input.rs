@@ -87,6 +87,9 @@ pub enum Input {
     /// An event tried from the web page: plays at once, past the TV delay
     /// and the effect switches.
     Preview(RaceEvent),
+    /// When the next session is scheduled to start, for the countdown;
+    /// `None` when none is coming.
+    NextStart(Option<Instant>),
     Settings(Settings),
     Clock {
         minute_of_day: u16,

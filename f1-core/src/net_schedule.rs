@@ -3,7 +3,7 @@
 //! around it ([`Calendar`]): which phase to send, and when a downloaded list
 //! has to be saved.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::{
     input::SessionPhase,
@@ -114,6 +114,17 @@ impl Calendar {
     pub fn may_download(&self, now_unix: i64, feed_running: bool) -> bool {
         let phase = schedule::phase_at(&self.sessions, now_unix, feed_running);
         !schedule::feed_wanted(phase)
+    }
+}
+
+/// The `Instant` of the Unix time `then`, when `now` is the Unix time
+/// `now_unix`; `None` if it can't be represented.
+pub fn instant_at(now: Instant, now_unix: i64, then: i64) -> Option<Instant> {
+    let offset = Duration::from_secs((then - now_unix).unsigned_abs());
+    if then >= now_unix {
+        now.checked_add(offset)
+    } else {
+        now.checked_sub(offset)
     }
 }
 
@@ -255,6 +266,20 @@ mod tests {
             Some(vec![coming.clone()])
         );
         assert_eq!(calendar.sessions(), [over, coming]);
+    }
+
+    #[test]
+    fn unix_times_convert_to_instants_both_ways() {
+        let now = Instant::now() + Duration::from_secs(1000);
+        assert_eq!(
+            instant_at(now, 5000, 5060),
+            Some(now + Duration::from_secs(60))
+        );
+        assert_eq!(
+            instant_at(now, 5000, 4940),
+            Some(now - Duration::from_secs(60))
+        );
+        assert_eq!(instant_at(now, 5000, 5000), Some(now));
     }
 
     #[test]

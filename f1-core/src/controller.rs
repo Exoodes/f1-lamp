@@ -20,7 +20,7 @@ use crate::{
     post,
     settings::Settings,
     snapshot::Snapshot,
-    theme::{event_overlay, flag_effect, net_effect, winner_effect},
+    theme::{countdown_effect, event_overlay, flag_effect, net_effect, winner_effect, COUNTDOWN},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -99,6 +99,10 @@ struct LayerState {
     settings: Settings,
     /// Local time in minutes after midnight; `None` until the first clock message.
     minute_of_day: Option<u16>,
+    /// The next session's scheduled start.
+    next_start: Option<Instant>,
+    /// When the countdown showing now began; `None` while none shows.
+    countdown_from: Option<Instant>,
 }
 
 #[derive(Clone, Debug)]
@@ -113,13 +117,15 @@ pub struct Controller {
 
 type Layer = fn(&Controller) -> Option<Scene>;
 
-const LAYERS: [(&str, Layer); 5] = [
+const LAYERS: [(&str, Layer); 6] = [
     ("override", Controller::override_layer),
     ("overlay", Controller::overlay_layer),
     // A winner only arrives after the finish, when the last flag is stale.
     ("winner", Controller::winner_layer),
     ("live track", Controller::live_track_layer),
     ("status", Controller::status_layer),
+    // Under the status: a session without network matters more.
+    ("countdown", Controller::countdown_layer),
 ];
 
 impl Controller {
@@ -136,6 +142,8 @@ impl Controller {
                 ever_online: false,
                 settings: Settings::default(),
                 minute_of_day: None,
+                next_start: None,
+                countdown_from: None,
             },
             overlays: Overlays::default(),
             delayed: DelayQueue::new(),
@@ -171,6 +179,7 @@ impl Controller {
                     winner.display = PREVIEW_WINNER_DISPLAY;
                 }
             }
+            Input::NextStart(start) => self.layers.next_start = start,
             Input::Settings(settings) => self.layers.settings = settings,
             Input::Clock { minute_of_day } => self.layers.minute_of_day = Some(minute_of_day),
         }
@@ -181,6 +190,22 @@ impl Controller {
         self.expire_green(now);
         self.overlays.tick(now);
         self.tick_winner(now);
+        self.tick_countdown(now);
+    }
+
+    /// The countdown runs for [`COUNTDOWN`] up to the start as the TV shows
+    /// it: the scheduled start plus the TV delay.
+    fn tick_countdown(&mut self, now: Instant) {
+        let delay = self.tv_delay();
+        let layers = &mut self.layers;
+        layers.countdown_from = layers
+            .next_start
+            .filter(|_| layers.settings.effects.countdown)
+            .and_then(|start| {
+                let on_tv = start + delay;
+                let from = on_tv.checked_sub(COUNTDOWN)?;
+                (from <= now && now < on_tv).then_some(from)
+            });
     }
 
     fn tick_winner(&mut self, now: Instant) {
@@ -371,6 +396,13 @@ impl Controller {
             },
             _ => self.layers.net,
         }
+    }
+
+    fn countdown_layer(&self) -> Option<Scene> {
+        self.layers.countdown_from.map(|started| Scene {
+            effect: countdown_effect(),
+            started,
+        })
     }
 
     fn lamp_scene(&self) -> Scene {
@@ -1014,6 +1046,90 @@ mod tests {
             winner_at(&mut c, t0 + ms(10_000)),
             ("live track", flag_effect(TrackFlag::Yellow))
         );
+    }
+
+    /// Online and idle, so only a countdown can show over the lamp.
+    fn idle_online(t0: Instant) -> Controller {
+        let mut c = Controller::new(t0);
+        c.apply(Input::Net(NetStatus::Online), t0);
+        c
+    }
+
+    #[test]
+    fn the_countdown_runs_for_the_last_ten_minutes_before_a_start() {
+        let t0 = Instant::now();
+        let mut c = idle_online(t0);
+        let start = t0 + COUNTDOWN + ms(60_000);
+        c.apply(Input::NextStart(Some(start)), t0);
+        let begins = start - COUNTDOWN;
+        assert_eq!(winner_at(&mut c, begins - ms(1)).0, "lamp");
+        assert_eq!(winner_at(&mut c, begins), ("countdown", countdown_effect()));
+        assert_eq!(winner_at(&mut c, start - ms(1)).0, "countdown");
+        assert_eq!(winner_at(&mut c, start).0, "lamp");
+    }
+
+    #[test]
+    fn the_countdown_ends_when_the_tv_shows_the_start() {
+        let t0 = Instant::now();
+        let mut c = idle_online(t0);
+        c.apply(
+            Input::Settings(Settings {
+                tv_delay_ms: 44_000,
+                ..Settings::default()
+            }),
+            t0,
+        );
+        let start = t0 + COUNTDOWN;
+        c.apply(Input::NextStart(Some(start)), t0);
+        assert_eq!(winner_at(&mut c, t0 + ms(43_999)).0, "lamp");
+        assert_eq!(winner_at(&mut c, start + ms(43_999)).0, "countdown");
+        assert_eq!(winner_at(&mut c, start + ms(44_000)).0, "lamp");
+    }
+
+    #[test]
+    fn the_countdown_breathes_from_its_own_beginning() {
+        let t0 = Instant::now();
+        let mut c = idle_online(t0);
+        let start = t0 + COUNTDOWN;
+        // Known only halfway through, e.g. after a reboot.
+        c.apply(Input::NextStart(Some(start)), t0 + COUNTDOWN / 2);
+        c.tick(t0 + COUNTDOWN / 2);
+        let (_, scene) = c.arbitrate();
+        assert_eq!(scene.started, t0);
+    }
+
+    #[test]
+    fn the_countdown_can_be_switched_off() {
+        let t0 = Instant::now();
+        let mut c = idle_online(t0);
+        let mut settings = Settings::default();
+        settings.effects.countdown = false;
+        c.apply(Input::Settings(settings), t0);
+        c.apply(Input::NextStart(Some(t0 + ms(60_000))), t0);
+        assert_eq!(winner_at(&mut c, t0).0, "lamp");
+    }
+
+    #[test]
+    fn no_countdown_without_a_next_session() {
+        let t0 = Instant::now();
+        let mut c = idle_online(t0);
+        c.apply(Input::NextStart(Some(t0 + ms(60_000))), t0);
+        c.apply(Input::NextStart(None), t0);
+        assert_eq!(winner_at(&mut c, t0).0, "lamp");
+    }
+
+    #[test]
+    fn effects_and_network_trouble_show_over_the_countdown() {
+        let t0 = Instant::now();
+        let mut c = idle_online(t0);
+        c.apply(Input::Phase(SessionPhase::PreSession), t0);
+        c.apply(Input::NextStart(Some(t0 + ms(60_000))), t0);
+        assert_eq!(winner_at(&mut c, t0).0, "countdown");
+        c.apply(Input::Preview(RaceEvent::LastLap), t0 + ms(10));
+        assert_eq!(winner_at(&mut c, t0 + ms(20)).0, "overlay");
+        c.apply(Input::Net(NetStatus::Connecting), t0 + ms(30));
+        assert_eq!(winner_at(&mut c, t0 + ms(40)).0, "overlay");
+        assert_eq!(winner_at(&mut c, t0 + ms(5000)).0, "status");
     }
 
     #[test]

@@ -48,6 +48,14 @@ pub enum Effect {
         color: Rgb,
         duration_ms: u32,
     },
+    /// Breathing whose breaths shorten smoothly from `slow_ms` to `fast_ms`
+    /// over `duration_ms`, then stay at `fast_ms`.
+    Quickening {
+        color: Rgb,
+        duration_ms: u32,
+        slow_ms: u32,
+        fast_ms: u32,
+    },
 }
 
 impl Effect {
@@ -80,6 +88,12 @@ impl Effect {
             Effect::Fade { color, duration_ms } => {
                 handle_fade(frame, *color, u128::from(*duration_ms), elapsed);
             }
+            Effect::Quickening {
+                color,
+                duration_ms,
+                slow_ms,
+                fast_ms,
+            } => handle_quickening(frame, elapsed, *color, *duration_ms, *slow_ms, *fast_ms),
         }
     }
 
@@ -90,7 +104,7 @@ impl Effect {
                 period_ms, times, ..
             } => times.map(|n| Duration::from_millis(u64::from(*period_ms).max(1) * u64::from(n))),
             Effect::Chase { .. } => None,
-            Effect::Breathe { .. } => None,
+            Effect::Breathe { .. } | Effect::Quickening { .. } => None,
             Effect::Chequered { duration_ms } => {
                 Some(Duration::from_millis(u64::from(*duration_ms)))
             }
@@ -157,6 +171,37 @@ fn handle_chase(frame: &mut Frame, elapsed: Duration, color: Rgb, leds_per_sec: 
 fn handle_breathe(frame: &mut Frame, elapsed: Duration, color: Rgb, period_ms: u128) {
     let phase = ms_into_period(elapsed, period_ms) as f32 / period_ms as f32;
     let value = (1.0 - (TAU * phase).cos()) / 2.0;
+    let brightness = BREATHE_FLOOR + (1.0 - BREATHE_FLOOR) * value;
+    frame.fill(color.scale(brightness));
+}
+
+fn handle_quickening(
+    frame: &mut Frame,
+    elapsed: Duration,
+    color: Rgb,
+    duration_ms: u32,
+    slow_ms: u32,
+    fast_ms: u32,
+) {
+    let t = elapsed.as_secs_f32() * 1000.0;
+    let (slow, fast) = (slow_ms.max(1) as f32, fast_ms.max(1) as f32);
+    let length = duration_ms as f32;
+    let ramp = t.min(length);
+    // Breaths so far: the integral of 1 / period over time, with the period
+    // going linearly from `slow` to `fast`. Counting breaths instead of
+    // working from the current period keeps the brightness smooth.
+    let change = if length > 0.0 {
+        (fast - slow) / length
+    } else {
+        0.0
+    };
+    let ramp_breaths = if change.abs() < f32::EPSILON {
+        ramp / slow
+    } else {
+        ((slow + change * ramp) / slow).ln() / change
+    };
+    let breaths = ramp_breaths + (t - ramp) / fast;
+    let value = (1.0 - (TAU * breaths.fract()).cos()) / 2.0;
     let brightness = BREATHE_FLOOR + (1.0 - BREATHE_FLOOR) * value;
     frame.fill(color.scale(brightness));
 }
@@ -629,5 +674,72 @@ mod tests {
         assert_eq!(at(0), Rgb::new(200, 100, 0));
         assert_eq!(at(500), Rgb::new(100, 50, 0));
         assert_eq!(at(1000), Rgb::OFF);
+    }
+
+    // ---- Quickening ----
+
+    const QUICKENING: Effect = Effect::Quickening {
+        color: Rgb::WHITE,
+        duration_ms: 10_000,
+        slow_ms: 4000,
+        fast_ms: 1000,
+    };
+
+    fn level(effect: Effect, ms: u64) -> u8 {
+        render_at(effect, ms).pixels()[0].r
+    }
+
+    #[test]
+    fn quickening_starts_dark_like_breathing() {
+        let dark = Rgb::WHITE.scale(BREATHE_FLOOR).r;
+        assert_eq!(level(QUICKENING, 0), dark);
+    }
+
+    #[test]
+    fn quickening_first_breath_is_slow() {
+        // Half a breath in, the brightest; a 4 s breath barely shortens in 2 s.
+        assert!(level(QUICKENING, 1900) > 240, "{}", level(QUICKENING, 1900));
+    }
+
+    #[test]
+    fn quickening_breathes_at_the_fast_pace_after_its_duration() {
+        // Whatever the phase at 10 s, a 1 s breath repeats every second.
+        for ms in [10_000, 10_250, 10_500, 10_750] {
+            assert_eq!(level(QUICKENING, ms), level(QUICKENING, ms + 1000), "{ms}");
+        }
+    }
+
+    #[test]
+    fn quickening_gets_faster() {
+        // Count the breaths in the first and the last 3 s: each one falls
+        // through the middle brightness once.
+        let dips = |from: u64| {
+            let levels: Vec<u8> = (from..from + 3000)
+                .step_by(10)
+                .map(|ms| level(QUICKENING, ms))
+                .collect();
+            levels
+                .windows(2)
+                .filter(|w| w[0] >= 128 && w[1] < 128)
+                .count()
+        };
+        assert!(dips(7000) > dips(0), "{} vs {}", dips(7000), dips(0));
+    }
+
+    #[test]
+    fn quickening_with_equal_paces_is_plain_breathing() {
+        let even = Effect::Quickening {
+            color: Rgb::WHITE,
+            duration_ms: 5000,
+            slow_ms: 2000,
+            fast_ms: 2000,
+        };
+        let breathe = Effect::Breathe {
+            color: Rgb::WHITE,
+            period_ms: 2000,
+        };
+        for ms in [0, 500, 1000, 1500, 6000] {
+            assert_eq!(level(even, ms), level(breathe, ms), "{ms}");
+        }
     }
 }

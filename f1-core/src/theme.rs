@@ -2,6 +2,8 @@
 //! (start lights, chequered flag, flashes), the winner and the network status.
 //! The lamp's look is changed here.
 
+use std::time::Duration;
+
 use crate::{
     color::Rgb,
     effect::Effect,
@@ -30,6 +32,13 @@ const KNOCKED_OUT_FADE_MS: u32 = 3000;
 
 const WINNER_CHASE_SPEED: f32 = 8.0;
 const WINNER_CHASE_TAIL: u8 = 6;
+
+/// How long before the start (as the TV shows it) the countdown begins.
+pub const COUNTDOWN: Duration = Duration::from_secs(10 * 60);
+/// The countdown's first breaths take this long, its last ones
+/// `COUNTDOWN_FAST_MS`.
+const COUNTDOWN_SLOW_MS: u32 = 4000;
+const COUNTDOWN_FAST_MS: u32 = 1000;
 
 const NET_CONNECTING_PERIOD_MS: u32 = 2000;
 const NET_ERROR_PERIOD_MS: u32 = 2000;
@@ -78,6 +87,16 @@ pub fn event_overlay(event: RaceEvent) -> Option<Effect> {
             color: team_color,
             duration_ms: KNOCKED_OUT_FADE_MS,
         }),
+    }
+}
+
+/// The last [`COUNTDOWN`] before a session: white breathing that quickens.
+pub fn countdown_effect() -> Effect {
+    Effect::Quickening {
+        color: Rgb::WHITE,
+        duration_ms: COUNTDOWN.as_millis() as u32,
+        slow_ms: COUNTDOWN_SLOW_MS,
+        fast_ms: COUNTDOWN_FAST_MS,
     }
 }
 
