@@ -24,7 +24,7 @@ use f1_core::{
     openf1::{self, DriverDto, ResultDto, SessionDto, CALENDAR_DAYS},
     schedule::{self, Session, WinnerLookup},
     snapshot::Snapshot,
-    weekend::{self, ResultDue, Results, SessionResult},
+    weekend::{self, Moved, ResultDue, Results, SessionResult},
 };
 
 use crate::{
@@ -105,6 +105,8 @@ struct Schedule {
     calendar: Calendar,
     store: ScheduleStore,
     page: Arc<Mutex<Vec<Session>>>,
+    /// Sessions that moved since the lamp started, for the web page.
+    moved: Arc<Mutex<Moved>>,
 }
 
 impl Schedule {
@@ -112,6 +114,7 @@ impl Schedule {
         let saved = store.load();
         Schedule {
             page: Arc::new(Mutex::new(saved.clone())),
+            moved: Arc::new(Mutex::new(Moved::new())),
             calendar: Calendar::new(saved),
             store,
         }
@@ -120,6 +123,21 @@ impl Schedule {
     /// Swaps in a freshly downloaded list, and saves the part of it that
     /// still matters if that changed.
     fn replace(&mut self, sessions: Vec<Session>, now_unix: i64) {
+        let moves = weekend::track_moves(
+            &mut self.moved.lock().unwrap(),
+            self.calendar.sessions(),
+            &sessions,
+        );
+        for m in moves {
+            if let Some(session) = sessions.iter().find(|s| s.key == m.key) {
+                log::info!(
+                    "calendar: {} moved from {} to {}",
+                    title(session),
+                    clock::local_day_time(m.from),
+                    clock::local_day_time(m.to)
+                );
+            }
+        }
         *self.page.lock().unwrap() = sessions.clone();
         let Some(relevant) = self.calendar.replace(sessions, now_unix) else {
             return;
@@ -334,6 +352,7 @@ impl<'a> Net<'a> {
                 web::start(
                     Arc::clone(snapshot),
                     Arc::clone(&self.schedule.page),
+                    Arc::clone(&self.schedule.moved),
                     Arc::clone(&self.results),
                     self.tx.clone(),
                     Arc::clone(tokens),

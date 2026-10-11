@@ -27,7 +27,7 @@ use f1_core::{
     snapshot::Snapshot,
     token::TokenStatus,
     web_api::is_lamp_host,
-    weekend::{weekend, Results, ScheduleReply},
+    weekend::{weekend, Moved, Results, ScheduleReply},
 };
 use serde::de::DeserializeOwned;
 
@@ -66,6 +66,7 @@ const TEXT: &str = "text/plain; charset=utf-8";
 pub fn start(
     snapshot: Arc<Mutex<Snapshot>>,
     schedule: Arc<Mutex<Vec<Session>>>,
+    moved: Arc<Mutex<Moved>>,
     results: Arc<Mutex<Results>>,
     tx: SyncSender<Input>,
     tokens: Arc<TokenKeeper>,
@@ -76,7 +77,7 @@ pub fn start(
     };
 
     let mut server = EspHttpServer::new(&config)?;
-    page_routes(&mut server, snapshot, schedule, results)?;
+    page_routes(&mut server, snapshot, schedule, moved, results)?;
     command_routes(&mut server, tx)?;
     token_routes(&mut server, tokens)?;
     ota_route(&mut server)?;
@@ -94,6 +95,7 @@ fn page_routes(
     server: &mut EspHttpServer<'static>,
     snapshot: Arc<Mutex<Snapshot>>,
     schedule: Arc<Mutex<Vec<Session>>>,
+    moved: Arc<Mutex<Moved>>,
     results: Arc<Mutex<Results>>,
 ) -> anyhow::Result<()> {
     server.fn_handler::<anyhow::Error, _>("/", Method::Get, |req| {
@@ -116,6 +118,7 @@ fn page_routes(
                 now,
                 follow,
                 &results.lock().unwrap(),
+                &moved.lock().unwrap(),
             )
         });
         reply(

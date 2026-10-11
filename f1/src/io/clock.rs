@@ -48,9 +48,40 @@ pub fn log_stamp() -> String {
     }
 }
 
+/// A Unix time as local `Sat 10 Oct 15:30`, for the log.
+pub fn local_day_time(unix: i64) -> String {
+    const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let Some(tm) = local_time_at(unix) else {
+        return format!("{unix} (Unix)");
+    };
+    let name = |names: &[&'static str], i: i32| {
+        usize::try_from(i)
+            .ok()
+            .and_then(|i| names.get(i))
+            .copied()
+            .unwrap_or("?")
+    };
+    format!(
+        "{} {} {} {:02}:{:02}",
+        name(&DAYS, tm.tm_wday),
+        tm.tm_mday,
+        name(&MONTHS, tm.tm_mon),
+        tm.tm_hour,
+        tm.tm_min
+    )
+}
+
 /// The local date and time once SNTP has set the clock; `None` before that.
 fn local_time() -> Option<sys::tm> {
     let seconds = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+    local_time_at(i64::try_from(seconds).ok()?)
+}
+
+/// The local date and time of a Unix time; `None` for times before 2025.
+fn local_time_at(seconds: i64) -> Option<sys::tm> {
     let c_sec = sys::time_t::try_from(seconds).ok()?;
     let mut tm = sys::tm::default();
     // SAFETY: both pointers are to locals that live through the call, and

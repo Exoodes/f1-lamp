@@ -133,6 +133,7 @@
   .sessions .live .state { color: var(--accent); font-weight: 600; }
   .sessions .next .state { font-weight: 600; }
   .sessions .off { color: var(--muted); }
+  .sessions .moved { color: var(--warn); }
   .sessions .result { display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
   .sessions .result .swatch { width: .7rem; height: .7rem; }
 
@@ -775,6 +776,12 @@ function showWeekend() {
     const time = document.createElement("span");
     time.className = "when";
     time.textContent = when(s.start);
+    if (s.moved_from !== null) {
+      const was = document.createElement("span");
+      was.className = "moved";
+      was.textContent = " · moved from " + when(s.moved_from);
+      time.append(was);
+    }
     li.append(name, status, time);
     list.append(li);
   }

@@ -4,9 +4,6 @@ Ideas for after the course, in no particular order of size.
 
 ## Wanted
 
-- **Say when a session moves.** When a new calendar download changes a
-  session's start, log it and show it on the page ("Qualifying moved to
-  15:30"; Singapore's qualifying moved by half an hour, 2026-10-10).
 - **A "winner" for practice.** E.g. the team colour of the driver with the
   fastest lap when the session ends, like pole after qualifying.
 - **Rework the effects.** Some are too fast (seen again in sprint
