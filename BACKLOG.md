@@ -4,8 +4,6 @@ Ideas for after the course, in no particular order of size.
 
 ## Wanted
 
-- **Last lap.** A short white flash when the final lap starts, like a bell.
-  `LapCount` (public) has `CurrentLap` and `TotalLaps`.
 - **Weekend schedule on the page.** The upcoming sessions with their times and
   a countdown; the lamp already has them from OpenF1.
 - **Event buttons on the page.** Next to the flag overrides: trigger a fastest

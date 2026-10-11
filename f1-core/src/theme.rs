@@ -22,6 +22,8 @@ const VSC_ENDING_PERIOD_MS: u32 = 1000;
 const FASTEST_LAP_FLASHES: u8 = 3;
 const PIT_STOP_FLASHES: u8 = 2;
 const OVERTAKE_FLASHES: u8 = 1;
+/// Like a bell for the last lap.
+const LAST_LAP_FLASHES: u8 = 2;
 const CHEQUERED_MS: u32 = 10_000;
 const START_HOLD_MS: u32 = 2000;
 const KNOCKED_OUT_FADE_MS: u32 = 3000;
@@ -71,6 +73,7 @@ pub fn event_overlay(event: RaceEvent) -> Option<Effect> {
         RaceEvent::PitStop { team_color, .. } => Some(Effect::flash(team_color, PIT_STOP_FLASHES)),
         RaceEvent::Overtake { team_color, .. } => Some(Effect::flash(team_color, OVERTAKE_FLASHES)),
         RaceEvent::Winner { .. } => None,
+        RaceEvent::LastLap => Some(Effect::flash(Rgb::WHITE, LAST_LAP_FLASHES)),
         RaceEvent::KnockedOut { team_color, .. } => Some(Effect::Fade {
             color: team_color,
             duration_ms: KNOCKED_OUT_FADE_MS,
@@ -119,7 +122,7 @@ mod tests {
         ]
     }
 
-    fn all_events() -> [RaceEvent; 7] {
+    fn all_events() -> [RaceEvent; 8] {
         [
             RaceEvent::TrackFlag(TrackFlag::Green),
             RaceEvent::StartLights,
@@ -140,6 +143,7 @@ mod tests {
                 driver: 44,
                 team_color: TEAM,
             },
+            RaceEvent::LastLap,
         ]
     }
 

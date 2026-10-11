@@ -9,7 +9,7 @@ use f1_core::{
     timeline::{Stream, Timeline},
 };
 
-const FILES: [(Stream, &str); 9] = [
+const FILES: [(Stream, &str); 10] = [
     (
         Stream::SessionInfo,
         include_str!("data/showcase/SessionInfo.jsonStream"),
@@ -45,6 +45,10 @@ const FILES: [(Stream, &str); 9] = [
     (
         Stream::Overtakes,
         include_str!("data/showcase/OvertakeSeries.jsonStream"),
+    ),
+    (
+        Stream::LapCount,
+        include_str!("data/showcase/LapCount.jsonStream"),
     ),
 ];
 
@@ -84,7 +88,9 @@ fn every_line_parses() {
 
 #[test]
 fn showcase_plays_every_flag_and_the_winner_in_order() {
-    use RaceEvent::{ChequeredFlag, FastestLap, FlagCleared, Overtake, StartLights, Winner};
+    use RaceEvent::{
+        ChequeredFlag, FastestLap, FlagCleared, LastLap, Overtake, StartLights, Winner,
+    };
     use TrackFlag::*;
     let flag = RaceEvent::TrackFlag;
     let events: Vec<(Duration, RaceEvent)> = play()
@@ -154,6 +160,7 @@ fn showcase_plays_every_flag_and_the_winner_in_order() {
                     team_color: colour("#00d7b6")
                 }
             ),
+            (secs(140.0), LastLap),
             (secs(150.0), ChequeredFlag),
             (
                 secs(150.5),

@@ -73,6 +73,7 @@ pub struct EffectToggles {
     pub overtake: bool,
     pub winner: bool,
     pub knocked_out: bool,
+    pub last_lap: bool,
 }
 
 impl Default for EffectToggles {
@@ -85,6 +86,7 @@ impl Default for EffectToggles {
             overtake: true,
             winner: true,
             knocked_out: true,
+            last_lap: true,
         }
     }
 }
@@ -104,6 +106,7 @@ impl Settings {
             RaceEvent::Overtake { driver, .. } => e.overtake && self.follows(driver),
             RaceEvent::Winner { .. } => e.winner,
             RaceEvent::KnockedOut { driver, .. } => e.knocked_out && self.follows(driver),
+            RaceEvent::LastLap => e.last_lap,
         }
     }
 }
@@ -316,6 +319,7 @@ mod tests {
                 overtake: false,
                 winner: false,
                 knocked_out: false,
+                last_lap: false,
             },
         };
         let json = serde_json::to_string(&settings).unwrap();
@@ -334,7 +338,27 @@ mod tests {
                 && e.pit_stop
                 && e.overtake
                 && e.winner
+                && e.knocked_out
+                && e.last_lap
         );
+    }
+
+    #[test]
+    fn effects_saved_before_last_lap_existed_show_it() {
+        let json = r#"{"effects":{"start_lights":true,"chequered_flag":false}}"#;
+        let settings: Settings = serde_json::from_str(json).unwrap();
+        assert!(settings.effects.last_lap);
+        assert!(!settings.effects.chequered_flag);
+    }
+
+    #[test]
+    fn last_lap_can_be_switched_off() {
+        let off = EffectToggles {
+            last_lap: false,
+            ..EffectToggles::default()
+        };
+        assert!(!with_effects(off).shows(RaceEvent::LastLap));
+        assert!(Settings::default().shows(RaceEvent::LastLap));
     }
 
     #[test]
@@ -490,6 +514,7 @@ mod tests {
             overtake: false,
             winner: false,
             knocked_out: false,
+            last_lap: false,
         };
         assert!(with_effects(all_off).shows(RaceEvent::TrackFlag(TrackFlag::Red)));
     }

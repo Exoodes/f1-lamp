@@ -300,6 +300,15 @@ pub struct OvertakeEntry {
     pub timestamp: Option<String>,
 }
 
+/// A race's laps: the leader's lap and the race's length. An update holds
+/// only what changed; a shortened race gets a new `TotalLaps`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct LapCount {
+    pub current_lap: Option<u32>,
+    pub total_laps: Option<u32>,
+}
+
 /// The session's parts and status changes. Only the qualifying part is read:
 /// `Series` gets an entry with `QualifyingPart` 1, 2 and 3 before each part.
 #[derive(Debug, Deserialize)]

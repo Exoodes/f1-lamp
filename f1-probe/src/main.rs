@@ -431,6 +431,12 @@ fn describe(msg: &FeedMessage) -> String {
                 format!("knocked out: {}", knocked_out.join(", "))
             }
         }
+        FeedMessage::LapCount(l) => match (l.current_lap, l.total_laps) {
+            (Some(lap), Some(total)) => format!("lap {lap} of {total}"),
+            (Some(lap), None) => format!("lap {lap}"),
+            (None, Some(total)) => format!("{total} laps"),
+            (None, None) => "update".to_owned(),
+        },
     }
 }
 

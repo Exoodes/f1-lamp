@@ -24,13 +24,16 @@ use crate::{
 /// Race control is left out on purpose: late in a race it holds hundreds of
 /// messages, which would cost tens of KB to parse, and all they would add is
 /// which sectors have a double yellow at the moment of connecting.
-const INITIAL_ORDER: [Stream; 6] = [
+const INITIAL_ORDER: [Stream; 7] = [
     Stream::SessionInfo,
     Stream::SessionData,
     Stream::DriverList,
     Stream::TopThree,
     Stream::TrackStatus,
     Stream::SessionStatus,
+    // After the status: on the last lap already when connecting, it counts
+    // as sent (silently, like everything here).
+    Stream::LapCount,
 ];
 
 /// One SignalR message at most, for [`LiveSession::new`] on the device. The
@@ -56,13 +59,14 @@ const DRIVER_EVENTS_CALL: u32 = 3;
 const ACCOUNT_CALL: u32 = 4;
 
 /// The streams whose current state is applied on connecting.
-const STATE_STREAMS: [Stream; 6] = [
+const STATE_STREAMS: [Stream; 7] = [
     Stream::SessionInfo,
     Stream::SessionData,
     Stream::TrackStatus,
     Stream::SessionStatus,
     Stream::DriverList,
     Stream::TopThree,
+    Stream::LapCount,
 ];
 /// Public streams with driver events: pit stops, fastest laps and
 /// qualifying knockouts. TimingData's answer to `Subscribe` (the whole

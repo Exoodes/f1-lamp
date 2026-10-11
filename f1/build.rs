@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 /// The streams a replay embeds, with the variable that hands each file's path
 /// to `src/replay.rs`, and what a missing one means.
-const REPLAY_FILES: [(&str, &str, Need); 11] = [
+const REPLAY_FILES: [(&str, &str, Need); 12] = [
     ("SessionInfo", "REPLAY_SESSION_INFO", Need::Optional),
     ("TrackStatus", "REPLAY_TRACK_STATUS", Need::Required),
     ("SessionStatus", "REPLAY_SESSION_STATUS", Need::Required),
@@ -18,6 +18,7 @@ const REPLAY_FILES: [(&str, &str, Need); 11] = [
     ("OvertakeSeries", "REPLAY_OVERTAKES", Need::Optional),
     ("SessionData", "REPLAY_SESSION_DATA", Need::QualifyingOnly),
     ("TimingData", "REPLAY_TIMING_DATA", Need::QualifyingOnly),
+    ("LapCount", "REPLAY_LAP_COUNT", Need::RaceOnly),
 ];
 
 #[derive(Clone, Copy, PartialEq)]
@@ -30,6 +31,9 @@ enum Need {
     /// Only a qualifying uses it (parts, pole, knockouts): missing from a race
     /// without a word.
     QualifyingOnly,
+    /// Only a race uses it (the last lap): missing from a qualifying without
+    /// a word.
+    RaceOnly,
 }
 
 fn main() {

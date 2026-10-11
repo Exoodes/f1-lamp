@@ -9,7 +9,7 @@ use f1_core::{
     timeline::Stream,
 };
 
-const FILES: [(Stream, &str); 9] = [
+const FILES: [(Stream, &str); 10] = [
     (
         Stream::SessionInfo,
         include_str!("data/2026-italy/race/SessionInfo.jsonStream"),
@@ -45,6 +45,10 @@ const FILES: [(Stream, &str); 9] = [
     (
         Stream::Overtakes,
         include_str!("data/2026-italy/race/OvertakeSeries.jsonStream"),
+    ),
+    (
+        Stream::LapCount,
+        include_str!("data/2026-italy/race/LapCount.jsonStream"),
     ),
 ];
 
@@ -290,4 +294,31 @@ fn last_fastest_lap_of_the_race_is_antonellis() {
         matches!(last, Some(RaceEvent::FastestLap { driver: 12, .. })),
         "{last:?}"
     );
+}
+
+#[test]
+fn the_last_lap_comes_once_shortly_before_the_chequered_flag() {
+    let (inputs, _) = play_to_end(60);
+    let events: Vec<RaceEvent> = inputs
+        .iter()
+        .filter_map(|i| match i {
+            Input::Race { event, .. } => Some(*event),
+            _ => None,
+        })
+        .collect();
+    let last_laps: Vec<usize> = events
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| **e == RaceEvent::LastLap)
+        .map(|(i, _)| i)
+        .collect();
+    let chequered = events
+        .iter()
+        .position(|e| *e == RaceEvent::ChequeredFlag)
+        .unwrap();
+    // Lap 53 of 53 at 02:46:47, the flag at 02:48:10.
+    let [last_lap] = last_laps[..] else {
+        panic!("{last_laps:?}")
+    };
+    assert!(last_lap < chequered);
 }

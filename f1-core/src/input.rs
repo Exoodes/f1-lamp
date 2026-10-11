@@ -45,6 +45,8 @@ pub enum RaceEvent {
         driver: u8,
         team_color: Rgb,
     },
+    /// The leader has started a race's last lap.
+    LastLap,
     /// Out of qualifying at the end of Q1 or Q2.
     KnockedOut {
         driver: u8,

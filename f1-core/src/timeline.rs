@@ -9,7 +9,7 @@ use std::{collections::VecDeque, fmt, time::Duration};
 
 use crate::{
     feed::{
-        DriverList, OvertakeSeries, PitLaneTimes, RaceControl, SessionData, SessionInfo,
+        DriverList, LapCount, OvertakeSeries, PitLaneTimes, RaceControl, SessionData, SessionInfo,
         SessionStatus, TimingData, TimingStats, TopThree, TrackStatus,
     },
     stream::{parse_line, ParseLineError},
@@ -35,10 +35,12 @@ pub enum Stream {
     SessionData,
     /// Public: the timing screen; who is knocked out of qualifying.
     TimingData,
+    /// Public: a race's current lap and its length.
+    LapCount,
 }
 
 impl Stream {
-    pub const ALL: [Stream; 11] = [
+    pub const ALL: [Stream; 12] = [
         Stream::SessionInfo,
         Stream::TrackStatus,
         Stream::SessionStatus,
@@ -50,6 +52,7 @@ impl Stream {
         Stream::Overtakes,
         Stream::SessionData,
         Stream::TimingData,
+        Stream::LapCount,
     ];
 
     /// The name F1 uses, in the archive file names and the live feed.
@@ -66,6 +69,7 @@ impl Stream {
             Stream::Overtakes => "OvertakeSeries",
             Stream::SessionData => "SessionData",
             Stream::TimingData => "TimingData",
+            Stream::LapCount => "LapCount",
         }
     }
 
@@ -146,6 +150,9 @@ impl Stream {
             Stream::TimingData => vec![FeedMessage::TimingData(
                 serde_json::from_str::<TimingData>(json)?,
             )],
+            Stream::LapCount => vec![FeedMessage::LapCount(serde_json::from_str::<LapCount>(
+                json,
+            )?)],
         })
     }
 }

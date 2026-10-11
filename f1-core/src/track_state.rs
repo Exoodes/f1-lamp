@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use crate::{
     feed::{
-        DriverList, OvertakeSeries, PitLaneTimes, RcMessage, SessionData, SessionInfo,
+        DriverList, LapCount, OvertakeSeries, PitLaneTimes, RcMessage, SessionData, SessionInfo,
         SessionState, SessionStatus, TimingData, TimingStats, TopThree, TrackCode, TrackStatus,
     },
     input::{RaceEvent, TrackFlag},
@@ -26,6 +26,7 @@ pub enum FeedMessage {
     Overtakes(OvertakeSeries),
     SessionData(SessionData),
     TimingData(TimingData),
+    LapCount(LapCount),
 }
 
 #[derive(Debug, Default)]
@@ -39,6 +40,9 @@ pub struct TrackState {
     /// Stopped by a red flag (`Aborted`) and not restarted yet: before the
     /// restart the session goes `Inactive`, still under the red flag.
     suspended: bool,
+    current_lap: Option<u32>,
+    total_laps: Option<u32>,
+    last_lap_sent: bool,
 }
 
 impl TrackState {
@@ -56,6 +60,7 @@ impl TrackState {
             }
             FeedMessage::Session(s) => self.apply_session(&s),
             FeedMessage::RaceControl(m) => self.apply_race_control(&m),
+            FeedMessage::LapCount(laps) => self.apply_lap_count(&laps),
             FeedMessage::SessionInfo(info) => {
                 if let Some(is_race) = info.is_race() {
                     self.is_race = Some(is_race);
@@ -88,6 +93,28 @@ impl TrackState {
         }
         self.started = true;
         (self.is_race != Some(false)).then_some(RaceEvent::StartLights)
+    }
+
+    /// The leader starting the last lap, once: the current lap reaches the
+    /// race's length, also when the race is shortened to the current lap.
+    /// The feed sends 0 of 0 laps for a moment before a race.
+    fn apply_lap_count(&mut self, laps: &LapCount) -> Option<RaceEvent> {
+        if laps.current_lap.is_some() {
+            self.current_lap = laps.current_lap;
+        }
+        if laps.total_laps.is_some() {
+            self.total_laps = laps.total_laps;
+        }
+        let last = matches!(
+            (self.current_lap, self.total_laps),
+            (Some(lap), Some(total)) if total > 0 && lap >= total
+        );
+        let racing = self.session == Some(SessionState::Started) && self.is_race != Some(false);
+        if !last || !racing || self.last_lap_sent {
+            return None;
+        }
+        self.last_lap_sent = true;
+        Some(RaceEvent::LastLap)
     }
 
     /// Race control's flags: double yellows by sector (shown while any sector
@@ -500,6 +527,46 @@ mod tests {
             message: Some("TRACK LIMITS".to_owned()),
         });
         assert!(s.apply(other).is_empty());
+    }
+
+    fn laps(current: Option<u32>, total: Option<u32>) -> FeedMessage {
+        FeedMessage::LapCount(LapCount {
+            current_lap: current,
+            total_laps: total,
+        })
+    }
+
+    #[test]
+    fn the_last_lap_comes_once_when_the_leader_starts_it() {
+        let mut s = racing();
+        assert!(s.apply(laps(Some(1), Some(53))).is_empty());
+        assert!(s.apply(laps(Some(52), None)).is_empty());
+        assert_eq!(s.apply(laps(Some(53), None)), [RaceEvent::LastLap]);
+        assert!(s.apply(laps(Some(53), None)).is_empty());
+    }
+
+    #[test]
+    fn a_shortened_race_can_start_its_last_lap_at_once() {
+        // Singapore 2026 sprint: 21 laps became 20 after a delayed start.
+        let mut s = racing();
+        s.apply(laps(Some(19), Some(21)));
+        assert_eq!(s.apply(laps(None, Some(19))), [RaceEvent::LastLap]);
+    }
+
+    #[test]
+    fn zero_of_zero_laps_before_a_race_is_not_the_last_lap() {
+        let mut s = racing();
+        assert!(s.apply(laps(Some(0), Some(0))).is_empty());
+    }
+
+    #[test]
+    fn no_last_lap_before_the_start_or_outside_a_race() {
+        let mut s = TrackState::default();
+        assert!(s.apply(laps(Some(1), Some(1))).is_empty());
+        let mut s = TrackState::default();
+        s.apply(info("Practice"));
+        s.apply(session(SessionState::Started));
+        assert!(s.apply(laps(Some(1), Some(1))).is_empty());
     }
 
     fn info(kind: &str) -> FeedMessage {

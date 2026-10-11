@@ -22,6 +22,7 @@ Rust: the course*, with some extras of its own.
 | VSC ending | faster breathing yellow, about 15 s before green |
 | Red flag | red, also through the whole stoppage |
 | Start lights | five red lights going out with the TV (needs a TV delay of at least 6 s) |
+| Last lap | two white flashes when the leader starts a race's last lap |
 | Chequered flag | a white pattern (one lit LED, three dark) that jumps back and forth, for 10 s; in qualifying after Q1, Q2 and Q3 |
 | Winner | a chase in the winner's team colour, after the chequered flag; after qualifying, pole's (once every car has finished its last lap, at most 2 minutes after the flag) |
 | Fastest lap | three purple flashes, for every new session best |

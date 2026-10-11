@@ -351,6 +351,7 @@
       <label>Pit stops <input type="checkbox" id="fx_pit_stop"></label>
       <label>Overtakes <input type="checkbox" id="fx_overtake"></label>
       <label>Knocked out (qualifying) <input type="checkbox" id="fx_knocked_out"></label>
+      <label>Last lap (race) <input type="checkbox" id="fx_last_lap"></label>
     </section>
 
     <section class="settings">
@@ -397,7 +398,7 @@ const $ = (id) => document.getElementById(id);
 
 const SLIDERS = ["lamp_brightness", "global_brightness", "night_brightness"];
 // The device's effect switches; each has a checkbox with id "fx_<name>".
-const EFFECTS = ["start_lights", "chequered_flag", "fastest_lap", "winner", "pit_stop", "overtake", "knocked_out"];
+const EFFECTS = ["start_lights", "chequered_flag", "fastest_lap", "winner", "pit_stop", "overtake", "knocked_out", "last_lap"];
 
 // ---- Converting between what the page shows and what the device stores ----
 
