@@ -91,7 +91,8 @@ impl ScheduleStore {
 
     /// The saved sessions; empty if none are saved or they can't be read.
     pub fn load(&self) -> Vec<Session> {
-        let mut buf = [0u8; schedule::MAX_JSON];
+        // On the heap: 3 KB is a big share of the net thread's stack.
+        let mut buf = vec![0u8; schedule::MAX_JSON];
         load_json(&self.nvs, SCHEDULE, &mut buf, "schedule", "starting empty")
             .inspect(|sessions: &Vec<Session>| {
                 log::info!("schedule loaded: {} sessions", sessions.len());

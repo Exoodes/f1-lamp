@@ -95,16 +95,19 @@ const PHASE_WAITING_EVERY: Duration = Duration::from_secs(1);
 /// while to appear after the flag.
 const WINNER_EVERY: Duration = Duration::from_secs(60);
 
-/// The calendar and its copy in flash.
+/// The calendar, its copy in flash, and the copy the web page reads.
 struct Schedule {
     calendar: Calendar,
     store: ScheduleStore,
+    page: Arc<Mutex<Vec<Session>>>,
 }
 
 impl Schedule {
     fn load(store: ScheduleStore) -> Self {
+        let saved = store.load();
         Schedule {
-            calendar: Calendar::new(store.load()),
+            page: Arc::new(Mutex::new(saved.clone())),
+            calendar: Calendar::new(saved),
             store,
         }
     }
@@ -112,6 +115,7 @@ impl Schedule {
     /// Swaps in a freshly downloaded list, and saves the part of it that
     /// still matters if that changed.
     fn replace(&mut self, sessions: Vec<Session>, now_unix: i64) {
+        *self.page.lock().unwrap() = sessions.clone();
         let Some(relevant) = self.calendar.replace(sessions, now_unix) else {
             return;
         };
@@ -309,8 +313,13 @@ impl<'a> Net<'a> {
                 snapshot, tokens, ..
             } = &self.shared;
             self.server = Some(
-                web::start(Arc::clone(snapshot), self.tx.clone(), Arc::clone(tokens))
-                    .context("start web server")?,
+                web::start(
+                    Arc::clone(snapshot),
+                    Arc::clone(&self.schedule.page),
+                    self.tx.clone(),
+                    Arc::clone(tokens),
+                )
+                .context("start web server")?,
             );
             self.server_since = Some(now);
         }
@@ -490,10 +499,10 @@ fn log_calendar(sessions: &[Session], now_unix: i64) {
     log_next(sessions, now_unix);
 }
 
-/// `phase: Live (Race, session 11731)`, then the next session.
+/// `phase: Live (Singapore Race, session 11388)`, then the next session.
 fn log_phase(sessions: &[Session], now_unix: i64, feed_running: bool) {
     match schedule::current_session(sessions, now_unix, feed_running) {
-        Some((phase, s)) => log::info!("phase: {phase:?} ({:?}, session {})", s.kind, s.key),
+        Some((phase, s)) => log::info!("phase: {phase:?} ({}, session {})", title(s), s.key),
         None => log::info!("phase: Idle"),
     }
     log_next(sessions, now_unix);
@@ -503,12 +512,21 @@ fn log_phase(sessions: &[Session], now_unix: i64, feed_running: bool) {
 fn log_next(sessions: &[Session], now_unix: i64) {
     match schedule::next_session(sessions, now_unix) {
         Some(next) => log::info!(
-            "next: {:?} (session {}) in {}",
-            next.kind,
+            "next: {} (session {}) in {}",
+            title(next),
             next.key,
             in_words(next.start - now_unix)
         ),
         None => log::info!("next: no session coming up"),
+    }
+}
+
+/// `Singapore Race`, or just `Race` while the country is unknown.
+fn title(session: &Session) -> String {
+    if session.country.is_empty() {
+        session.label().to_string()
+    } else {
+        format!("{} {}", session.country, session.label())
     }
 }
 

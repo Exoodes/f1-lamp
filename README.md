@@ -164,6 +164,8 @@ only the lines the lamp uses, so a whole race fits in the firmware.
 `http://f1-lightbox.local` (same network only):
 
 - what the lamp shows, the session phase and the network state;
+- this race weekend: its sessions in your time zone, a countdown to the next
+  one, and which are done or live;
 - lamp colour and brightness, night mode (in Central European time), TV
   delay, how long green and the winner show;
 - which events show, and the followed drivers (or all of them);
@@ -188,6 +190,7 @@ The page uses these, and scripts can too:
 | Request | What it does |
 |---|---|
 | `GET /api/state` | What the lamp shows: layer, phase, network, override, settings (JSON) |
+| `GET /api/schedule` | This race weekend: the lamp's time, the country, the circuit and the sessions with their state (`done`, `live`, `coming`) |
 | `POST /api/settings` | All the settings as JSON: get them from `/api/state`, change, send back |
 | `POST /api/override` | `{"kind":"flag","flag":"red"}`, `{"kind":"color","color":"#ff8800"}` or `{"kind":"release"}`; or plays one effect at once: `{"kind":"event","event":"pit_stop","team":"mclaren"}` (`start_lights`, `chequered_flag`, `last_lap`, `fastest_lap`, `pit_stop`, `overtake`, `winner`, `knocked_out`; teams `alpine`, `aston_martin`, `audi`, `cadillac`, `ferrari`, `haas`, `mclaren`, `mercedes`, `racing_bulls`, `red_bull`, `williams`) |
 | `GET /api/token`, `POST /api/token` | The F1TV token's state; post a token (plain text) to set it, an empty one to remove it |

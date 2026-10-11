@@ -7,6 +7,7 @@ use f1_core::{
     schedule::{
         current_session, next_session, phase_at, Session, SessionKind, LIVE_GRACE, POST_SESSION,
     },
+    weekend::{weekend, SessionState},
 };
 
 const SESSIONS: &str = include_str!("data/sessions.json");
@@ -79,7 +80,11 @@ fn every_session_ends_after_it_starts() {
 #[test]
 fn monza_race_day_goes_through_every_phase() {
     let sessions = usable_sessions(dtos());
-    let race = *sessions.iter().find(|s| s.key == MONZA_RACE).unwrap();
+    let race = sessions
+        .iter()
+        .find(|s| s.key == MONZA_RACE)
+        .unwrap()
+        .clone();
     let at = |now| phase_at(&sessions, now, false);
 
     assert_eq!(at(race.start - 60), SessionPhase::PreSession);
@@ -106,4 +111,29 @@ fn after_monza_the_next_session_is_madrid_practice_1() {
     assert_eq!(next.key, 11362);
     assert_eq!(next.kind, SessionKind::Practice);
     assert_eq!(next.start, 1_789_126_200); // 2026-09-11 11:30 UTC
+}
+
+#[test]
+fn singapore_race_morning_shows_the_whole_sprint_weekend() {
+    // 2026-10-11 08:00 UTC, four hours before the race.
+    let w = weekend(&usable_sessions(dtos()), 1_791_705_600).unwrap();
+    assert_eq!(
+        (w.country.as_str(), w.circuit.as_str()),
+        ("Singapore", "Singapore")
+    );
+    let names: Vec<(&str, SessionState)> = w
+        .sessions
+        .iter()
+        .map(|s| (s.name.as_str(), s.state))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("Practice 1", SessionState::Done),
+            ("Sprint Qualifying", SessionState::Done),
+            ("Sprint", SessionState::Done),
+            ("Qualifying", SessionState::Done),
+            ("Race", SessionState::Coming),
+        ]
+    );
 }

@@ -138,12 +138,7 @@ mod tests {
     const HOUR: i64 = 60 * 60;
 
     fn race(key: u32, start: i64) -> Session {
-        Session {
-            key,
-            kind: SessionKind::Race,
-            start,
-            end: start + 2 * HOUR,
-        }
+        Session::new(key, SessionKind::Race, start, start + 2 * HOUR)
     }
 
     #[test]
@@ -256,8 +251,8 @@ mod tests {
         let now = over.end + LIVE_GRACE + POST_SESSION;
         let mut calendar = Calendar::new(vec![]);
         assert_eq!(
-            calendar.replace(vec![over, coming], now),
-            Some(vec![coming])
+            calendar.replace(vec![over.clone(), coming.clone()], now),
+            Some(vec![coming.clone()])
         );
         assert_eq!(calendar.sessions(), [over, coming]);
     }

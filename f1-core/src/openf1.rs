@@ -62,6 +62,12 @@ pub struct SessionDto {
     pub date_end: String,
     #[serde(default)]
     pub is_cancelled: bool,
+    #[serde(default)]
+    pub meeting_key: u32,
+    #[serde(default)]
+    pub country_name: String,
+    #[serde(default)]
+    pub circuit_short_name: String,
 }
 
 #[derive(Debug, PartialEq)]
@@ -126,6 +132,10 @@ impl TryFrom<SessionDto> for Session {
             kind,
             start: unix_seconds(&dto.date_start)?,
             end: unix_seconds(&dto.date_end)?,
+            meeting: dto.meeting_key,
+            name: dto.session_name,
+            country: dto.country_name,
+            circuit: dto.circuit_short_name,
         })
     }
 }
@@ -166,6 +176,9 @@ mod tests {
             date_start: "2026-09-06T13:00:00+00:00".to_string(),
             date_end: "2026-09-06T15:00:00+00:00".to_string(),
             is_cancelled: false,
+            meeting_key: 1_292,
+            country_name: "Italy".to_string(),
+            circuit_short_name: "Monza".to_string(),
         }
     }
 
@@ -180,10 +193,11 @@ mod tests {
         assert_eq!(
             Session::try_from(dto("Race", "Race")),
             Ok(Session {
-                key: 11361,
-                kind: SessionKind::Race,
-                start: RACE_START,
-                end: RACE_END,
+                meeting: 1_292,
+                name: "Race".to_string(),
+                country: "Italy".to_string(),
+                circuit: "Monza".to_string(),
+                ..Session::new(11361, SessionKind::Race, RACE_START, RACE_END)
             })
         );
     }

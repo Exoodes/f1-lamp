@@ -31,8 +31,9 @@ pub const POST_SESSION: i64 = 60 * 60;
 pub const CACHED_SESSIONS: usize = 12;
 /// The most bytes the cached schedule's JSON may take: the firmware reads it
 /// into a buffer this big, and a longer entry couldn't be read back. A test
-/// below checks that `CACHED_SESSIONS` sessions fit with room to spare.
-pub const MAX_JSON: usize = 2048;
+/// below checks that `CACHED_SESSIONS` sessions fit with room to spare. NVS
+/// strings can't be longer than 4000 bytes.
+pub const MAX_JSON: usize = 3072;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionKind {
@@ -43,7 +44,7 @@ pub enum SessionKind {
     Race,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     pub key: u32,
     pub kind: SessionKind,
@@ -51,6 +52,51 @@ pub struct Session {
     pub start: i64,
     /// Unix seconds, UTC.
     pub end: i64,
+    /// The Grand Prix weekend (OpenF1's `meeting_key`). This and the names
+    /// below are missing (0, empty) in a calendar saved before they were
+    /// kept.
+    #[serde(default)]
+    pub meeting: u32,
+    /// `Practice 2`, `Sprint Qualifying`.
+    #[serde(default)]
+    pub name: String,
+    /// `Singapore`.
+    #[serde(default)]
+    pub country: String,
+    /// `Singapore`, `Monza`, `Yas Marina Circuit` (OpenF1's
+    /// `circuit_short_name`).
+    #[serde(default)]
+    pub circuit: String,
+}
+
+impl Session {
+    /// A session without its weekend and names.
+    pub fn new(key: u32, kind: SessionKind, start: i64, end: i64) -> Self {
+        Session {
+            key,
+            kind,
+            start,
+            end,
+            meeting: 0,
+            name: String::new(),
+            country: String::new(),
+            circuit: String::new(),
+        }
+    }
+
+    /// Its name, or its kind's when the name is missing.
+    pub fn label(&self) -> &str {
+        if !self.name.is_empty() {
+            return &self.name;
+        }
+        match self.kind {
+            SessionKind::Practice => "Practice",
+            SessionKind::Qualifying => "Qualifying",
+            SessionKind::SprintQualifying => "Sprint Qualifying",
+            SessionKind::Sprint => "Sprint",
+            SessionKind::Race => "Race",
+        }
+    }
 }
 
 impl SessionKind {
@@ -200,7 +246,7 @@ pub fn still_relevant(sessions: &[Session], now: i64, max: usize) -> Vec<Session
         .iter()
         .filter(|s| s.end + LIVE_GRACE + POST_SESSION > now)
         .take(max)
-        .copied()
+        .cloned()
         .collect()
 }
 
@@ -224,12 +270,7 @@ mod tests {
     const END: i64 = 12 * HOUR;
 
     fn session(key: u32, kind: SessionKind, start: i64, end: i64) -> Session {
-        Session {
-            key,
-            kind,
-            start,
-            end,
-        }
+        Session::new(key, kind, start, end)
     }
 
     fn race() -> Session {
@@ -482,13 +523,19 @@ mod tests {
     fn qualifying_is_kept_until_the_same_time_as_a_race() {
         // Simpler than per-kind rules; a stale qualifying entry costs nothing.
         let quali = session(1, SessionKind::Qualifying, START, END);
-        assert_eq!(still_relevant(&[quali], RACE_OVER - 1, 10), [quali]);
+        assert_eq!(
+            still_relevant(std::slice::from_ref(&quali), RACE_OVER - 1, 10),
+            [quali]
+        );
     }
 
     #[test]
     fn upcoming_sessions_are_kept() {
         let later = session(2, SessionKind::Race, START + 24 * HOUR, END + 24 * HOUR);
-        assert_eq!(still_relevant(&[race(), later], RACE_OVER, 10), [later]);
+        assert_eq!(
+            still_relevant(&[race(), later.clone()], RACE_OVER, 10),
+            [later]
+        );
     }
 
     #[test]
@@ -523,13 +570,19 @@ mod tests {
 
     #[test]
     fn a_full_cache_fits_comfortably_in_nvs() {
-        // Realistic keys and times, and the longest kind name.
+        // Realistic keys and times, and the longest names of 2026.
         let sessions: Vec<Session> = (0..CACHED_SESSIONS as u32)
             .map(|i| Session {
-                key: 11_379 + i,
-                kind: SessionKind::SprintQualifying,
-                start: 1_789_221_600 + i64::from(i) * 86_400,
-                end: 1_789_225_200 + i64::from(i) * 86_400,
+                meeting: 1_304,
+                name: "Sprint Qualifying".to_string(),
+                country: "United Arab Emirates".to_string(),
+                circuit: "Yas Marina Circuit".to_string(),
+                ..Session::new(
+                    11_379 + i,
+                    SessionKind::SprintQualifying,
+                    1_789_221_600 + i64::from(i) * 86_400,
+                    1_789_225_200 + i64::from(i) * 86_400,
+                )
             })
             .collect();
         let json = serde_json::to_string(&sessions).unwrap();

@@ -117,6 +117,20 @@
   .status dd::first-letter { text-transform: uppercase; }
   body.offline .hero-layer, body.offline .status dd { opacity: .4; }
 
+  /* ---- This weekend ---- */
+  .sessions { list-style: none; margin: 0; padding: 0; }
+  .sessions li {
+    display: grid; grid-template-columns: 1fr auto; column-gap: 12px; align-items: baseline;
+    padding: 8px 0; border-top: 1px solid var(--line);
+  }
+  .sessions li:first-child { border-top: 0; }
+  .sessions .when { color: var(--muted); font-size: .85rem; }
+  .sessions .state { grid-row: span 2; align-self: center; font-size: .9rem; font-variant-numeric: tabular-nums; }
+  .sessions .done { color: var(--muted); }
+  .sessions .done .name { text-decoration: line-through; }
+  .sessions .live .state { color: var(--accent); font-weight: 600; }
+  .sessions .next .state { font-weight: 600; }
+
   /* ---- Controls ---- */
   button {
     font: inherit; padding: 10px 14px; border: 1px solid var(--line); border-radius: 6px;
@@ -259,6 +273,12 @@
         <div><dt>Network</dt><dd id="s-net">–</dd></div>
         <div><dt>Override</dt><dd id="s-override">–</dd></div>
       </dl>
+    </section>
+
+    <section>
+      <h2 id="w-title">This weekend</h2>
+      <ol class="sessions" id="w-sessions"></ol>
+      <p class="hint" id="w-empty">No session coming up, or the lamp has no calendar yet.</p>
     </section>
 
     <section>
@@ -641,6 +661,81 @@ async function tryEvent(body, label) {
   }
 }
 
+// ---- This weekend ----
+
+// The lamp's clock minus this device's, so the countdown follows the lamp.
+let lampOffsetMs = 0;
+let weekend = null;
+
+async function refreshSchedule() {
+  try {
+    const r = await fetch("/api/schedule");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const reply = await r.json();
+    if (reply.now !== null) lampOffsetMs = reply.now * 1000 - Date.now();
+    weekend = reply.weekend;
+    showWeekend();
+  } catch {
+    // Keep what is shown; the next refresh tries again.
+  }
+}
+
+// 1 791 734 400 -> "Sun 14:00", in this device's time zone.
+function when(unix) {
+  return new Date(unix * 1000).toLocaleString(undefined,
+    { weekday: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+// Seconds -> "2 d 5 h", "3 h 20 min", "12:05".
+function countdown(s) {
+  const pad = (n) => String(n).padStart(2, "0");
+  if (s >= 86400) return Math.floor(s / 86400) + " d " + Math.floor(s / 3600) % 24 + " h";
+  if (s >= 3600) return Math.floor(s / 3600) + " h " + pad(Math.floor(s / 60) % 60) + " min";
+  return Math.floor(s / 60) + ":" + pad(s % 60);
+}
+
+function showWeekend() {
+  const list = $("w-sessions");
+  list.replaceChildren();
+  $("w-empty").hidden = weekend !== null;
+  if (weekend === null) {
+    $("w-title").textContent = "This weekend";
+    return;
+  }
+  const { country, circuit } = weekend;
+  $("w-title").textContent = !country ? "This weekend"
+    : circuit && circuit !== country ? country + " · " + circuit : country;
+
+  const now = (Date.now() + lampOffsetMs) / 1000;
+  let nextShown = false;
+  for (const s of weekend.sessions) {
+    // Worked out again here: the reply can be up to a minute old.
+    const state = now >= s.end ? "done" : now >= s.start ? "live" : "coming";
+    const isNext = state === "coming" && !nextShown;
+    nextShown ||= isNext;
+    const li = document.createElement("li");
+    li.className = isNext ? "next" : state;
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = s.name;
+    const status = document.createElement("span");
+    status.className = "state";
+    status.textContent = state === "done" ? "done" : state === "live" ? "live"
+      : isNext ? "in " + countdown(Math.floor(s.start - now)) : "";
+    const time = document.createElement("span");
+    time.className = "when";
+    time.textContent = when(s.start);
+    li.append(name, status, time);
+    list.append(li);
+  }
+}
+
+function startSchedule() {
+  refreshSchedule();
+  setInterval(refreshSchedule, 60000);
+  setInterval(showWeekend, 1000);
+}
+
 // ---- Replay (only with a replay build) ----
 
 // 4_000_000 -> "1:06:40"
@@ -899,6 +994,7 @@ async function start() {
   }
 
   setInterval(refreshStatus, 2000);
+  startSchedule();
   startReplay();
 
   $("token-save").addEventListener("click", () => {

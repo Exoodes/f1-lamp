@@ -19,8 +19,15 @@ use esp_idf_svc::{
     io::Write,
 };
 use f1_core::{
-    command::OverrideRequest, input::Input, ota_auth::UploadCheck, settings::Settings,
-    snapshot::Snapshot, token::TokenStatus, web_api::is_lamp_host,
+    command::OverrideRequest,
+    input::Input,
+    ota_auth::UploadCheck,
+    schedule::Session,
+    settings::Settings,
+    snapshot::Snapshot,
+    token::TokenStatus,
+    web_api::is_lamp_host,
+    weekend::{weekend, ScheduleReply},
 };
 use serde::de::DeserializeOwned;
 
@@ -58,6 +65,7 @@ const TEXT: &str = "text/plain; charset=utf-8";
 /// render loop; they never block on it. Dropping the server stops it.
 pub fn start(
     snapshot: Arc<Mutex<Snapshot>>,
+    schedule: Arc<Mutex<Vec<Session>>>,
     tx: SyncSender<Input>,
     tokens: Arc<TokenKeeper>,
 ) -> anyhow::Result<EspHttpServer<'static>> {
@@ -67,7 +75,7 @@ pub fn start(
     };
 
     let mut server = EspHttpServer::new(&config)?;
-    page_routes(&mut server, snapshot)?;
+    page_routes(&mut server, snapshot, schedule)?;
     command_routes(&mut server, tx)?;
     token_routes(&mut server, tokens)?;
     ota_route(&mut server)?;
@@ -78,11 +86,13 @@ pub fn start(
     Ok(server)
 }
 
-/// The page itself, `GET /api/state` (what the lamp shows) and
-/// `GET /api/log` (its latest log lines).
+/// The page itself, `GET /api/state` (what the lamp shows),
+/// `GET /api/schedule` (this race weekend) and `GET /api/log` (its latest log
+/// lines).
 fn page_routes(
     server: &mut EspHttpServer<'static>,
     snapshot: Arc<Mutex<Snapshot>>,
+    schedule: Arc<Mutex<Vec<Session>>>,
 ) -> anyhow::Result<()> {
     server.fn_handler::<anyhow::Error, _>("/", Method::Get, |req| {
         reply(req, 200, HTML, INDEX_HTML.as_bytes())
@@ -92,6 +102,17 @@ fn page_routes(
         // Copied out, so the lock is released before serialising.
         let state = *snapshot.lock().unwrap();
         reply(req, 200, JSON, &serde_json::to_vec(&state)?)
+    })?;
+
+    server.fn_handler::<anyhow::Error, _>("/api/schedule", Method::Get, move |req| {
+        let now = clock::unix_now();
+        let weekend = now.and_then(|now| weekend(&schedule.lock().unwrap(), now));
+        reply(
+            req,
+            200,
+            JSON,
+            &serde_json::to_vec(&ScheduleReply { now, weekend })?,
+        )
     })?;
 
     // `?after=<n>`: the lines after number n; without it, only where to start.

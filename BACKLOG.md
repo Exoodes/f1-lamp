@@ -4,12 +4,6 @@ Ideas for after the course, in no particular order of size.
 
 ## Wanted
 
-- **Weekend schedule on the page.** The upcoming sessions with their times and
-  a countdown; the lamp already has them from OpenF1.
-- **The Grand Prix name and circuit** on the page and in the log
-  ("Singapore — Race in 2 h 10 min"). OpenF1's sessions carry `location`,
-  `country_name` and `circuit_short_name`; the lamp drops them today. The
-  saved calendar must still fit `schedule::MAX_JSON` (2 KB, 12 sessions).
 - **The weekend's results on the schedule page.** Pole, sprint and race
   winners next to their sessions, in the team colour; the lamp already asks
   OpenF1's `session_result` for race winners.
