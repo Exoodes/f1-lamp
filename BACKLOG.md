@@ -6,9 +6,6 @@ Ideas for after the course, in no particular order of size.
 
 - **Weekend schedule on the page.** The upcoming sessions with their times and
   a countdown; the lamp already has them from OpenF1.
-- **Event buttons on the page.** Next to the flag overrides: trigger a fastest
-  lap, a pit stop or an overtake for any driver (in their team colour), to see
-  the effects without waiting for a session.
 - **A "winner" for practice.** E.g. the team colour of the driver with the
   fastest lap when the session ends, like pole after qualifying.
 - **Rework the effects.** Some are too fast (seen again in sprint

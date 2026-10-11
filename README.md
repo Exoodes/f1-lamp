@@ -167,7 +167,7 @@ only the lines the lamp uses, so a whole race fits in the firmware.
 - lamp colour and brightness, night mode (in Central European time), TV
   delay, how long green and the winner show;
 - which events show, and the followed drivers (or all of them);
-- forcing a flag or a colour by hand;
+- forcing a flag or a colour by hand, and trying any effect once;
 - the F1TV token (see below);
 - in replay builds, the replay controls;
 - a live log of the lamp's own messages, with times.
@@ -189,7 +189,7 @@ The page uses these, and scripts can too:
 |---|---|
 | `GET /api/state` | What the lamp shows: layer, phase, network, override, settings (JSON) |
 | `POST /api/settings` | All the settings as JSON: get them from `/api/state`, change, send back |
-| `POST /api/override` | `{"kind":"flag","flag":"red"}`, `{"kind":"color","color":"#ff8800"}` or `{"kind":"release"}` |
+| `POST /api/override` | `{"kind":"flag","flag":"red"}`, `{"kind":"color","color":"#ff8800"}` or `{"kind":"release"}`; or plays one effect at once: `{"kind":"event","event":"pit_stop","team":"mclaren"}` (`start_lights`, `chequered_flag`, `last_lap`, `fastest_lap`, `pit_stop`, `overtake`, `winner`, `knocked_out`; teams `alpine`, `aston_martin`, `audi`, `cadillac`, `ferrari`, `haas`, `mclaren`, `mercedes`, `racing_bulls`, `red_bull`, `williams`) |
 | `GET /api/token`, `POST /api/token` | The F1TV token's state; post a token (plain text) to set it, an empty one to remove it |
 | `GET /api/log?after=<n>` | The log lines after number `n` |
 | `POST /api/ota/nonce` | A one-time nonce (hex) for the next upload, valid for 2 minutes |

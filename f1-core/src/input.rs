@@ -84,6 +84,9 @@ pub enum Input {
     /// would undo each other. The controller shows it as `ApiError`.
     FeedFailing(bool),
     Override(Option<Effect>),
+    /// An event tried from the web page: plays at once, past the TV delay
+    /// and the effect switches.
+    Preview(RaceEvent),
     Settings(Settings),
     Clock {
         minute_of_day: u16,

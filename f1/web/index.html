@@ -163,7 +163,9 @@
   }
 
   /* ---- Force a flag: tiles that look like the flags ---- */
-  .flags { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .flags, .tries { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .team-pick { display: flex; align-items: center; gap: 8px; }
+  .swatch { width: 1rem; height: 1rem; border-radius: 50%; border: 1px solid var(--line); }
   .flag {
     position: relative; height: 4.75rem; padding: 8px 10px; border: 0; border-radius: 6px;
     display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start;
@@ -276,6 +278,42 @@
         <button id="release">Release</button>
       </div>
       <p class="msg" id="override-msg"></p>
+    </section>
+
+    <section>
+      <h2>Try an effect</h2>
+      <div class="tries">
+        <button data-event="start_lights">Start lights</button>
+        <button data-event="chequered_flag">Chequered flag</button>
+        <button data-event="last_lap">Last lap</button>
+        <button data-event="fastest_lap">Fastest lap</button>
+        <button data-event="pit_stop">Pit stop</button>
+        <button data-event="overtake">Overtake</button>
+        <button data-event="winner">Winner</button>
+        <button data-event="knocked_out">Knocked out</button>
+      </div>
+      <div class="rowed">
+        <label>Team
+          <span class="team-pick">
+            <span class="swatch" id="try_swatch" aria-hidden="true"></span>
+            <select id="try_team">
+              <option value="alpine" data-color="#00a1e8">Alpine</option>
+              <option value="aston_martin" data-color="#229971">Aston Martin</option>
+              <option value="audi" data-color="#f50537">Audi</option>
+              <option value="cadillac" data-color="#909090">Cadillac</option>
+              <option value="ferrari" data-color="#ed1131">Ferrari</option>
+              <option value="haas" data-color="#9c9fa2">Haas</option>
+              <option value="mclaren" data-color="#f47600" selected>McLaren</option>
+              <option value="mercedes" data-color="#00d7b6">Mercedes</option>
+              <option value="racing_bulls" data-color="#6c98ff">Racing Bulls</option>
+              <option value="red_bull" data-color="#4781d7">Red Bull</option>
+              <option value="williams" data-color="#1868db">Williams</option>
+            </select>
+          </span>
+        </label>
+      </div>
+      <p class="hint">Plays at once, without the TV delay, even if switched off; the winner shows for 5 s. A forced flag or colour hides it: Release first.</p>
+      <p class="msg" id="try-msg"></p>
     </section>
 
     <section id="replay" hidden>
@@ -594,6 +632,15 @@ async function override(body, label) {
   }
 }
 
+async function tryEvent(body, label) {
+  try {
+    await post("/api/override", body);
+    message("try-msg", label);
+  } catch (e) {
+    message("try-msg", "Failed: " + e.message, true);
+  }
+}
+
 // ---- Replay (only with a replay build) ----
 
 // 4_000_000 -> "1:06:40"
@@ -823,6 +870,17 @@ async function start() {
     const name = b.querySelector(".name").textContent;
     b.addEventListener("click", () =>
       override({ kind: "flag", flag: b.dataset.flag }, name + " forced"));
+  }
+  // The swatch shows the colour the lamp will use (from the lamp's own list).
+  const showTeam = () => {
+    $("try_swatch").style.background = $("try_team").selectedOptions[0].dataset.color;
+  };
+  $("try_team").addEventListener("change", showTeam);
+  showTeam();
+  for (const b of document.querySelectorAll("[data-event]")) {
+    b.addEventListener("click", () =>
+      tryEvent({ kind: "event", event: b.dataset.event, team: $("try_team").value },
+        b.textContent + " playing"));
   }
   $("force-color").addEventListener("click", () =>
     override({ kind: "color", color: $("override_color").value }, "Colour forced"));

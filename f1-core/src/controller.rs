@@ -68,13 +68,17 @@ enum Delayed {
 /// sprint: `Finished` 0.1 s first).
 pub const CHEQUERED_WAIT: Duration = Duration::from_secs(3);
 
+/// How long a winner tried from the web page shows.
+pub const PREVIEW_WINNER_DISPLAY: Duration = Duration::from_secs(5);
+
 /// A winner shows after [`CHEQUERED_WAIT`] once no overlay plays, so it
 /// never flashes before the chequered flag, and then for its whole display
 /// time.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct WinnerScene {
     effect: Effect,
-    arrived: Instant,
+    /// Arrival plus [`CHEQUERED_WAIT`]; arrival for a tried one.
+    show_from: Instant,
     /// From the settings when it arrived.
     display: Duration,
     /// When it started to show; `None` while it waits.
@@ -157,6 +161,16 @@ impl Controller {
             Input::FeedFailing(false) => self.layers.feed_failing = None,
             Input::Override(Some(effect)) => stamp(&mut self.layers.override_effect, effect, now),
             Input::Override(None) => self.layers.override_effect = None,
+            Input::Preview(event) => {
+                self.play_race_event(event, now);
+                // A tried winner is a look, not a result: at once (no
+                // chequered flag to wait for) and short, whatever the winner
+                // time setting.
+                if let (RaceEvent::Winner { .. }, Some(winner)) = (event, &mut self.layers.winner) {
+                    winner.show_from = now;
+                    winner.display = PREVIEW_WINNER_DISPLAY;
+                }
+            }
             Input::Settings(settings) => self.layers.settings = settings,
             Input::Clock { minute_of_day } => self.layers.minute_of_day = Some(minute_of_day),
         }
@@ -174,7 +188,7 @@ impl Controller {
             return;
         };
         match winner.shown {
-            None if now >= winner.arrived + CHEQUERED_WAIT && self.overlays.is_empty() => {
+            None if now >= winner.show_from && self.overlays.is_empty() => {
                 winner.shown = Some(now);
             }
             Some(shown) if now >= shown + winner.display => self.layers.winner = None,
@@ -274,16 +288,19 @@ impl Controller {
 
     fn apply_race_event(&mut self, event: RaceEvent, now: Instant) {
         // Switched off, or a driver nobody follows: as if it never arrived.
-        if !self.layers.settings.shows(event) {
-            return;
+        if self.layers.settings.shows(event) {
+            self.play_race_event(event, now);
         }
+    }
+
+    fn play_race_event(&mut self, event: RaceEvent, now: Instant) {
         match event {
             RaceEvent::TrackFlag(flag) => stamp(&mut self.layers.flag, flag, now),
             RaceEvent::FlagCleared => self.layers.flag = None,
             RaceEvent::Winner { team_color, .. } => {
                 self.layers.winner = Some(WinnerScene {
                     effect: winner_effect(team_color),
-                    arrived: now,
+                    show_from: now + CHEQUERED_WAIT,
                     display: Duration::from_millis(u64::from(
                         self.layers.settings.winner_display_ms,
                     )),
@@ -997,6 +1014,55 @@ mod tests {
             winner_at(&mut c, t0 + ms(10_000)),
             ("live track", flag_effect(TrackFlag::Yellow))
         );
+    }
+
+    #[test]
+    fn a_preview_skips_the_tv_delay() {
+        let t0 = Instant::now();
+        let mut c = live_delayed(t0);
+        c.apply(Input::Preview(RaceEvent::LastLap), t0);
+        assert_eq!(winner_at(&mut c, t0 + ms(10)).0, "overlay");
+    }
+
+    #[test]
+    fn a_tried_winner_shows_at_once_for_a_short_fixed_time() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(
+            Input::Settings(Settings {
+                winner_display_ms: 600_000,
+                ..Settings::default()
+            }),
+            t0,
+        );
+        let tried = RaceEvent::Winner {
+            driver: 0,
+            team_color: TEAM,
+        };
+        c.apply(Input::Preview(tried), t0);
+        let shown = t0;
+        assert_eq!(winner_at(&mut c, shown).0, "winner");
+        assert_eq!(
+            winner_at(&mut c, shown + PREVIEW_WINNER_DISPLAY - ms(1)).0,
+            "winner"
+        );
+        assert_ne!(
+            winner_at(&mut c, shown + PREVIEW_WINNER_DISPLAY).0,
+            "winner"
+        );
+    }
+
+    #[test]
+    fn a_preview_plays_even_when_switched_off() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        let mut settings = Settings::default();
+        settings.effects.last_lap = false;
+        c.apply(Input::Settings(settings), t0);
+        c.apply(race(RaceEvent::LastLap, t0), t0);
+        assert_ne!(winner_at(&mut c, t0 + ms(10)).0, "overlay");
+        c.apply(Input::Preview(RaceEvent::LastLap), t0 + ms(20));
+        assert_eq!(winner_at(&mut c, t0 + ms(30)).0, "overlay");
     }
 
     #[test]
