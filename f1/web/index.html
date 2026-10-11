@@ -300,6 +300,7 @@
   /* ---- Live log: collected from page load, shown in its tab ---- */
   .log-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
   .log-head h2 { margin: 0; }
+  .log-actions { display: flex; gap: 8px; }
   #log {
     margin: 4px 0 0; height: 60vh; overflow: auto; padding: 10px 12px; border-radius: 6px;
     background: var(--housing); font: .75rem/1.4 var(--mono);
@@ -565,9 +566,13 @@
     <section>
       <div class="log-head">
         <h2>Live log</h2>
-        <button id="log-clear">Clear</button>
+        <span class="log-actions">
+          <button id="log-copy">Copy</button>
+          <button id="log-save">Save</button>
+          <button id="log-clear">Clear</button>
+        </span>
       </div>
-      <p class="hint">New lines only, from when you opened the page. Nothing is kept on the lamp.</p>
+      <p class="hint">New lines only, from when you opened the page. Nothing is kept on the lamp. Copy and Save take every line since then (or since Clear), also those no longer shown.</p>
       <div id="log"></div>
     </section>
   </div>
@@ -1112,11 +1117,15 @@ async function sendToken(text, label) {
 
 // ---- Live log (polled once a second from page load, whichever tab shows) ----
 
-const LOG_KEEP = 500;   // lines kept on the page; older ones are dropped
+const LOG_KEEP = 500;   // lines shown on the page; older ones are dropped
+// Every line since the page opened (or Clear), for Copy and Save: a whole
+// race is a few thousand lines, well under a megabyte.
+let logAll = [];
 let logNext = null;     // sequence number to ask from; null = not started
 let logBusy = false;    // a request is on its way: don't send another
 
 function addLogLine(text, cls) {
+  logAll.push(text);
   const box = $("log");
   // Stay at the bottom only if the user hasn't scrolled up to read.
   const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 4;
@@ -1152,6 +1161,36 @@ async function pollLog() {
   } finally {
     logBusy = false;
   }
+}
+
+// The clipboard API only works over HTTPS, and the lamp serves plain HTTP:
+// copy through a hidden text field instead, which every browser allows.
+function copyLog() {
+  const field = document.createElement("textarea");
+  field.value = logAll.join("\n");
+  field.style.position = "fixed";
+  field.style.opacity = "0";
+  document.body.append(field);
+  field.select();
+  const done = document.execCommand("copy");
+  field.remove();
+  toast(done ? `Copied ${logAll.length} lines` : "Couldn't copy: use Save", !done);
+}
+
+// Downloads the lines as "f1-lightbox-log-2026-10-11-1403.txt".
+function saveLog() {
+  const pad = (n) => String(n).padStart(2, "0");
+  const d = new Date();
+  const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+  const url = URL.createObjectURL(new Blob([logAll.join("\n") + "\n"], { type: "text/plain" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `f1-lightbox-log-${stamp}.txt`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast(`Saved ${logAll.length} lines`);
 }
 
 // Started once with the page: the log starts empty then and keeps collecting
@@ -1271,7 +1310,12 @@ async function start() {
   $("token-remove").addEventListener("click", () => sendToken("", "Token removed"));
   refreshToken();
   setInterval(refreshToken, 60000);
-  $("log-clear").addEventListener("click", () => { $("log").textContent = ""; });
+  $("log-clear").addEventListener("click", () => {
+    $("log").textContent = "";
+    logAll = [];
+  });
+  $("log-copy").addEventListener("click", copyLog);
+  $("log-save").addEventListener("click", saveLog);
 }
 
 start();
