@@ -4,6 +4,38 @@ Ideas for after the course, in no particular order of size.
 
 ## Wanted
 
+- **Fastest lap when the holder beats their own time.** Missed today: the
+  lamp counts a fastest lap only when `PersonalBestLapTime` comes with
+  `Position: 1` in the same message, and a driver already P1 gets no
+  `Position` (it didn't change). Race Singapore 2026-10-11: HAM lap 22
+  1:37.170 shown, lap 23 `{"Lap":23,"Value":"1:37.075"}` (capture offset
+  01:01:54.671) missed. Fix in `tracker.rs` `fastest_laps`: remember who holds
+  the session best; a new time from that driver is a fastest lap too. Small;
+  test with today's messages.
+- **Overtakes from `DriverRaceInfo`.** The live feed never sends
+  `OvertakeSeries`: not in FP1, not in today's race, not even to a probe with
+  `--extra` and the F1TV token (the other token-only streams arrived). It
+  seems to be archive-only, so overtakes as built can't work live.
+  `DriverRaceInfo` (token only) arrived all race and marks each pass:
+  `{"87":{"Position":"11","OvertakeState":2},"31":{"Position":"12","OvertakeState":0}}`
+  (2 = gained the place, 0 = lost it, 1 = reset a few seconds later). A car
+  that pits is "passed" by several cars in a row (#5 at 00:35:29 dropped from
+  17 to 20 in a second), so stops must be filtered out (in pit lane, or
+  `PitLaneTimeCollection`). The biggest of these.
+- **The race log shows everything.** Every event, not only what the lamp
+  shows: pit stops when switched off, drivers not followed, switched-off
+  effects; still in step with the TV. Lines the lamp didn't show dimmed.
+  Today logging is in `controller.rs` `apply_race_event` after `shows()`.
+- **Page requests with a timeout.** The saved log of today's race stops at
+  14:57, an hour before the end, with no error: likely one `/api/log`
+  request hung, and `logBusy` stays true forever so the page never asks
+  again (4 sockets shared by all the page's polling; a dropped connection
+  never answers). A timeout (`AbortSignal.timeout`) on the page's fetches.
+  To ask: did the Log tab visibly stop?
+- **Today's race as test data**, from the probe capture
+  `f1-probe/captures/2026-10-11_13-40-12`, trimmed to the streams the lamp
+  uses (TimingStats 236 KB; only the needed lines). Covers the fastest-lap
+  fix; with `DriverRaceInfo`, the overtakes.
 - **A "winner" for practice.** E.g. the team colour of the driver with the
   fastest lap when the session ends, like pole after qualifying.
 - **Rework the effects.** Some are too fast (seen again in sprint
@@ -50,8 +82,8 @@ Ideas for after the course, in no particular order of size.
 - **Rain.** `WeatherData` (public) has `Rainfall`; a blue shimmer when it
   starts raining.
 - **Overtakes without an F1TV token**, from position swaps in `DriverList`
-  minus pit stops (`PitLaneTimeCollection`). Only if `OvertakeSeries` with a
-  token isn't enough.
+  minus pit stops (`PitLaneTimeCollection`). Only if `DriverRaceInfo` (see
+  Wanted) isn't enough.
 
 ## Open questions
 
@@ -99,6 +131,15 @@ Ideas for after the course, in no particular order of size.
   change after the flag: at Monza a new leader came 70 s after Q3's clock
   ran out.
 
+- **Race Singapore, 2026-10-11:** TV delay about 46 s (HAM's fastest lap:
+  feed 14:40:31, lamp 14:41:17). Lights out in the feed 14:03:41. No
+  overtakes (see Wanted), one fastest lap missed (see Wanted). VER, PIA, HAD
+  set fastest laps on laps 35-36 within 3 minutes (feed 15:01:31, 15:01:57,
+  15:04:33), all proper `Position: 1` messages; not confirmed on the lamp
+  because the saved log stops at 14:57: check the video at about 15:02:17,
+  15:02:43, 15:05:19. The race log repeated "Session started" every 2 s
+  (paging bug, fixed after the race, not yet flashed). Heap lowest since
+  boot 41,788 B.
 - **Sprint qualifying Singapore, 2026-10-09:** pole came too early, right
   after the chequered flag, while many drivers were still on their flying
   laps (that build was older than 28ce6c2). 28ce6c2 made it wait for
