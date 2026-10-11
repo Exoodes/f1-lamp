@@ -54,6 +54,23 @@ pub enum RaceEvent {
     },
 }
 
+/// The session clock or the lap counter, for showing them as the TV does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimingInfo {
+    /// The time left and whether it's counting down; `utc_ms` is when the
+    /// feed says it read that (Unix ms).
+    Clock {
+        remaining_ms: u32,
+        running: bool,
+        utc_ms: Option<i64>,
+    },
+    /// What changed of a race's lap and length.
+    Lap {
+        current: Option<u32>,
+        total: Option<u32>,
+    },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionPhase {
@@ -90,6 +107,11 @@ pub enum Input {
     /// When the next session is scheduled to start, for the countdown;
     /// `None` when none is coming.
     NextStart(Option<Instant>),
+    /// A clock or lap reading from the feed, valid at `at`.
+    Timing {
+        info: TimingInfo,
+        at: Instant,
+    },
     Settings(Settings),
     Clock {
         minute_of_day: u16,

@@ -22,6 +22,16 @@ pub fn unix_now() -> Option<i64> {
     (seconds >= FIRST_VALID_UNIX).then_some(seconds)
 }
 
+/// Unix milliseconds once SNTP has set the clock; `None` before that.
+pub fn unix_now_ms() -> Option<i64> {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    let millis = i64::try_from(millis).ok()?;
+    (millis >= FIRST_VALID_UNIX * 1000).then_some(millis)
+}
+
 /// Makes local time Central European (night mode and the log's times).
 pub fn set_timezone() {
     std::env::set_var("TZ", TIMEZONE);

@@ -21,6 +21,7 @@ use crate::{
     settings::Settings,
     snapshot::Snapshot,
     theme::{countdown_effect, event_overlay, flag_effect, net_effect, winner_effect, COUNTDOWN},
+    tv_timing::TvTiming,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -113,6 +114,10 @@ pub struct Controller {
     /// Race events and phase changes until the TV shows them. Settings,
     /// overrides, the clock and the network status act at once.
     delayed: DelayQueue<Delayed>,
+    /// The session clock and laps, for showing them as the TV does.
+    tv: TvTiming,
+    /// The last tick's time, for the snapshot.
+    now: Instant,
 }
 
 type Layer = fn(&Controller) -> Option<Scene>;
@@ -147,6 +152,8 @@ impl Controller {
             },
             overlays: Overlays::default(),
             delayed: DelayQueue::new(),
+            tv: TvTiming::default(),
+            now,
         }
     }
 
@@ -180,12 +187,14 @@ impl Controller {
                 }
             }
             Input::NextStart(start) => self.layers.next_start = start,
+            Input::Timing { info, at } => self.tv.add(info, at),
             Input::Settings(settings) => self.layers.settings = settings,
             Input::Clock { minute_of_day } => self.layers.minute_of_day = Some(minute_of_day),
         }
     }
 
     pub fn tick(&mut self, now: Instant) {
+        self.now = now;
         self.release_due(now);
         self.expire_green(now);
         self.overlays.tick(now);
@@ -306,6 +315,9 @@ impl Controller {
                     if phase != SessionPhase::Live {
                         self.layers.flag = None;
                     }
+                    if phase == SessionPhase::Idle {
+                        self.tv.clear();
+                    }
                 }
             }
         }
@@ -422,6 +434,7 @@ impl Controller {
             net: self.net_status().value,
             override_active: self.layers.override_effect.is_some(),
             settings: self.layers.settings,
+            tv: self.tv.view(self.now, self.tv_delay()),
         }
     }
 }
@@ -1432,5 +1445,53 @@ mod tests {
         let mut c = live(t0);
         c.apply(Input::Override(Some(flag_effect(TrackFlag::Green))), t0);
         assert_eq!(winner_at(&mut c, t0 + ms(60_000)).0, "override");
+    }
+
+    // ---- TV clock and lap ----
+
+    #[test]
+    fn the_snapshot_has_the_clock_as_the_tv_shows_it() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(
+            Input::Settings(Settings {
+                tv_delay_ms: 44_000,
+                ..Settings::default()
+            }),
+            t0,
+        );
+        let clock = crate::input::TimingInfo::Clock {
+            remaining_ms: 600_000,
+            running: true,
+            utc_ms: None,
+        };
+        c.apply(
+            Input::Timing {
+                info: clock,
+                at: t0,
+            },
+            t0,
+        );
+        c.tick(t0 + ms(43_000));
+        assert_eq!(c.snapshot().tv.clock, None);
+        c.tick(t0 + ms(44_000));
+        let shown = c.snapshot().tv.clock.unwrap();
+        assert_eq!(shown.remaining_at(t0 + ms(54_000)), 590_000);
+    }
+
+    #[test]
+    fn an_idle_lamp_forgets_the_session_clock() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        let lap = crate::input::TimingInfo::Lap {
+            current: Some(5),
+            total: Some(62),
+        };
+        c.apply(Input::Timing { info: lap, at: t0 }, t0);
+        c.tick(t0);
+        assert_eq!(c.snapshot().tv.lap, Some(5));
+        c.apply(Input::Phase(SessionPhase::Idle), t0 + ms(10));
+        c.tick(t0 + ms(10));
+        assert_eq!(c.snapshot().tv.lap, None);
     }
 }

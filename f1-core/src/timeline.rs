@@ -9,8 +9,8 @@ use std::{collections::VecDeque, fmt, time::Duration};
 
 use crate::{
     feed::{
-        DriverList, LapCount, OvertakeSeries, PitLaneTimes, RaceControl, SessionData, SessionInfo,
-        SessionStatus, TimingData, TimingStats, TopThree, TrackStatus,
+        DriverList, ExtrapolatedClock, LapCount, OvertakeSeries, PitLaneTimes, RaceControl,
+        SessionData, SessionInfo, SessionStatus, TimingData, TimingStats, TopThree, TrackStatus,
     },
     stream::{parse_line, ParseLineError},
     track_state::FeedMessage,
@@ -37,10 +37,12 @@ pub enum Stream {
     TimingData,
     /// Public: a race's current lap and its length.
     LapCount,
+    /// Public: the session clock, when it starts and stops.
+    Clock,
 }
 
 impl Stream {
-    pub const ALL: [Stream; 12] = [
+    pub const ALL: [Stream; 13] = [
         Stream::SessionInfo,
         Stream::TrackStatus,
         Stream::SessionStatus,
@@ -53,6 +55,7 @@ impl Stream {
         Stream::SessionData,
         Stream::TimingData,
         Stream::LapCount,
+        Stream::Clock,
     ];
 
     /// The name F1 uses, in the archive file names and the live feed.
@@ -70,6 +73,7 @@ impl Stream {
             Stream::SessionData => "SessionData",
             Stream::TimingData => "TimingData",
             Stream::LapCount => "LapCount",
+            Stream::Clock => "ExtrapolatedClock",
         }
     }
 
@@ -153,6 +157,9 @@ impl Stream {
             Stream::LapCount => vec![FeedMessage::LapCount(serde_json::from_str::<LapCount>(
                 json,
             )?)],
+            Stream::Clock => vec![FeedMessage::Clock(
+                serde_json::from_str::<ExtrapolatedClock>(json)?,
+            )],
         })
     }
 }

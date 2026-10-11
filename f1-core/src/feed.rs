@@ -309,6 +309,30 @@ pub struct LapCount {
     pub total_laps: Option<u32>,
 }
 
+/// The session clock: the time left (`"00:17:42"`) at `Utc`, and whether
+/// it's counting down. Sent when it starts or stops, and with the state on
+/// connecting.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ExtrapolatedClock {
+    pub utc: Option<String>,
+    pub remaining: Option<String>,
+    pub extrapolating: Option<bool>,
+}
+
+/// `"01:02:03"` (or `"02:03"`) as milliseconds.
+pub fn clock_ms(text: &str) -> Option<u32> {
+    let mut seconds: u32 = 0;
+    for part in text.split(':') {
+        let (whole, fraction) = part.split_once('.').unwrap_or((part, ""));
+        seconds = seconds.checked_mul(60)?.checked_add(whole.parse().ok()?)?;
+        if !fraction.is_empty() {
+            return None;
+        }
+    }
+    seconds.checked_mul(1000)
+}
+
 /// The session's parts and status changes. Only the qualifying part is read:
 /// `Series` gets an entry with `QualifyingPart` 1, 2 and 3 before each part.
 #[derive(Debug, Deserialize)]
@@ -695,5 +719,14 @@ mod tests {
         assert_eq!(lines[&44].in_pit, Some(true));
         assert_eq!(lines[&16].retired, Some(true));
         assert_eq!(lines[&16].stopped, Some(true));
+    }
+
+    #[test]
+    fn clock_times_read_as_milliseconds() {
+        assert_eq!(clock_ms("00:17:42"), Some((17 * 60 + 42) * 1000));
+        assert_eq!(clock_ms("01:00:00"), Some(3_600_000));
+        assert_eq!(clock_ms("02:03"), Some(123_000));
+        assert_eq!(clock_ms("soon"), None);
+        assert_eq!(clock_ms(""), None);
     }
 }

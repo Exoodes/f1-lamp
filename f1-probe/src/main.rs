@@ -431,6 +431,15 @@ fn describe(msg: &FeedMessage) -> String {
                 format!("knocked out: {}", knocked_out.join(", "))
             }
         }
+        FeedMessage::Clock(c) => format!(
+            "{} left, {}",
+            c.remaining.as_deref().unwrap_or("?"),
+            if c.extrapolating == Some(true) {
+                "running"
+            } else {
+                "stopped"
+            }
+        ),
         FeedMessage::LapCount(l) => match (l.current_lap, l.total_laps) {
             (Some(lap), Some(total)) => format!("lap {lap} of {total}"),
             (Some(lap), None) => format!("lap {lap}"),

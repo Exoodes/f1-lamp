@@ -7,8 +7,9 @@ use std::collections::HashSet;
 
 use crate::{
     feed::{
-        DriverList, LapCount, OvertakeSeries, PitLaneTimes, RcMessage, SessionData, SessionInfo,
-        SessionState, SessionStatus, TimingData, TimingStats, TopThree, TrackCode, TrackStatus,
+        DriverList, ExtrapolatedClock, LapCount, OvertakeSeries, PitLaneTimes, RcMessage,
+        SessionData, SessionInfo, SessionState, SessionStatus, TimingData, TimingStats, TopThree,
+        TrackCode, TrackStatus,
     },
     input::{RaceEvent, TrackFlag},
 };
@@ -27,6 +28,7 @@ pub enum FeedMessage {
     SessionData(SessionData),
     TimingData(TimingData),
     LapCount(LapCount),
+    Clock(ExtrapolatedClock),
 }
 
 #[derive(Debug, Default)]
@@ -61,6 +63,8 @@ impl TrackState {
             FeedMessage::Session(s) => self.apply_session(&s),
             FeedMessage::RaceControl(m) => self.apply_race_control(&m),
             FeedMessage::LapCount(laps) => self.apply_lap_count(&laps),
+            // Only for the page's TV clock (see `live`).
+            FeedMessage::Clock(_) => None,
             FeedMessage::SessionInfo(info) => {
                 if let Some(is_race) = info.is_race() {
                     self.is_race = Some(is_race);

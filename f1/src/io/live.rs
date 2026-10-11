@@ -21,11 +21,12 @@ use f1_core::{
     backoff::Backoff,
     feed_health::FeedHealth,
     heartbeat::Heartbeat,
-    input::{Input, RaceEvent},
+    input::{Input, RaceEvent, TimingInfo},
     live::{LiveSession, Received, MAX_FRAME, MAX_OPENING_FRAMES},
     live_timers::{LiveTimers, SILENCE_LIMIT, TLS_HOLD_MAX},
     negotiate,
     signalr::PING,
+    tv_timing,
 };
 
 use crate::{
@@ -400,6 +401,17 @@ fn handle(
     }
     if let Some(running) = received.running {
         control.set_running(running);
+    }
+    for info in received.timing {
+        let arrival = Instant::now();
+        let at = match (info, clock::unix_now_ms()) {
+            (TimingInfo::Clock { utc_ms, .. }, Some(now_ms)) => {
+                tv_timing::valid_at(arrival, now_ms, utc_ms)
+            }
+            _ => arrival,
+        };
+        tx.send(Input::Timing { info, at })
+            .context("render loop is gone")?;
     }
     for event in received.events {
         log::info!("live: {event:?}");

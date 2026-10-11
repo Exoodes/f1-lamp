@@ -285,6 +285,24 @@
     </section>
 
     <section>
+      <h2>TV sync</h2>
+      <dl class="status">
+        <div><dt>TV clock</dt><dd id="tv-clock">–</dd></div>
+        <div><dt>TV lap</dt><dd id="tv-lap">–</dd></div>
+        <div><dt>Delay</dt><dd id="tv-delay">–</dd></div>
+      </dl>
+      <div class="row">
+        <button data-nudge="-1">−1 s</button>
+        <button data-nudge="-0.5">−0.5 s</button>
+        <button data-nudge="-0.1">−0.1 s</button>
+        <button data-nudge="0.1">+0.1 s</button>
+        <button data-nudge="0.5">+0.5 s</button>
+        <button data-nudge="1">+1 s</button>
+      </div>
+      <p class="hint">The session clock and lap as your TV should show them now. If they change before your TV's, add delay; if after, take some away.</p>
+    </section>
+
+    <section>
       <div class="weekend-head">
         <h2 id="w-title">This weekend</h2>
         <span class="now" id="w-now"></span>
@@ -394,7 +412,7 @@
       <label>Winner shown (min) <input type="number" id="winner_minutes" min="0" max="60" step="0.5"></label>
       <label>Green shown (s) <input type="number" id="green_seconds" min="0" max="600" step="1"></label>
       <p class="hint">After a green flag the lamp returns to its own colour; 0 keeps it green.</p>
-      <label>TV delay (s) <input type="number" id="tv_delay" min="0" max="120" step="0.5"></label>
+      <label>TV delay (s) <input type="number" id="tv_delay" min="0" max="120" step="0.1"></label>
     </section>
 
     <section class="settings">
@@ -606,6 +624,53 @@ function showStatus(state) {
   $("s-net").textContent = words(state.net);
   $("s-override").textContent = state.override_active ? "active" : "none";
   $("release").disabled = !state.override_active;
+  showTv(state);
+}
+
+// ---- TV sync ----
+
+// The TV clock from the last status, counted down here between refreshes.
+let tvClock = null;
+
+function showTv(state) {
+  const tv = state.tv;
+  tvClock = tv.clock_ms === null ? null
+    : { ms: tv.clock_ms, running: tv.clock_running, at: Date.now() };
+  $("tv-lap").textContent = tv.lap === null ? "–"
+    : tv.total_laps ? tv.lap + " / " + tv.total_laps : String(tv.lap);
+  $("tv-delay").textContent = (state.settings.tv_delay_ms / 1000).toFixed(1) + " s";
+  showTvClock();
+}
+
+// 1 062 000 -> "17:42", 3 600 000 -> "1:00:00": whole seconds, like the TV.
+function clockText(ms) {
+  const s = Math.floor(ms / 1000);
+  const pad = (n) => String(n).padStart(2, "0");
+  const hours = Math.floor(s / 3600);
+  const rest = pad(Math.floor(s / 60) % 60) + ":" + pad(s % 60);
+  return hours > 0 ? hours + ":" + rest : rest;
+}
+
+function showTvClock() {
+  if (tvClock === null) {
+    $("tv-clock").textContent = "–";
+    return;
+  }
+  const gone = tvClock.running ? Date.now() - tvClock.at : 0;
+  $("tv-clock").textContent = clockText(Math.max(0, tvClock.ms - gone));
+}
+
+// Moves the TV delay by `seconds` and saves it straight away.
+function nudge(seconds) {
+  if (!loaded) return;
+  const field = $("tv_delay");
+  // Rounded to tenths: 0.1 isn't exact in floating point (44.2 + 0.1 would
+  // give 44.300000000000004).
+  const sum = Math.round((Number(field.value) + seconds) * 10) / 10;
+  const delay = Math.min(120, Math.max(0, sum));
+  field.value = delay;
+  $("tv-delay").textContent = delay.toFixed(1) + " s";
+  save();
 }
 
 // Runs every 2 s. Updates the status only: refilling the form here would
@@ -1039,6 +1104,11 @@ async function start() {
       tryEvent({ kind: "event", event: b.dataset.event, team: $("try_team").value },
         b.textContent + " playing"));
   }
+  for (const b of document.querySelectorAll("[data-nudge]")) {
+    b.addEventListener("click", () => nudge(Number(b.dataset.nudge)));
+  }
+  // Often enough that the seconds change close to when the TV's do.
+  setInterval(showTvClock, 100);
   $("force-color").addEventListener("click", () =>
     override({ kind: "color", color: $("override_color").value }, "Colour forced"));
   $("release").addEventListener("click", () =>

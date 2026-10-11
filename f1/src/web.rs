@@ -8,7 +8,7 @@ use std::{
         mpsc::{SyncSender, TrySendError},
         Arc, Mutex,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use esp_idf_svc::{
@@ -24,7 +24,7 @@ use f1_core::{
     ota_auth::UploadCheck,
     schedule::Session,
     settings::Settings,
-    snapshot::Snapshot,
+    snapshot::{Snapshot, StateReply},
     token::TokenStatus,
     web_api::is_lamp_host,
     weekend::{weekend, Moved, Results, ScheduleReply},
@@ -105,7 +105,7 @@ fn page_routes(
     let follow_from = Arc::clone(&snapshot);
     server.fn_handler::<anyhow::Error, _>("/api/state", Method::Get, move |req| {
         // Copied out, so the lock is released before serialising.
-        let state = *snapshot.lock().unwrap();
+        let state = StateReply::new(*snapshot.lock().unwrap(), Instant::now());
         reply(req, 200, JSON, &serde_json::to_vec(&state)?)
     })?;
 

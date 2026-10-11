@@ -1,10 +1,13 @@
 //! [`Snapshot`]: what the web page shows about the lamp (`GET /api/state`).
 
+use std::time::Instant;
+
 use serde::Serialize;
 
 use crate::{
     input::{NetStatus, SessionPhase},
     settings::Settings,
+    tv_timing::TvView,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -14,6 +17,42 @@ pub struct Snapshot {
     pub net: NetStatus,
     pub override_active: bool,
     pub settings: Settings,
+    /// Sent as [`TvState`], worked out when asked (see [`StateReply`]).
+    #[serde(skip)]
+    pub tv: TvView,
+}
+
+/// What `GET /api/state` answers: the snapshot, and the TV's clock and lap
+/// at the moment of answering.
+#[derive(Debug, Serialize)]
+pub struct StateReply {
+    #[serde(flatten)]
+    pub snapshot: Snapshot,
+    pub tv: TvState,
+}
+
+#[derive(Debug, PartialEq, Serialize)]
+pub struct TvState {
+    /// The session clock's time left, as the TV shows it now.
+    pub clock_ms: Option<u32>,
+    pub clock_running: bool,
+    pub lap: Option<u32>,
+    pub total_laps: Option<u32>,
+}
+
+impl StateReply {
+    pub fn new(snapshot: Snapshot, now: Instant) -> Self {
+        let tv = snapshot.tv;
+        StateReply {
+            snapshot,
+            tv: TvState {
+                clock_ms: tv.clock.map(|c| c.remaining_at(now)),
+                clock_running: tv.clock.is_some_and(|c| c.running),
+                lap: tv.lap,
+                total_laps: tv.total_laps,
+            },
+        }
+    }
 }
 
 #[cfg(test)]
@@ -111,5 +150,29 @@ mod tests {
     fn snapshot_serialises_lamp_colour_as_hex() {
         let json = serde_json::to_value(snapshot_after(&[])).unwrap();
         assert_eq!(json["settings"]["lamp_color"], "#ffa03c");
+    }
+
+    #[test]
+    fn the_reply_has_the_tv_clock_counted_down_to_now() {
+        let t0 = Instant::now();
+        let mut snap = snapshot_after(&[]);
+        snap.tv = crate::tv_timing::TvView {
+            clock: Some(crate::tv_timing::TvClock {
+                anchor: t0,
+                remaining_ms: 600_000,
+                running: true,
+            }),
+            lap: Some(3),
+            total_laps: Some(62),
+        };
+        let reply = StateReply::new(snap, t0 + std::time::Duration::from_secs(5));
+        let json = serde_json::to_string(&reply).unwrap();
+        assert!(
+            json.contains(
+                r#""tv":{"clock_ms":595000,"clock_running":true,"lap":3,"total_laps":62}"#
+            ),
+            "{json}"
+        );
+        assert!(json.contains(r#""layer":"#), "{json}");
     }
 }

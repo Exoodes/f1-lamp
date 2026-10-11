@@ -165,6 +165,9 @@ only the lines the lamp uses, so a whole race fits in the firmware.
 `http://f1-lightbox.local` (same network only):
 
 - what the lamp shows, the session phase and the network state;
+- TV sync: the session clock and the lap as your TV should show them with
+  the delay set, and buttons to move the delay by 0.1, 0.5 or 1 second,
+  until they change together with the TV's;
 - this race weekend: its sessions in your time zone, a countdown to the next
   one, which are live, which moved (and from when) or were cancelled, and
   who was fastest, on pole or won (until a day after the race);
@@ -192,7 +195,7 @@ The page uses these, and scripts can too:
 
 | Request | What it does |
 |---|---|
-| `GET /api/state` | What the lamp shows: layer, phase, network, override, settings (JSON) |
+| `GET /api/state` | What the lamp shows: layer, phase, network, override, settings, and the session clock and lap as the TV shows them (JSON) |
 | `GET /api/schedule` | This race weekend: the lamp's time, the country, the circuit and the sessions with their state (`done`, `live`, `coming`), whether they're followed, where a moved one was, whether it's cancelled, and P1 of each finished one |
 | `POST /api/settings` | All the settings as JSON: get them from `/api/state`, change, send back |
 | `POST /api/override` | `{"kind":"flag","flag":"red"}`, `{"kind":"color","color":"#ff8800"}` or `{"kind":"release"}`; or plays one effect at once: `{"kind":"event","event":"pit_stop","team":"mclaren"}` (`start_lights`, `chequered_flag`, `last_lap`, `fastest_lap`, `pit_stop`, `overtake`, `winner`, `knocked_out`; teams `alpine`, `aston_martin`, `audi`, `cadillac`, `ferrari`, `haas`, `mclaren`, `mercedes`, `racing_bulls`, `red_bull`, `williams`) |

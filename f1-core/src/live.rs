@@ -12,7 +12,8 @@ use chrono::DateTime;
 use serde_json::value::RawValue;
 
 use crate::{
-    input::RaceEvent,
+    feed::clock_ms,
+    input::{RaceEvent, TimingInfo},
     signalr::{self, Message, Splitter},
     timeline::Stream,
     track_state::{FeedMessage, TrackState},
@@ -24,7 +25,7 @@ use crate::{
 /// Race control is left out on purpose: late in a race it holds hundreds of
 /// messages, which would cost tens of KB to parse, and all they would add is
 /// which sectors have a double yellow at the moment of connecting.
-const INITIAL_ORDER: [Stream; 7] = [
+const INITIAL_ORDER: [Stream; 8] = [
     Stream::SessionInfo,
     Stream::SessionData,
     Stream::DriverList,
@@ -34,6 +35,7 @@ const INITIAL_ORDER: [Stream; 7] = [
     // After the status: on the last lap already when connecting, it counts
     // as sent (silently, like everything here).
     Stream::LapCount,
+    Stream::Clock,
 ];
 
 /// One SignalR message at most, for [`LiveSession::new`] on the device. The
@@ -59,7 +61,7 @@ const DRIVER_EVENTS_CALL: u32 = 3;
 const ACCOUNT_CALL: u32 = 4;
 
 /// The streams whose current state is applied on connecting.
-const STATE_STREAMS: [Stream; 7] = [
+const STATE_STREAMS: [Stream; 8] = [
     Stream::SessionInfo,
     Stream::SessionData,
     Stream::TrackStatus,
@@ -67,6 +69,7 @@ const STATE_STREAMS: [Stream; 7] = [
     Stream::DriverList,
     Stream::TopThree,
     Stream::LapCount,
+    Stream::Clock,
 ];
 /// Public streams with driver events: pit stops, fastest laps and
 /// qualifying knockouts. TimingData's answer to `Subscribe` (the whole
@@ -92,6 +95,8 @@ pub struct Received {
     /// Whether the session still goes on, once the answer to `Subscribe`
     /// has said where it stands.
     pub running: Option<bool>,
+    /// Clock and lap readings, for the page's TV clock and lap.
+    pub timing: Vec<TimingInfo>,
 }
 
 pub struct LiveSession {
@@ -223,6 +228,7 @@ impl LiveSession {
                 Ok(messages) => {
                     for msg in messages {
                         self.note(&msg);
+                        out.timing.extend(timing(&msg));
                         // Silently: the events of the past are not shown.
                         self.tracker.apply(&msg);
                         self.state.apply(msg);
@@ -246,6 +252,7 @@ impl LiveSession {
             Ok(messages) => {
                 for msg in messages {
                     self.note(&msg);
+                    out.timing.extend(timing(&msg));
                     out.events.extend(self.tracker.apply(&msg));
                     out.events.extend(self.state.apply(msg));
                 }
@@ -260,6 +267,26 @@ impl LiveSession {
                 self.session_key = info.key;
             }
         }
+    }
+}
+
+/// The clock or lap reading in `msg`, if any.
+fn timing(msg: &FeedMessage) -> Option<TimingInfo> {
+    match msg {
+        FeedMessage::Clock(clock) => Some(TimingInfo::Clock {
+            remaining_ms: clock.remaining.as_deref().and_then(clock_ms)?,
+            running: clock.extrapolating.unwrap_or(false),
+            utc_ms: clock
+                .utc
+                .as_deref()
+                .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+                .map(|t| t.timestamp_millis()),
+        }),
+        FeedMessage::LapCount(laps) => Some(TimingInfo::Lap {
+            current: laps.current_lap,
+            total: laps.total_laps,
+        }),
+        _ => None,
     }
 }
 
@@ -576,5 +603,48 @@ mod tests {
         let b = feed_time("2026-10-09T13:38:00.1331234Z").unwrap();
         assert_eq!(b - a, Duration::from_secs(120));
         assert_eq!(feed_time("not a time"), None);
+    }
+
+    #[test]
+    fn clock_and_lap_updates_are_passed_on() {
+        let (mut live, _) = racing();
+        let received = live.receive(
+            feed(
+                "ExtrapolatedClock",
+                r#"{"Utc":"2026-10-09T09:00:00.000Z","Remaining":"00:17:42","Extrapolating":true}"#,
+            )
+            .as_bytes(),
+        );
+        assert_eq!(
+            received.timing,
+            [TimingInfo::Clock {
+                remaining_ms: 1_062_000,
+                running: true,
+                utc_ms: Some(1_791_536_400_000),
+            }]
+        );
+        let received = live.receive(feed("LapCount", r#"{"CurrentLap":12}"#).as_bytes());
+        assert_eq!(
+            received.timing,
+            [TimingInfo::Lap {
+                current: Some(12),
+                total: None
+            }]
+        );
+    }
+
+    #[test]
+    fn the_clock_is_asked_for_and_read_on_connecting() {
+        let frames = LiveSession::opening_frames(false);
+        assert!(frames[1].contains("\"ExtrapolatedClock\""));
+        let mut live = LiveSession::new(64 * 1024);
+        live.receive(format!("{{}}{RS}").as_bytes());
+        let received = live.receive(
+            completion(
+                r#"{"ExtrapolatedClock":{"Utc":"2026-10-09T09:00:00Z","Remaining":"00:10:00","Extrapolating":false,"_kf":true}}"#,
+            )
+            .as_bytes(),
+        );
+        assert_eq!(received.timing.len(), 1);
     }
 }
