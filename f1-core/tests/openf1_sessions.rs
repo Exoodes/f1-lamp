@@ -48,7 +48,7 @@ fn cancelled_sessions_are_dropped_from_the_fixture() {
 fn every_session_in_the_fixture_converts() {
     for dto in dtos() {
         let key = dto.session_key;
-        assert!(Session::try_from(dto).is_ok(), "session {key}");
+        assert!(Session::try_from(dto).is_ok(), "session {key:?}");
     }
 }
 

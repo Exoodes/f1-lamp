@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Datelike, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use crate::{
     color::Rgb,
@@ -62,25 +62,43 @@ fn date(t: DateTime<Utc>) -> String {
     format!("{:04}-{:02}-{:02}", t.year(), t.month(), t.day())
 }
 
-#[derive(Debug, Deserialize)]
+/// One entry of `/v1/sessions`. Every field may be missing or `null`: one
+/// odd entry must not fail the whole list, so it's read with defaults and
+/// then refused by [`Session::try_from`] (empty kind or time, no key).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
 pub struct SessionDto {
-    pub session_key: u32,
+    pub session_key: Option<u32>,
+    #[serde(deserialize_with = "null_as_default")]
     pub session_type: String,
+    #[serde(deserialize_with = "null_as_default")]
     pub session_name: String,
+    #[serde(deserialize_with = "null_as_default")]
     pub date_start: String,
+    #[serde(deserialize_with = "null_as_default")]
     pub date_end: String,
-    #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
     pub is_cancelled: bool,
-    #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
     pub meeting_key: u32,
-    #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
     pub country_name: String,
-    #[serde(default)]
+    #[serde(deserialize_with = "null_as_default")]
     pub circuit_short_name: String,
+}
+
+/// `#[serde(default)]` covers a missing field, not a `null` one.
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 #[derive(Debug, PartialEq)]
 pub enum SessionError {
+    NoKey,
     BadTime(String),
     UnknownKind(String),
 }
@@ -153,7 +171,7 @@ impl TryFrom<SessionDto> for Session {
         };
 
         Ok(Session {
-            key: dto.session_key,
+            key: dto.session_key.ok_or(SessionError::NoKey)?,
             kind,
             start: unix_seconds(&dto.date_start)?,
             end: unix_seconds(&dto.date_end)?,
@@ -205,7 +223,7 @@ mod tests {
 
     fn dto(session_type: &str, session_name: &str) -> SessionDto {
         SessionDto {
-            session_key: 11361,
+            session_key: Some(11361),
             session_type: session_type.to_string(),
             session_name: session_name.to_string(),
             date_start: "2026-09-06T13:00:00+00:00".to_string(),
@@ -327,12 +345,34 @@ mod tests {
     }
 
     #[test]
+    fn a_null_field_skips_only_its_session() {
+        let json = r#"[
+            {"session_key":1,"session_type":"Race","session_name":"Race",
+             "date_start":"2026-09-06T13:00:00+00:00","date_end":"2026-09-06T15:00:00+00:00",
+             "meeting_key":null,"country_name":null,"circuit_short_name":null,"is_cancelled":null},
+            {"session_key":null,"session_type":"Race","session_name":"Race",
+             "date_start":"2026-09-06T13:00:00+00:00","date_end":"2026-09-06T15:00:00+00:00"},
+            {"session_key":3,"session_type":null,"session_name":"Race",
+             "date_start":"2026-09-06T13:00:00+00:00","date_end":"2026-09-06T15:00:00+00:00"},
+            {"session_key":4,"session_type":"Race","session_name":"Race",
+             "date_start":null,"date_end":"2026-09-06T15:00:00+00:00"},
+            {"session_key":5}
+        ]"#;
+        let dtos: Vec<SessionDto> = serde_json::from_str(json).unwrap();
+        let sessions = all_sessions(dtos);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].key, 1);
+        assert_eq!(sessions[0].country, "");
+        assert!(!sessions[0].cancelled);
+    }
+
+    #[test]
     fn usable_sessions_are_sorted_by_start() {
         let mut later = dto("Race", "Race");
-        later.session_key = 2;
+        later.session_key = Some(2);
         later.date_start = "2026-09-07T13:00:00+00:00".to_string();
         let mut earlier = dto("Qualifying", "Qualifying");
-        earlier.session_key = 1;
+        earlier.session_key = Some(1);
 
         let keys: Vec<u32> = usable_sessions(vec![later, earlier])
             .iter()
