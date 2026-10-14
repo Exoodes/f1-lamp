@@ -330,6 +330,7 @@ impl Connection {
             );
         }
         if due.ping {
+            system::LIVE_STACK.measure();
             self.ws.send_text(PING, SEND_TIMEOUT)?;
         }
         if due.dead {

@@ -238,6 +238,7 @@ impl Lamp {
             }
         }
         if let Some(r) = self.stats.frame(now) {
+            io::system::MAIN_STACK.measure();
             log::info!(
                 "frames: {} in {} s, longest gap {} ms",
                 r.frames,

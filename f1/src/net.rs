@@ -295,12 +295,20 @@ impl<'a> Net<'a> {
             self.due.results = self.update_results(now);
         }
         if now >= self.due.heap_log {
+            system::NET_STACK.measure();
             let heap = system::heap();
+            let stack = |s: &system::StackLeft| s.get().map_or("?".into(), |b| format!("{b} B"));
+            let nvs =
+                system::nvs_use().map_or("?".into(), |n| format!("{} of {}", n.used, n.total));
             log::info!(
-                "heap: {} B free, {} B lowest since boot, largest block {} B",
+                "heap: {} B free, {} B lowest since boot, largest block {} B;                  stack left: main {}, net {}, live {}; nvs entries used: {}",
                 heap.free,
                 heap.lowest,
-                heap.largest_block
+                heap.largest_block,
+                stack(&system::MAIN_STACK),
+                stack(&system::NET_STACK),
+                stack(&system::LIVE_STACK),
+                nvs
             );
             self.due.heap_log = now + HEAP_LOG_EVERY;
         }

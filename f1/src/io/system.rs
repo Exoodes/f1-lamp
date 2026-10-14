@@ -1,6 +1,10 @@
 //! Readings of the chip itself.
 
-use std::time::Duration;
+use std::{
+    ptr,
+    sync::atomic::{AtomicU32, Ordering},
+    time::Duration,
+};
 
 use esp_idf_svc::{hal::delay::TickType, sys};
 
@@ -13,6 +17,53 @@ pub struct Heap {
     /// small pieces, a large allocation (a TLS buffer, a big frame) fails
     /// even though `free` looks fine.
     pub largest_block: usize,
+}
+
+/// The least stack a thread had left since it started, in bytes, as the
+/// thread itself last measured it: a thread can only be measured from
+/// inside (std threads have no FreeRTOS handle to look up).
+pub struct StackLeft(AtomicU32);
+
+pub static MAIN_STACK: StackLeft = StackLeft::new();
+pub static NET_STACK: StackLeft = StackLeft::new();
+pub static LIVE_STACK: StackLeft = StackLeft::new();
+
+impl StackLeft {
+    const fn new() -> Self {
+        Self(AtomicU32::new(0))
+    }
+
+    /// Measures the calling thread. Scans its unused stack, so call it now
+    /// and then, not every frame.
+    pub fn measure(&self) {
+        // SAFETY: a null handle means the calling task. ESP-IDF counts
+        // stacks in bytes, not the words of FreeRTOS's documentation.
+        let left = unsafe { sys::uxTaskGetStackHighWaterMark(ptr::null_mut()) };
+        self.0.store(left, Ordering::Relaxed);
+    }
+
+    /// `None` until the thread has measured itself.
+    pub fn get(&self) -> Option<u32> {
+        Some(self.0.load(Ordering::Relaxed)).filter(|&left| left > 0)
+    }
+}
+
+/// Entries in the NVS partition (32 B each): settings, the schedule, the
+/// F1TV token and the update trial all share its 24 KB.
+pub struct NvsUse {
+    pub used: usize,
+    pub total: usize,
+}
+
+pub fn nvs_use() -> Option<NvsUse> {
+    let mut stats = sys::nvs_stats_t::default();
+    // SAFETY: a null name means the default partition; `stats` is a local
+    // the call fills in.
+    sys::esp!(unsafe { sys::nvs_get_stats(ptr::null(), &mut stats) }).ok()?;
+    Some(NvsUse {
+        used: stats.used_entries,
+        total: stats.total_entries,
+    })
 }
 
 pub fn restart() -> ! {
