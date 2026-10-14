@@ -38,6 +38,9 @@ pub struct TrackState {
     double_yellow: HashSet<u8>,
     shown: Option<TrackFlag>,
     started: bool,
+    /// The feed says the session began, maybe before the lamp connected
+    /// (`SessionStatus.Started`).
+    begun: bool,
     is_race: Option<bool>,
     /// Stopped by a red flag (`Aborted`) and not restarted yet: before the
     /// restart the session goes `Inactive`, still under the red flag.
@@ -85,6 +88,9 @@ impl TrackState {
     /// The session's status. Its first `Started` is the start: the start
     /// lights, unless it's known not to be a race.
     fn apply_session(&mut self, s: &SessionStatus) -> Option<RaceEvent> {
+        if s.started.is_some_and(|st| st != SessionState::Inactive) {
+            self.begun = true;
+        }
         let state = s.status?;
         self.session = Some(state);
         match state {
@@ -168,7 +174,9 @@ impl TrackState {
 
         match self.session {
             Some(Started | Aborted) => true,
-            Some(Inactive) => self.started,
+            // Between qualifying's parts, or before a restart after a red
+            // flag; also when the lamp connected only then.
+            Some(Inactive) => self.started || self.begun,
             Some(Finished) => self.is_race == Some(false),
             _ => false,
         }
@@ -212,6 +220,7 @@ mod tests {
     fn session(state: SessionState) -> FeedMessage {
         FeedMessage::Session(SessionStatus {
             status: Some(state),
+            started: None,
         })
     }
 
@@ -627,6 +636,27 @@ mod tests {
         s.apply(session(SessionState::Inactive));
         assert!(s.session_running());
         s.apply(session(SessionState::Finalised));
+        assert!(!s.session_running());
+    }
+
+    #[test]
+    fn qualifying_joined_between_its_parts_is_running() {
+        // Monza 2026, between Q1 and Q2.
+        let mut s = TrackState::default();
+        s.apply(info("Qualifying"));
+        let between: SessionStatus =
+            serde_json::from_str(r#"{"Status":"Inactive","Started":"Finished"}"#).unwrap();
+        s.apply(FeedMessage::Session(between));
+        assert!(s.session_running());
+    }
+
+    #[test]
+    fn a_session_joined_before_its_start_is_not_running() {
+        let mut s = TrackState::default();
+        s.apply(info("Qualifying"));
+        let before: SessionStatus =
+            serde_json::from_str(r#"{"Status":"Inactive","Started":"Inactive"}"#).unwrap();
+        s.apply(FeedMessage::Session(before));
         assert!(!s.session_running());
     }
 

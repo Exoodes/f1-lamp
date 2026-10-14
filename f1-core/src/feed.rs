@@ -86,6 +86,11 @@ pub enum SessionState {
 #[serde(rename_all = "PascalCase")]
 pub struct SessionStatus {
     pub status: Option<SessionState>,
+    /// Whether the session has begun: `Inactive` before the first start,
+    /// then `Started` or `Finished`, also while `status` is `Inactive`
+    /// between qualifying's parts.
+    #[serde(default)]
+    pub started: Option<SessionState>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
