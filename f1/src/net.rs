@@ -69,6 +69,9 @@ pub fn spawn(
 
 /// A new firmware passes its trial once its web server has run this long.
 const HEALTHY_AFTER: Duration = Duration::from_secs(60);
+// A trial boot that isn't healthy within `HEALTHY_WITHIN` restarts, so
+// getting healthy must fit, with time for WiFi before it.
+const _: () = assert!(HEALTHY_AFTER.as_secs() < f1_core::ota_trial::HEALTHY_WITHIN.as_secs());
 /// How often to check that WiFi is still up.
 const WIFI_CHECK_EVERY: Duration = Duration::from_secs(5);
 /// How often to log the free heap.
