@@ -75,7 +75,7 @@ fn run() -> anyhow::Result<()> {
     // Before anything that could crash: a new firmware on trial is counted
     // here, and switched back after three boots that never got healthy
     // (a crash, or no health within `HEALTHY_WITHIN`, see `supervise`).
-    io::ota::check_boot(nvs.clone())?;
+    io::ota::check_boot(nvs.clone());
     #[cfg(feature = "crash-test")]
     crash_test();
 

@@ -48,13 +48,28 @@ static ON_TRIAL: AtomicBool = AtomicBool::new(false);
 /// The first thing after the logger, before WiFi or anything else that could
 /// crash: counts a trial boot, or switches back to the other slot after
 /// three of them. Never returns when it switches back.
-pub fn check_boot(partition: EspDefaultNvsPartition) -> anyhow::Result<()> {
-    let nvs = open_nvs(partition)?;
+///
+/// An NVS error is logged, never returned: failing here would restart the
+/// lamp on every boot, with no web server to send a fix to.
+pub fn check_boot(partition: EspDefaultNvsPartition) {
+    match open_nvs(partition) {
+        Ok(nvs) => {
+            check_trial(&nvs);
+            let _ = TRIAL.set(Mutex::new(nvs));
+        }
+        Err(e) => log::error!("ota: no trial check, updates start no trial: {e:#}"),
+    }
+    if let Err(e) = confirm_to_bootloader() {
+        log::error!("ota: {e:#}");
+    }
+}
+
+fn check_trial(nvs: &EspNvs<NvsDefault>) {
     if nvs.remove(OTA_FELL_BACK).unwrap_or(false) {
         log::warn!("ota: the last update kept restarting; this is the firmware from before it");
     }
 
-    let mut trial = NvsTrial(&nvs);
+    let mut trial = NvsTrial(nvs);
     let stored = trial.load();
     match on_boot(stored, running_image()) {
         BootDecision::Normal => {}
@@ -62,20 +77,33 @@ pub fn check_boot(partition: EspDefaultNvsPartition) -> anyhow::Result<()> {
             log::warn!(
                 "ota: the firmware on trial isn't the one running (flashed over USB?); trial ended"
             );
-            ota_trial::end(&mut trial).context("end the trial")?;
+            if let Err(e) = ota_trial::end(&mut trial) {
+                log::error!("ota: can't end the trial: {e}");
+            }
         }
         BootDecision::Trial { boot } => {
             let counted = Trial {
                 boots: Some(boot),
                 ..stored
             };
-            trial.store(counted).context("count the trial boot")?;
-            log::info!("ota: new firmware on trial, boot {boot}");
-            ON_TRIAL.store(true, Ordering::Relaxed);
+            // An uncounted boot isn't on trial: restarting it when it isn't
+            // healthy in time would never get to the fallback.
+            match trial.store(counted) {
+                Ok(()) => {
+                    log::info!("ota: new firmware on trial, boot {boot}");
+                    ON_TRIAL.store(true, Ordering::Relaxed);
+                }
+                Err(e) => log::error!("ota: can't count the trial boot, so no trial: {e}"),
+            }
         }
         BootDecision::FallBack => {
-            // Cleared first: whatever happens next, no endless switching.
-            ota_trial::end(&mut trial).context("end the trial")?;
+            // Cleared first: whatever happens next, no endless switching. If
+            // it can't be cleared, the other firmware would find the same
+            // trial, so stay.
+            if let Err(e) = ota_trial::end(&mut trial) {
+                log::error!("ota: can't end the trial, staying on this firmware: {e}");
+                return;
+            }
             match switch_to_other_slot() {
                 Ok(()) => {
                     let _ = nvs.set_u8(OTA_FELL_BACK, 1);
@@ -90,9 +118,6 @@ pub fn check_boot(partition: EspDefaultNvsPartition) -> anyhow::Result<()> {
             }
         }
     }
-    confirm_to_bootloader()?;
-    let _ = TRIAL.set(Mutex::new(nvs));
-    Ok(())
 }
 
 /// The bootloader sends a firmware that arrived over WiFi back if it restarts
