@@ -248,6 +248,11 @@ fn session(
         let Some(data) = conn.next_data(now)? else {
             continue;
         };
+        // The WebSocket client hands a frame over in pieces (`offset` is
+        // where this one starts), and a frame isn't one SignalR message: it
+        // can hold several, or part of one. `live` joins the pieces and splits
+        // the messages at their 0x1E separator. A frame's first piece tells
+        // its whole length, so the buffer grows once.
         if data.offset == 0 {
             live.expect(data.frame_len);
         }
