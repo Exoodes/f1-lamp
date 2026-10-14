@@ -6,7 +6,13 @@ use std::{collections::VecDeque, time::Instant};
 
 use crate::effect::Effect;
 
-pub const MAX_OVERLAYS: usize = 5;
+/// Room for every knockout of a qualifying part, which all come in one
+/// TimingData message (Monza 2026), behind the part's chequered flag.
+pub const MAX_OVERLAYS: usize = 8;
+/// Of 22 cars, 6 are knocked out after Q1 and 6 after Q2, plus the
+/// chequered flag.
+const MOST_AT_ONCE: usize = 6 + 1;
+const _: () = assert!(MAX_OVERLAYS >= MOST_AT_ONCE);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Overlay {

@@ -341,10 +341,10 @@ impl Controller {
         // The same flag again changes nothing on the lamp, and in the log.
         let repeated = matches!(event, RaceEvent::TrackFlag(flag)
             if self.layers.flag.is_some_and(|f| f.value == flag));
-        if !repeated {
+        // An overlay that didn't fit the queue never shows: not in the log.
+        if self.play_race_event(event, now) && !repeated {
             self.note(LogItem::Event(event));
         }
-        self.play_race_event(event, now);
     }
 
     fn note(&mut self, item: LogItem) {
@@ -361,7 +361,8 @@ impl Controller {
         std::mem::take(&mut self.log)
     }
 
-    fn play_race_event(&mut self, event: RaceEvent, now: Instant) {
+    /// Returns whether the event shows: false when its overlay was dropped.
+    fn play_race_event(&mut self, event: RaceEvent, now: Instant) -> bool {
         match event {
             RaceEvent::TrackFlag(flag) => stamp(&mut self.layers.flag, flag, now),
             RaceEvent::FlagCleared => self.layers.flag = None,
@@ -377,10 +378,11 @@ impl Controller {
             }
             other => {
                 if let Some(effect) = event_overlay(other) {
-                    self.overlays.push(effect);
+                    return self.overlays.push(effect);
                 }
             }
         }
+        true
     }
 
     fn override_layer(&self) -> Option<Scene> {
@@ -483,6 +485,7 @@ mod tests {
     use crate::{
         color::Rgb,
         drivers::DriverSet,
+        overlays::MAX_OVERLAYS,
         settings::EffectToggles,
         theme::{LAMP, PURPLE},
     };
@@ -1548,6 +1551,50 @@ mod tests {
             c.take_log(),
             [LogItem::Event(RaceEvent::TrackFlag(TrackFlag::Yellow))]
         );
+    }
+
+    fn knocked_out(driver: u8, at: Instant) -> Input {
+        race(
+            RaceEvent::KnockedOut {
+                driver,
+                team_color: TEAM,
+            },
+            at,
+        )
+    }
+
+    fn following_everyone(t0: Instant) -> Controller {
+        let mut c = live(t0);
+        let settings = Settings {
+            follow_all: true,
+            ..Settings::default()
+        };
+        c.apply(Input::Settings(settings), t0);
+        c.take_log();
+        c
+    }
+
+    #[test]
+    fn six_knockouts_at_once_after_the_chequered_flag_all_fade() {
+        let t0 = Instant::now();
+        let mut c = following_everyone(t0);
+        // Monza 2026 qualifying: all of a part's knockouts in one message.
+        c.apply(race(RaceEvent::ChequeredFlag, t0), t0);
+        for driver in [10, 18, 23, 27, 31, 43] {
+            c.apply(knocked_out(driver, t0), t0);
+        }
+        assert_eq!(c.overlays.len(), 7);
+        assert_eq!(c.take_log().len(), 7);
+    }
+
+    #[test]
+    fn an_overlay_the_queue_has_no_room_for_is_not_logged() {
+        let t0 = Instant::now();
+        let mut c = following_everyone(t0);
+        for driver in 1..=MAX_OVERLAYS as u8 + 1 {
+            c.apply(pit_stop(driver, t0), t0);
+        }
+        assert_eq!(c.take_log().len(), MAX_OVERLAYS);
     }
 
     #[test]
