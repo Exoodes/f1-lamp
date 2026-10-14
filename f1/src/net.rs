@@ -218,6 +218,9 @@ struct Net<'a> {
     /// served for `HEALTHY_AFTER`, and can then take the next update.
     server_since: Option<Instant>,
     healthy: bool,
+    /// The clock's first time was logged. The repeats are debug only: every
+    /// 30 s, they filled half the web page's log.
+    clock_logged: bool,
     schedule: Schedule,
     calendar_retry: Backoff,
     /// The session whose winner was sent, so each race is shown once.
@@ -259,6 +262,7 @@ impl<'a> Net<'a> {
             server: None,
             server_since: None,
             healthy: false,
+            clock_logged: false,
             schedule,
             calendar_retry: Backoff::new(FIRST_CALENDAR_RETRY, MAX_CALENDAR_RETRY),
             winner_sent: None,
@@ -390,12 +394,23 @@ impl<'a> Net<'a> {
     }
 
     /// Sends the local time once the clock is set. Returns when it's next due.
-    fn send_clock(&self, now: Instant) -> anyhow::Result<Instant> {
+    fn send_clock(&mut self, now: Instant) -> anyhow::Result<Instant> {
         Ok(match clock::minute_of_day() {
             // Until the first sync nothing is sent, so the core keeps "not night".
             None => now + CLOCK_WAITING_EVERY,
             Some(minute_of_day) => {
-                log::info!("clock: {:02}:{:02}", minute_of_day / 60, minute_of_day % 60);
+                let level = if self.clock_logged {
+                    log::Level::Debug
+                } else {
+                    log::Level::Info
+                };
+                log::log!(
+                    level,
+                    "clock: {:02}:{:02}",
+                    minute_of_day / 60,
+                    minute_of_day % 60
+                );
+                self.clock_logged = true;
                 self.tx
                     .send(Input::Clock { minute_of_day })
                     .context("render loop is gone")?;
