@@ -1,6 +1,6 @@
 //! Proof that a firmware upload comes from someone with the update key,
-//! without the key crossing the network: the lamp hands out a one-time
-//! nonce ([`Nonces`]), the uploader sends HMAC-SHA256(key, nonce ‖
+//! without the key crossing the network: the lamp hands out one-time
+//! nonces ([`Nonces`]), the uploader sends HMAC-SHA256(key, nonce ‖
 //! SHA-256(image)), and the lamp checks it once the whole image has arrived
 //! ([`UploadCheck`]), before the image can boot. A recorded upload can't be
 //! sent again, and an image swapped on the way doesn't match.
@@ -10,7 +10,10 @@
 //! HMAC-SHA256(key, nonce ‖ "start" ‖ the length in decimal), checked before
 //! anything is erased ([`UploadCheck::may_start`]).
 
-use std::time::{Duration, Instant};
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
@@ -19,30 +22,41 @@ pub const NONCE_LEN: usize = 16;
 /// A nonce older than this is refused: an upload starts right after asking.
 pub const NONCE_TTL: Duration = Duration::from_secs(120);
 
-/// The nonce handed out last. Asking again replaces it, and an upload uses it
-/// up whether its check passes or not, so each one gets a single try.
+/// Nonces kept at once: another device asking for one doesn't cancel an
+/// upload that's about to start.
+pub const MAX_NONCES: usize = 4;
+
+/// The last [`MAX_NONCES`] nonces handed out. An upload uses its nonce up
+/// whether its check passes or not, so each one gets a single try.
 #[derive(Debug, Default)]
 pub struct Nonces {
-    issued: Option<([u8; NONCE_LEN], Instant)>,
+    issued: VecDeque<([u8; NONCE_LEN], Instant)>,
 }
 
 impl Nonces {
     pub const fn new() -> Self {
-        Nonces { issued: None }
+        Nonces {
+            issued: VecDeque::new(),
+        }
     }
 
-    /// Hands out `random` as the new nonce, in hex.
+    /// Hands out `random` as a new nonce, in hex, dropping the oldest when
+    /// [`MAX_NONCES`] are out.
     pub fn issue(&mut self, random: [u8; NONCE_LEN], now: Instant) -> String {
-        self.issued = Some((random, now));
+        if self.issued.len() == MAX_NONCES {
+            self.issued.pop_front();
+        }
+        self.issued.push_back((random, now));
         to_hex(&random)
     }
 
-    /// The nonce for one upload, if `hex` is the one handed out and still
-    /// fresh.
+    /// The nonce for one upload, if `hex` is one handed out and still fresh.
     pub fn redeem(&mut self, hex: &str, now: Instant) -> Option<[u8; NONCE_LEN]> {
-        let (nonce, issued) = self.issued.take()?;
-        let fresh = now.saturating_duration_since(issued) < NONCE_TTL;
-        (fresh && from_hex(hex).as_deref() == Some(&nonce[..])).then_some(nonce)
+        self.issued
+            .retain(|&(_, issued)| now.saturating_duration_since(issued) < NONCE_TTL);
+        let wanted = from_hex(hex)?;
+        let at = self.issued.iter().position(|(n, _)| n[..] == wanted[..])?;
+        self.issued.remove(at).map(|(nonce, _)| nonce)
     }
 }
 
@@ -214,12 +228,12 @@ mod tests {
     }
 
     #[test]
-    fn a_wrong_guess_uses_the_nonce_up() {
+    fn a_wrong_nonce_redeems_nothing() {
         let t0 = Instant::now();
         let mut nonces = Nonces::default();
-        let hex = nonces.issue(RANDOM, t0);
+        nonces.issue(RANDOM, t0);
         assert_eq!(nonces.redeem("00", t0), None);
-        assert_eq!(nonces.redeem(&hex, t0), None);
+        assert_eq!(nonces.redeem("zz", t0), None);
     }
 
     #[test]
@@ -231,14 +245,28 @@ mod tests {
     }
 
     #[test]
-    fn asking_again_replaces_the_nonce() {
+    fn another_device_asking_doesnt_cancel_a_nonce() {
         let t0 = Instant::now();
         let mut nonces = Nonces::default();
-        let old = nonces.issue(RANDOM, t0);
-        let new = nonces.issue([9; NONCE_LEN], t0);
-        assert_eq!(nonces.redeem(&old, t0), None);
+        let mine = nonces.issue(RANDOM, t0);
         nonces.issue([9; NONCE_LEN], t0);
-        assert_eq!(nonces.redeem(&new, t0), Some([9; NONCE_LEN]));
+        assert_eq!(nonces.redeem(&mine, t0), Some(RANDOM));
+    }
+
+    #[test]
+    fn the_oldest_nonce_goes_when_too_many_are_out() {
+        let t0 = Instant::now();
+        let mut nonces = Nonces::default();
+        let oldest = nonces.issue([0; NONCE_LEN], t0);
+        let mut newest = String::new();
+        for n in 1..=MAX_NONCES as u8 {
+            newest = nonces.issue([n; NONCE_LEN], t0);
+        }
+        assert_eq!(nonces.redeem(&oldest, t0), None);
+        assert_eq!(
+            nonces.redeem(&newest, t0),
+            Some([MAX_NONCES as u8; NONCE_LEN])
+        );
     }
 
     #[test]
