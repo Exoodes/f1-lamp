@@ -24,9 +24,11 @@ const TIMEOUT: Duration = Duration::from_secs(15);
 /// its heartbeat limit.
 const BODY_DEADLINE: Duration = Duration::from_secs(30);
 /// The longest one request can take, holding `TLS` all along: connecting
-/// and sending, waiting for the answer, and reading the body.
+/// and sending, waiting for the answer, and reading the body. The body's
+/// deadline is checked between reads, so the last read can start just
+/// before it and take one more `TIMEOUT`.
 pub const LONGEST_REQUEST: Duration =
-    Duration::from_secs(2 * TIMEOUT.as_secs() + BODY_DEADLINE.as_secs());
+    Duration::from_secs(3 * TIMEOUT.as_secs() + BODY_DEADLINE.as_secs());
 /// Room for the request line and headers. The default 512 bytes can't hold
 /// `Authorization: Bearer <F1TV token>`: the token alone is 1-2 KB.
 const TX_BUFFER: usize = 4096;
