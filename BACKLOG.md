@@ -50,11 +50,6 @@ Ideas for after the course, in no particular order of size.
   until the start plus the TV delay. Adding the delay on the page (it's in
   the settings the page already has) would make both reach zero together.
   Small, page only.
-- **Check the page's script in `check.ps1`.** A syntax error in
-  `f1/web/index.html` stops the whole page (race day 2026-10-11: a line break
-  inside a string, "connecting…" forever), and nothing caught it. Needs Node
-  (`node --check` on the extracted script) or a small standalone checker.
-
 ## Later
 
 - **Home Assistant over MQTT.** Written by me: the lamp's state out,

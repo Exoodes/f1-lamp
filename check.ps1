@@ -1,6 +1,7 @@
 # Every check the CI runs (.github/workflows/ci.yml), the same way on this
-# PC: formatting, clippy with warnings as errors, the f1-core tests, the
-# probe, and release builds of the firmware with the image-size check. Any
+# PC: the web page's script syntax (needs Node.js), formatting, clippy with
+# warnings as errors, the f1-core tests, the probe, and release builds of the
+# firmware with the image-size check. Any
 # warning in a check's output fails it. Only the security audit of the lock
 # files runs in CI alone.
 #
@@ -92,7 +93,44 @@ function Test-ImageSize {
     }
 }
 
+# Checks the syntax of the web page's script: one error stops the whole page
+# (race day 2026-10-11: a line break inside a string, "connecting…" forever),
+# and the firmware builds don't look inside it.
+function Test-PageScript {
+    $name = 'web: page script'
+    Write-Host "== $name" -ForegroundColor Cyan
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        Write-Host 'Node.js is needed: winget install OpenJS.NodeJS.LTS' -ForegroundColor Red
+        Write-Host "FAILED: $name" -ForegroundColor Red
+        $script:failed.Add($name)
+        return
+    }
+    $page = Get-Content -Raw -Encoding UTF8 (Join-Path $root 'f1/web/index.html')
+    $scripts = [regex]::Matches($page, '(?s)<script>(.*?)</script>')
+    if ($scripts.Count -eq 0) {
+        Write-Host 'no <script> found in f1/web/index.html' -ForegroundColor Red
+        Write-Host "FAILED: $name" -ForegroundColor Red
+        $script:failed.Add($name)
+        return
+    }
+    $js = Join-Path ([IO.Path]::GetTempPath()) 'f1-check-page.js'
+    foreach ($s in $scripts) {
+        # Blank lines in place of the HTML before it, so an error's line
+        # number is the line in index.html.
+        $before = ([regex]::Matches($page.Substring(0, $s.Groups[1].Index), "`n")).Count
+        [IO.File]::WriteAllText($js, ("`n" * $before) + $s.Groups[1].Value)
+        $output = & node --check $js 2>&1 | ForEach-Object { Get-Text $_ } | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host $output
+            Write-Host "FAILED: $name" -ForegroundColor Red
+            $script:failed.Add($name)
+            return
+        }
+    }
+}
+
 if ($Part -ne 'firmware') {
+    Test-PageScript
     Invoke-Cargo 'f1-core: format' 'f1-core' @('fmt', '--check') | Out-Null
     Invoke-Cargo 'f1-core: clippy' 'f1-core' @('clippy', '--all-targets', '--', '-D', 'warnings') | Out-Null
     Invoke-Cargo 'f1-core: tests' 'f1-core' @('test') | Out-Null

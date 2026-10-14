@@ -236,8 +236,9 @@ powershell -ExecutionPolicy Bypass -File check.ps1          # all
 powershell -ExecutionPolicy Bypass -File check.ps1 -Part core
 ```
 
-It runs formatting, clippy with warnings as errors, the f1-core tests, the
-probe, and the release builds (plain, showcase, replay of the archived race)
+It runs a syntax check of the web page's script (`node --check`; needs
+Node.js, e.g. `winget install OpenJS.NodeJS.LTS`), formatting, clippy with
+warnings as errors, the f1-core tests, the probe, and the release builds (plain, showcase, replay of the archived race)
 with a check that each image stays under 95 % of an app slot. Any warning in
 their output fails them, also one clippy can't turn into an error (such as an
 unused dependency). The CI also runs `cargo audit` on the three lock files.
