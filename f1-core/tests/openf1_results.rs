@@ -3,7 +3,7 @@
 
 use f1_core::{
     color::Rgb,
-    openf1::{team_colours, winner, DriverDto, ResultDto},
+    openf1::{session_result, winner, DriverDto, ResultDto},
 };
 
 const RESULT: &str = include_str!("data/result.json");
@@ -29,13 +29,18 @@ fn fixture_race_winner_is_12() {
 
 #[test]
 fn fixture_winner_drives_a_mercedes_teal() {
-    let colours = team_colours(drivers());
-    assert_eq!(colours.get(&12), Some(&Rgb::new(0x00, 0xD7, 0xB6)));
+    let drivers = drivers();
+    let line = drivers.iter().find(|d| d.driver_number == 12).unwrap();
+    assert_eq!(
+        session_result(line).map(|r| r.color),
+        Some(Rgb::new(0x00, 0xD7, 0xB6))
+    );
 }
 
 #[test]
-fn fixture_has_a_colour_for_every_driver() {
-    assert_eq!(team_colours(drivers()).len(), 22);
+fn fixture_has_a_result_with_colour_for_every_driver() {
+    let drivers = drivers();
+    assert_eq!(drivers.iter().filter_map(session_result).count(), 22);
 }
 
 #[test]

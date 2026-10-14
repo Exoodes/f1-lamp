@@ -17,7 +17,6 @@ use esp_idf_svc::{
 };
 use f1_core::{
     backoff::Backoff,
-    color::Rgb,
     heartbeat::Heartbeat,
     input::{Input, NetStatus, RaceEvent},
     net_schedule::{in_words, instant_at, Calendar, Deadlines, PhaseUpdate},
@@ -542,84 +541,60 @@ impl<'a> Net<'a> {
         }
     }
 
-    /// The OpenF1 winner lookup, once WiFi and the clock are ready.
+    /// The OpenF1 winner lookup, once WiFi and the clock are ready: if a
+    /// race is in its winner window and its winner hasn't been sent yet,
+    /// looks it up and sends `RaceEvent::Winner`. Failures only log: it's
+    /// tried again a minute later.
     fn look_for_winner(&mut self) -> anyhow::Result<()> {
-        if let (Some(unix), true) = (clock::unix_now(), self.wifi_up()) {
-            check_winner(
-                self.schedule.calendar.followed(),
-                unix,
-                &mut self.winner_sent,
-                &self.shared.live,
-                self.tx,
-                self.heartbeat,
-            )?;
+        let (Some(now_unix), true) = (clock::unix_now(), self.wifi_up()) else {
+            return Ok(());
+        };
+        let lookup = schedule::winner_lookup(
+            self.schedule.calendar.followed(),
+            now_unix,
+            self.winner_sent,
+            self.shared.live.winner_shown(),
+            self.shared.live.feed_running(),
+        );
+        let key = match lookup {
+            WinnerLookup::Nothing => return Ok(()),
+            WinnerLookup::ShownByFeed(key) => {
+                log::info!("winner: session {key} already shown from the live feed");
+                self.winner_sent = Some(key);
+                return Ok(());
+            }
+            WinnerLookup::Fetch(key) => key,
+        };
+
+        // Without a team colour the result is `None`: better to try again
+        // later than to guess one.
+        match fetch_result(key, self.heartbeat) {
+            Ok(Some(winner)) => {
+                log::info!(
+                    "winner: {} #{} ({}), session {key}",
+                    winner.name,
+                    winner.driver,
+                    winner.color
+                );
+                self.tx
+                    .send(Input::Race {
+                        event: RaceEvent::Winner {
+                            driver: winner.driver,
+                            team_color: winner.color,
+                        },
+                        received: Instant::now(),
+                    })
+                    .context("render loop is gone")?;
+                self.winner_sent = Some(key);
+            }
+            Ok(None) => log::info!(
+                "winner: session {key} not published yet; retrying in {} s",
+                WINNER_EVERY.as_secs()
+            ),
+            Err(e) => log::warn!("winner: {e:#}; retrying in {} s", WINNER_EVERY.as_secs()),
         }
         Ok(())
     }
-}
-
-/// If a race is in its winner window and its winner hasn't been sent yet,
-/// looks it up and sends `RaceEvent::Winner`. Failures only log: the caller
-/// tries again a minute later.
-fn check_winner(
-    sessions: &[Session],
-    now_unix: i64,
-    sent: &mut Option<u32>,
-    live: &LiveControl,
-    tx: &SyncSender<Input>,
-    heartbeat: &Heartbeat,
-) -> anyhow::Result<()> {
-    let lookup = schedule::winner_lookup(
-        sessions,
-        now_unix,
-        *sent,
-        live.winner_shown(),
-        live.feed_running(),
-    );
-    let key = match lookup {
-        WinnerLookup::Nothing => return Ok(()),
-        WinnerLookup::ShownByFeed(key) => {
-            log::info!("winner: session {key} already shown from the live feed");
-            *sent = Some(key);
-            return Ok(());
-        }
-        WinnerLookup::Fetch(key) => key,
-    };
-
-    match fetch_winner(key, heartbeat) {
-        Ok(Some((driver, team_color))) => {
-            log::info!("winner: #{driver} ({team_color}), session {key}");
-            tx.send(Input::Race {
-                event: RaceEvent::Winner { driver, team_color },
-                received: Instant::now(),
-            })
-            .context("render loop is gone")?;
-            *sent = Some(key);
-        }
-        Ok(None) => log::info!(
-            "winner: session {key} not published yet; retrying in {} s",
-            WINNER_EVERY.as_secs()
-        ),
-        Err(e) => log::warn!("winner: {e:#}; retrying in {} s", WINNER_EVERY.as_secs()),
-    }
-    Ok(())
-}
-
-/// The winner of `session_key` and their team colour; `None` until OpenF1 has
-/// published the result (it answers 404 until then).
-fn fetch_winner(session_key: u32, heartbeat: &Heartbeat) -> anyhow::Result<Option<(u8, Rgb)>> {
-    let results =
-        http::get_json::<Vec<ResultDto>>(&openf1::results_url(session_key))?.unwrap_or_default();
-    let Some(driver) = openf1::winner(&results) else {
-        return Ok(None);
-    };
-    heartbeat.beat(Instant::now());
-    let drivers =
-        http::get_json::<Vec<DriverDto>>(&openf1::drivers_url(session_key))?.unwrap_or_default();
-    // Without a colour, try again later rather than guess one.
-    Ok(openf1::team_colours(drivers)
-        .get(&driver)
-        .map(|&colour| (driver, colour)))
 }
 
 /// P1 of `session_key` with their short name and team colour; `None` until
