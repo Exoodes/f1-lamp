@@ -4,14 +4,6 @@ Ideas for after the course, in no particular order of size.
 
 ## Wanted
 
-- **Fastest lap when the holder beats their own time.** Missed today: the
-  lamp counts a fastest lap only when `PersonalBestLapTime` comes with
-  `Position: 1` in the same message, and a driver already P1 gets no
-  `Position` (it didn't change). Race Singapore 2026-10-11: HAM lap 22
-  1:37.170 shown, lap 23 `{"Lap":23,"Value":"1:37.075"}` (capture offset
-  01:01:54.671) missed. Fix in `tracker.rs` `fastest_laps`: remember who holds
-  the session best; a new time from that driver is a fastest lap too. Small;
-  test with today's messages.
 - **Overtakes from `DriverRaceInfo`.** The live feed never sends
   `OvertakeSeries`: not in FP1, not in today's race, not even to a probe with
   `--extra` and the F1TV token (the other token-only streams arrived). It

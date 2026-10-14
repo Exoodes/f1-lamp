@@ -103,6 +103,8 @@ pub struct Tracker {
     last_laps: Option<LastLaps>,
     /// Racing number in the first line of TopThree.
     leader: Option<u8>,
+    /// Racing number at `Position: 1` in TimingStats' personal bests.
+    fastest_lap_holder: Option<u8>,
     colours: HashMap<u8, Rgb>,
     winner_sent: bool,
 }
@@ -256,21 +258,37 @@ impl Tracker {
         }
     }
 
-    fn fastest_laps(&self, stats: &TimingStats, events: &mut Vec<RaceEvent>) {
+    /// A new personal best that is the session's best, on any lap. Usually
+    /// it comes with `Position: 1`, but the feed sends a position only when
+    /// it changes: the holder beating their own time gets none (Singapore
+    /// 2026, HAM lap 23), so the holder is remembered.
+    fn fastest_laps(&mut self, stats: &TimingStats, events: &mut Vec<RaceEvent>) {
         let Some(lines) = &stats.lines else { return };
-        for (&driver, line) in lines.iter() {
-            let Some(best) = &line.personal_best_lap_time else {
-                continue;
-            };
-            // A new time (not just a position shuffled by someone else's)
-            // and the best of the session, on any lap.
+        let bests = || {
+            lines
+                .iter()
+                .filter_map(|(&driver, line)| Some((driver, line.personal_best_lap_time.as_ref()?)))
+        };
+        let new_holder = bests()
+            .find(|(_, best)| best.position == Some(1))
+            .map(|(driver, _)| driver);
+        for (driver, best) in bests() {
+            // A new time, not just a position shuffled by someone else's.
             let new_time = best.value.as_deref().is_some_and(|v| !v.is_empty());
-            if new_time && best.position == Some(1) {
+            // A deleted lap also brings a (slower) time, but no `Lap`.
+            let holder_improved = best.position.is_none()
+                && best.lap.is_some()
+                && self.fastest_lap_holder == Some(driver)
+                && new_holder.is_none();
+            if new_time && (best.position == Some(1) || holder_improved) {
                 events.push(RaceEvent::FastestLap {
                     driver,
                     team_color: self.colour(driver),
                 });
             }
+        }
+        if new_holder.is_some() {
+            self.fastest_lap_holder = new_holder;
         }
     }
 
@@ -623,6 +641,65 @@ mod tests {
                 driver: 63,
                 team_color: "#00d7b6".parse().unwrap()
             })
+        );
+    }
+
+    /// Singapore 2026 race: HAM's lap 22 takes the fastest lap.
+    fn ham_holds_the_fastest_lap() -> Tracker {
+        let mut t = race();
+        feed(
+            &mut t,
+            Stream::TimingStats,
+            r#"{"Lines":{"3":{"PersonalBestLapTime":{"Position":2}},"44":{"PersonalBestLapTime":{"Lap":22,"Position":1,"Value":"1:37.170"}}}}"#,
+        )
+        .unwrap();
+        t
+    }
+
+    #[test]
+    fn holder_beating_their_own_time_is_a_fastest_lap() {
+        let mut t = ham_holds_the_fastest_lap();
+        // Lap 23: still P1, so the feed sends no position.
+        assert!(matches!(
+            feed(
+                &mut t,
+                Stream::TimingStats,
+                r#"{"Lines":{"44":{"PersonalBestLapTime":{"Lap":23,"Value":"1:37.075"}}}}"#
+            ),
+            Some(RaceEvent::FastestLap { driver: 44, .. })
+        ));
+    }
+
+    #[test]
+    fn former_holder_improving_behind_the_new_one_is_nothing() {
+        let mut t = ham_holds_the_fastest_lap();
+        feed(
+            &mut t,
+            Stream::TimingStats,
+            r#"{"Lines":{"16":{"PersonalBestLapTime":{"Lap":27,"Position":1,"Value":"1:36.890"}},"44":{"PersonalBestLapTime":{"Position":2}}}}"#,
+        )
+        .unwrap();
+        // HAM's lap 28 is a personal best, still P2.
+        assert_eq!(
+            feed(
+                &mut t,
+                Stream::TimingStats,
+                r#"{"Lines":{"44":{"PersonalBestLapTime":{"Lap":28,"Value":"1:36.922"}}}}"#
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn holder_losing_a_deleted_lap_is_nothing() {
+        let mut t = ham_holds_the_fastest_lap();
+        assert_eq!(
+            feed(
+                &mut t,
+                Stream::TimingStats,
+                r#"{"Lines":{"44":{"PersonalBestLapTime":{"Value":"1:38.620"}}}}"#
+            ),
+            None
         );
     }
 

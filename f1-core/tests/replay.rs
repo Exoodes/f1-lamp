@@ -197,6 +197,12 @@ fn antonelli_wins_in_mercedes_teal_after_the_chequered_flag() {
             },
             // Finished: the last flag doesn't stay on the lamp.
             RaceEvent::FlagCleared,
+            // His last lap, 172 ms after Finished; the lamp plays it before
+            // the winner, who waits for overlays.
+            RaceEvent::FastestLap {
+                driver: 12,
+                team_color: "#00d7b6".parse().unwrap(),
+            },
         ]
     );
 }
@@ -221,6 +227,10 @@ fn winner_comes_while_still_live() {
         [
             Input::Race {
                 event: RaceEvent::FlagCleared,
+                ..
+            },
+            Input::Race {
+                event: RaceEvent::FastestLap { .. },
                 ..
             },
             Input::Phase(SessionPhase::PostSession)
@@ -256,11 +266,13 @@ fn driver_events(inputs: &[Input]) -> Vec<RaceEvent> {
 }
 
 #[test]
-fn race_has_eleven_fastest_laps_nine_pit_stops_and_327_overtakes() {
+fn race_has_sixteen_fastest_laps_nine_pit_stops_and_327_overtakes() {
     let (inputs, _) = play_to_end(60);
     let events = driver_events(&inputs);
     let count = |f: fn(&RaceEvent) -> bool| events.iter().filter(|e| f(e)).count();
-    assert_eq!(count(|e| matches!(e, RaceEvent::FastestLap { .. })), 11);
+    // 11 take P1, 5 more are the holder beating their own time (the feed
+    // sends no position then): #63 lap 7, #12 laps 17, 30, 46 and 53.
+    assert_eq!(count(|e| matches!(e, RaceEvent::FastestLap { .. })), 16);
     assert_eq!(count(|e| matches!(e, RaceEvent::PitStop { .. })), 9);
     assert_eq!(count(|e| matches!(e, RaceEvent::Overtake { .. })), 327);
 }
