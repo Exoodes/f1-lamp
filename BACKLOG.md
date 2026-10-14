@@ -18,12 +18,6 @@ Ideas for after the course, in no particular order of size.
   shows: pit stops when switched off, drivers not followed, switched-off
   effects; still in step with the TV. Lines the lamp didn't show dimmed.
   Today logging is in `controller.rs` `apply_race_event` after `shows()`.
-- **Page requests with a timeout.** The saved log of today's race stops at
-  14:57, an hour before the end, with no error: likely one `/api/log`
-  request hung, and `logBusy` stays true forever so the page never asks
-  again (4 sockets shared by all the page's polling; a dropped connection
-  never answers). A timeout (`AbortSignal.timeout`) on the page's fetches.
-  To ask: did the Log tab visibly stop?
 - **Today's race as test data**, from the probe capture
   `f1-probe/captures/2026-10-11_13-40-12`, trimmed to the streams the lamp
   uses (TimingStats 236 KB; only the needed lines). Covers the fastest-lap

@@ -688,8 +688,18 @@ function readForm() {
 
 // ---- Talking to the device ----
 
+// A dropped connection never answers: without a limit its fetch waits
+// forever, holding one of the browser's few connections to the lamp and
+// stopping whatever waits for it (race day 2026-10-11: the log stopped an
+// hour before the end). The lamp answers in well under a second.
+const FETCH_TIMEOUT_MS = 5000;
+
+function lampFetch(url, options = {}) {
+  return fetch(url, { ...options, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+}
+
 async function getState() {
-  const r = await fetch("/api/state");
+  const r = await lampFetch("/api/state");
   if (!r.ok) throw new Error("HTTP " + r.status);
   return r.json();
 }
@@ -699,7 +709,7 @@ const LAMP_HEADER = { "X-F1-Lamp": "1" };
 
 // POSTs JSON. Success is 204 (no body); on error, throws the server's message.
 async function post(url, body) {
-  const r = await fetch(url, {
+  const r = await lampFetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...LAMP_HEADER },
     body: JSON.stringify(body),
@@ -863,7 +873,7 @@ let raceLogNext = null;
 async function refreshRaceLog() {
   try {
     const query = raceLogNext === null ? "" : "?after=" + raceLogNext;
-    const r = await fetch("/api/racelog" + query);
+    const r = await lampFetch("/api/racelog" + query);
     if (!r.ok) throw new Error("HTTP " + r.status);
     const page = await r.json();
     // A lamp that restarted starts its numbers again: show its log afresh.
@@ -905,7 +915,7 @@ const SCHEDULE_EVERY_MS = 60000;
 
 async function refreshSchedule() {
   try {
-    const r = await fetch("/api/schedule");
+    const r = await lampFetch("/api/schedule");
     if (!r.ok) throw new Error("HTTP " + r.status);
     const reply = await r.json();
     if (reply.now !== null) lampOffsetMs = reply.now * 1000 - Date.now();
@@ -1031,7 +1041,7 @@ function showReplay(r) {
 // Returns false when there's no replay (404), so the caller stops polling.
 async function refreshReplay() {
   try {
-    const r = await fetch("/api/replay");
+    const r = await lampFetch("/api/replay");
     if (r.status === 404) return false;
     if (r.ok) showReplay(await r.json());
   } catch {
@@ -1094,7 +1104,7 @@ function showToken(st) {
 
 async function refreshToken() {
   try {
-    const r = await fetch("/api/token");
+    const r = await lampFetch("/api/token");
     if (r.ok) showToken(await r.json());
   } catch {
     // The status card already says the lamp can't be reached.
@@ -1104,7 +1114,7 @@ async function refreshToken() {
 // Sends the pasted text as it is; an empty body removes the token.
 async function sendToken(text, label) {
   try {
-    const r = await fetch("/api/token", { method: "POST", headers: LAMP_HEADER, body: text });
+    const r = await lampFetch("/api/token", { method: "POST", headers: LAMP_HEADER, body: text });
     const st = await r.json();
     showToken(st);
     message("token-msg", r.ok ? label : "Not saved", !r.ok);
@@ -1145,7 +1155,7 @@ async function pollLog() {
   logBusy = true;
   try {
     const url = logNext === null ? "/api/log" : "/api/log?after=" + logNext;
-    const r = await fetch(url);
+    const r = await lampFetch(url);
     if (!r.ok) return;
     const page = await r.json();
     if (page.restarted) addLogLine("— lamp restarted —", "gap");
