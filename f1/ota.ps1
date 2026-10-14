@@ -42,8 +42,10 @@ if ($env:F1_OTA_LEGACY) {
     # Only to update firmware from before the nonce check: it wants the key.
     $auth = @('-H', "X-F1-Key: $key")
 } else {
-    # A one-time nonce, then HMAC-SHA256(key, nonce + SHA-256(image)); see
-    # f1_core::ota_auth.
+    # A one-time nonce, then HMAC-SHA256(key, nonce + SHA-256(image)) and,
+    # checked before the lamp erases anything, HMAC-SHA256(key, nonce +
+    # "start" + the size in decimal); see f1_core::ota_auth. Firmware from
+    # before the start tag ignores it.
     $nonce = curl.exe --fail-with-body --silent --show-error -X POST `
         -H 'X-F1-Lamp: 1' "http://$address/api/ota/nonce"
     if ($LASTEXITCODE -ne 0) {
@@ -56,7 +58,9 @@ if ($env:F1_OTA_LEGACY) {
     $imageHash = [Security.Cryptography.SHA256]::Create().ComputeHash([IO.File]::ReadAllBytes($bin))
     $hmac = New-Object Security.Cryptography.HMACSHA256 (, [Text.Encoding]::UTF8.GetBytes($key))
     $tag = -join ($hmac.ComputeHash([byte[]]($nonceBytes + $imageHash)) | ForEach-Object { $_.ToString('x2') })
-    $auth = @('-H', "X-F1-Nonce: $($nonce.Trim())", '-H', "X-F1-Auth: $tag")
+    $startBytes = [Text.Encoding]::ASCII.GetBytes("start$size")
+    $start = -join ($hmac.ComputeHash([byte[]]($nonceBytes + $startBytes)) | ForEach-Object { $_.ToString('x2') })
+    $auth = @('-H', "X-F1-Nonce: $($nonce.Trim())", '-H', "X-F1-Start: $start", '-H', "X-F1-Auth: $tag")
 }
 # curl.exe, not PowerShell's `curl` alias. --fail-with-body: a refused
 # update exits with an error and still shows the lamp's reason.

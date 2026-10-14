@@ -126,8 +126,9 @@ the lamp can still reach your network, otherwise over USB.
 `f1-lightbox.local`. The `ota_key` from `cfg.toml` never leaves the PC: the
 lamp hands out a one-time nonce, and the upload carries
 HMAC-SHA256(key, nonce + SHA-256(image)), which the lamp checks before the new
-firmware can boot. A recorded upload can't be sent again, and the lamp refuses
-an upload without a valid tag. A new key takes effect with the firmware that carries it,
+firmware can boot, and HMAC-SHA256(key, nonce + "start" + the size), which it
+checks before erasing the spare slot (the previous firmware). A recorded upload
+can't be sent again, and the lamp refuses an upload without valid tags. A new key takes effect with the firmware that carries it,
 so the upload that brings a changed key still needs the old one: after changing
 `ota_key`, flash once over USB. If the name doesn't resolve, point it at the lamp's IP:
 
@@ -205,7 +206,7 @@ The page uses these, and scripts can too:
 | `GET /api/racelog?after=<n>` | The race log's lines from number `n` on, where `n` is the last answer's `next` (all kept lines without it): time, text, colour |
 | `GET /api/log?after=<n>` | The log lines after number `n` |
 | `POST /api/ota/nonce` | A one-time nonce (hex) for the next upload, valid for 2 minutes |
-| `POST /api/ota` | A firmware image, with `X-F1-Nonce` and its tag in `X-F1-Auth` (see `cargo ota`) |
+| `POST /api/ota` | A firmware image, with `X-F1-Nonce` and its tags in `X-F1-Start` and `X-F1-Auth` (see `cargo ota`) |
 | `GET /api/replay`, `POST /api/replay` | Replay builds only: the position, and `{"action":"play"}`, `pause`, `{"action":"speed","speed":60}`, `lights_out`, `{"action":"seek","position_ms":4000000}` |
 
 ## F1TV (optional)

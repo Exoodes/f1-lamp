@@ -53,8 +53,10 @@ const BODY_DEADLINE: Duration = Duration::from_secs(10);
 /// settings or upload firmware through a browser on the home network.
 const PAGE_HEADER: &str = "X-F1-Lamp";
 /// A firmware upload names the nonce it got from `POST /api/ota/nonce` in
-/// one header and proves the update key in the other (`f1_core::ota_auth`).
+/// one header and proves the update key in the others (`f1_core::ota_auth`):
+/// for its length before anything is erased, and for the whole image.
 const NONCE_HEADER: &str = "X-F1-Nonce";
+const START_HEADER: &str = "X-F1-Start";
 const AUTH_HEADER: &str = "X-F1-Auth";
 
 const HTML: &str = "text/html; charset=utf-8";
@@ -189,14 +191,15 @@ fn ota_route(server: &mut EspHttpServer<'static>) -> anyhow::Result<()> {
             return refuse(req, why);
         }
         let nonce = req.header(NONCE_HEADER).and_then(ota::redeem_nonce);
+        let start = req.header(START_HEADER).map(str::to_owned);
         let tag = req.header(AUTH_HEADER).map(str::to_owned);
-        let (Some(nonce), Some(tag)) = (nonce, tag) else {
-            log::warn!("ota: refused an upload without a fresh nonce and its tag");
+        let (Some(nonce), Some(start), Some(tag)) = (nonce, start, tag) else {
+            log::warn!("ota: refused an upload without a fresh nonce and its tags");
             return reply(
                 req,
                 401,
                 TEXT,
-                b"needs a fresh nonce from /api/ota/nonce and its tag",
+                b"needs a fresh nonce from /api/ota/nonce and its tags",
             );
         };
         let Some(len) = req
@@ -205,7 +208,11 @@ fn ota_route(server: &mut EspHttpServer<'static>) -> anyhow::Result<()> {
         else {
             return reply(req, 411, TEXT, b"Content-Length needed");
         };
-        match ota::receive(&mut req, len, UploadCheck::new(nonce), &tag) {
+        let tags = ota::Tags {
+            start: &start,
+            image: &tag,
+        };
+        match ota::receive(&mut req, len, UploadCheck::new(nonce), tags) {
             Ok(()) => {
                 // A moment for the answer to leave before the chip restarts.
                 std::thread::spawn(|| {

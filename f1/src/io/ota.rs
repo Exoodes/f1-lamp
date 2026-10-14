@@ -264,18 +264,30 @@ pub const MAX_IMAGE: usize = 0x1F_0000;
 /// Read and written at a time.
 const CHUNK: usize = 4096;
 
+/// An upload's proofs of the update key (see `f1_core::ota_auth`), in hex.
+pub struct Tags<'a> {
+    /// For the nonce and the length: checked before the free slot is erased.
+    pub start: &'a str,
+    /// For the nonce and the image: checked before it can boot.
+    pub image: &'a str,
+}
+
 /// Writes the request body (`len` bytes, a `.bin` from `espflash
-/// save-image`) to the free slot and, if `tag` proves the update key (see
-/// `f1_core::ota_auth`), makes it the one to boot. The caller restarts the
-/// chip afterwards.
+/// save-image`) to the free slot and, if `tags` prove the update key, makes
+/// it the one to boot. The caller restarts the chip afterwards.
 pub fn receive(
     req: &mut Request<&mut EspHttpConnection<'_>>,
     len: usize,
     mut check: UploadCheck,
-    tag: &str,
+    tags: Tags<'_>,
 ) -> anyhow::Result<()> {
     if len == 0 || len > MAX_IMAGE {
         bail!("{len} bytes: a firmware image must be 1 to {MAX_IMAGE} bytes");
+    }
+    // Starting erases the free slot, which holds the previous firmware
+    // during a trial: only for someone with the key.
+    if !check.may_start(OTA_KEY, len, tags.start) {
+        bail!("wrong update key");
     }
     // Only one instance can exist, so a second upload at the same time fails here.
     let mut ota = EspOta::new().context("another update is running")?;
@@ -306,7 +318,7 @@ pub fn receive(
         }
     }
 
-    if !check.verify(OTA_KEY, tag) {
+    if !check.verify(OTA_KEY, tags.image) {
         bail!("wrong update key, or the image changed on the way");
     }
     // The new firmware starts on trial, then its slot becomes the boot slot.

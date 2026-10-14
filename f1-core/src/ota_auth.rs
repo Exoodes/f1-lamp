@@ -4,6 +4,11 @@
 //! SHA-256(image)), and the lamp checks it once the whole image has arrived
 //! ([`UploadCheck`]), before the image can boot. A recorded upload can't be
 //! sent again, and an image swapped on the way doesn't match.
+//!
+//! Writing the image erases the spare app slot, the way back from a bad
+//! update, so the uploader first proves the key for this upload's length too:
+//! HMAC-SHA256(key, nonce ‖ "start" ‖ the length in decimal), checked before
+//! anything is erased ([`UploadCheck::may_start`]).
 
 use std::time::{Duration, Instant};
 
@@ -55,6 +60,15 @@ impl UploadCheck {
         }
     }
 
+    /// Whether `tag_hex` is the start tag for a `len`-byte upload: the key
+    /// is right, so the spare slot may be erased.
+    pub fn may_start(&self, key: &str, len: usize, tag_hex: &str) -> bool {
+        let Some(tag) = from_hex(tag_hex) else {
+            return false;
+        };
+        start_mac(key, &self.nonce, len).verify_slice(&tag).is_ok()
+    }
+
     pub fn update(&mut self, chunk: &[u8]) {
         self.image.update(chunk);
     }
@@ -78,6 +92,19 @@ pub fn tag(key: &str, nonce: &[u8], image: &[u8]) -> String {
     mac.update(nonce);
     mac.update(&Sha256::digest(image));
     to_hex(&mac.finalize().into_bytes())
+}
+
+/// The start tag the uploader computes; see [`UploadCheck::may_start`].
+pub fn start_tag(key: &str, nonce: &[u8], len: usize) -> String {
+    to_hex(&start_mac(key, nonce, len).finalize().into_bytes())
+}
+
+fn start_mac(key: &str, nonce: &[u8], len: usize) -> Hmac<Sha256> {
+    let mut mac = mac(key);
+    mac.update(nonce);
+    mac.update(b"start");
+    mac.update(len.to_string().as_bytes());
+    mac
 }
 
 fn mac(key: &str) -> Hmac<Sha256> {
@@ -143,6 +170,37 @@ mod tests {
         assert_eq!(
             tag(KEY, &RANDOM, IMAGE),
             "9ed4f6c97248300ecb92d6dcaf5113719cc258beb77726678f3170bc7a5083b5"
+        );
+    }
+
+    #[test]
+    fn the_right_start_tag_lets_the_upload_start() {
+        let tag = start_tag(KEY, &RANDOM, IMAGE.len());
+        assert!(UploadCheck::new(RANDOM).may_start(KEY, IMAGE.len(), &tag));
+    }
+
+    #[test]
+    fn a_wrong_key_nonce_or_length_doesnt_start_the_upload() {
+        let tag = start_tag(KEY, &RANDOM, IMAGE.len());
+        let check = UploadCheck::new(RANDOM);
+        assert!(!check.may_start("another-key-entirely", IMAGE.len(), &tag));
+        assert!(!check.may_start(KEY, IMAGE.len() + 1, &tag));
+        assert!(!UploadCheck::new([8; NONCE_LEN]).may_start(KEY, IMAGE.len(), &tag));
+        assert!(!check.may_start(KEY, IMAGE.len(), "zz"));
+    }
+
+    #[test]
+    fn the_image_tag_doesnt_start_an_upload() {
+        let tag = tag(KEY, &RANDOM, IMAGE);
+        assert!(!UploadCheck::new(RANDOM).may_start(KEY, IMAGE.len(), &tag));
+    }
+
+    #[test]
+    fn the_start_tag_is_what_ota_ps1_computes() {
+        // From Python's hmac/hashlib: nonce + b"start" + b"26".
+        assert_eq!(
+            start_tag(KEY, &RANDOM, IMAGE.len()),
+            "c2dd625df5bec31c17647e824f1b2edf35f91e1e404015b9e4dba445356e4b67"
         );
     }
 
