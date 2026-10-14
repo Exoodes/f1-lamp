@@ -32,6 +32,8 @@ pub const LONGEST_REQUEST: Duration =
 /// Room for the request line and headers. The default 512 bytes can't hold
 /// `Authorization: Bearer <F1TV token>`: the token alone is 1-2 KB.
 const TX_BUFFER: usize = 4096;
+/// The request line and the other headers next to the longest token.
+const _: () = assert!(f1_core::token::MAX_LEN + 512 <= TX_BUFFER);
 /// How much of an error response's body goes into the error message.
 const ERROR_DETAIL_MAX: usize = 256;
 

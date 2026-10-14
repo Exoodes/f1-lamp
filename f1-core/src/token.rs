@@ -18,6 +18,12 @@ use serde::{Deserialize, Serialize};
 /// "Expiring soon" this long before the expiry, so there's time to renew.
 pub const EXPIRING_SOON_SECS: i64 = 2 * 24 * 60 * 60;
 
+/// The longest token taken, in bytes; real ones are 1-2 KB. It goes into
+/// request headers with a 4 KB buffer (HTTPS and the WebSocket upgrade),
+/// next to the other headers, so a longer one would make every connection
+/// fail, and the firmware stores at most 4 KB of it.
+pub const MAX_LEN: usize = 3 * 1024;
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct F1tvToken {
     jwt: String,
@@ -39,6 +45,8 @@ pub enum TokenError {
     BadPayload,
     /// The payload has no `exp`.
     NoExpiry,
+    /// Longer than [`MAX_LEN`].
+    TooLong,
 }
 
 impl fmt::Display for TokenError {
@@ -48,6 +56,7 @@ impl fmt::Display for TokenError {
             TokenError::NotAJwt => "not an F1TV token (expected three parts separated by dots)",
             TokenError::BadPayload => "the token's middle part can't be read",
             TokenError::NoExpiry => "the token has no expiry date",
+            TokenError::TooLong => "too long for an F1TV token (over 3 KB)",
         })
     }
 }
@@ -88,6 +97,9 @@ impl F1tvToken {
             text.strip_prefix("Bearer ").unwrap_or(text).trim()
         };
 
+        if jwt.len() > MAX_LEN {
+            return Err(TokenError::TooLong);
+        }
         let parts: Vec<&str> = jwt.split('.').collect();
         let base64url = |p: &&str| {
             !p.is_empty()
@@ -251,6 +263,18 @@ mod tests {
         assert_eq!(F1tvToken::parse("a.b"), Err(TokenError::NotAJwt));
         assert_eq!(F1tvToken::parse("a..c"), Err(TokenError::NotAJwt));
         assert_eq!(F1tvToken::parse("a.b c.d"), Err(TokenError::NotAJwt));
+    }
+
+    #[test]
+    fn a_token_over_the_limit_is_refused() {
+        let at_limit = |extra: usize| {
+            let raw = jwt(&format!(r#"{{"exp":{EXP}}}"#));
+            let padding = MAX_LEN - raw.len() + extra;
+            raw.replace(".c2lnbmF0dXJl", &format!(".{}", "s".repeat(padding + 12)))
+        };
+        assert_eq!(at_limit(0).len(), MAX_LEN);
+        assert!(F1tvToken::parse(&at_limit(0)).is_ok());
+        assert_eq!(F1tvToken::parse(&at_limit(1)), Err(TokenError::TooLong));
     }
 
     #[test]

@@ -16,6 +16,7 @@ use crate::config::nvs::F1TV_TOKEN;
 
 /// A JWT is 1-2 KB; stored as a blob, which has no string length limit.
 const MAX_STORED: usize = 4096;
+const _: () = assert!(f1_core::token::MAX_LEN <= MAX_STORED);
 
 struct Inner {
     nvs: EspNvs<NvsDefault>,
