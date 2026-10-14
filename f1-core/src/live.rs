@@ -12,11 +12,10 @@ use chrono::DateTime;
 use serde_json::value::RawValue;
 
 use crate::{
-    feed::clock_ms,
+    feed::{clock_ms, FeedMessage, Stream},
     input::{RaceEvent, TimingInfo},
     signalr::{self, Message, Splitter},
-    timeline::Stream,
-    track_state::{FeedMessage, TrackState},
+    track_state::TrackState,
     tracker::Tracker,
 };
 

@@ -22,6 +22,7 @@ use f1_core::{
     net_schedule::{in_words, instant_at, Calendar, Deadlines, PhaseUpdate},
     openf1::{self, DriverDto, ResultDto, SessionDto, CALENDAR_DAYS},
     schedule::{self, Session, WinnerLookup},
+    settings,
     snapshot::Snapshot,
     weekend::{self, Moved, ResultDue, Results, SessionResult},
 };
@@ -478,8 +479,14 @@ impl<'a> Net<'a> {
     /// Tells the render loop when the next session starts, for the
     /// countdown, each time that changes.
     fn send_next_start(&mut self, now: Instant, unix: i64) -> anyhow::Result<()> {
-        let target = schedule::countdown_target(self.schedule.calendar.followed(), unix)
-            .map(|s| (s.key, s.start));
+        // Until the start plus the longest TV delay: the countdown runs on
+        // until the TV shows the start.
+        let target = schedule::countdown_target(
+            self.schedule.calendar.followed(),
+            unix,
+            settings::MAX_TV_DELAY_MS,
+        )
+        .map(|s| (s.key, s.start));
         if target == self.countdown_sent {
             return Ok(());
         }

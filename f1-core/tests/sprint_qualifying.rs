@@ -5,9 +5,9 @@
 use std::time::{Duration, Instant};
 
 use f1_core::{
+    feed::Stream,
     input::{Input, RaceEvent, TrackFlag},
     replay::{Replayer, Step},
-    timeline::Stream,
 };
 
 const FILES: [(Stream, &str); 8] = [

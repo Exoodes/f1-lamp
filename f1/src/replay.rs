@@ -16,10 +16,10 @@ use std::{
 };
 
 use f1_core::{
+    feed::Stream,
     heartbeat::Heartbeat,
     input::Input,
     replay::{ReplayCommand, ReplayStatus, Replayer, Step},
-    timeline::Stream,
 };
 
 /// Speed until the page sets another. The showcase is written for real time;

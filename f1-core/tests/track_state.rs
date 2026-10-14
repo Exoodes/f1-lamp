@@ -4,8 +4,9 @@
 use std::time::Duration;
 
 use f1_core::{
+    feed::Stream,
     input::{RaceEvent, TrackFlag},
-    timeline::{Stream, Timeline},
+    timeline::Timeline,
     track_state::TrackState,
 };
 

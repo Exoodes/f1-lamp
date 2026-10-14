@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{input::SessionPhase, settings::MAX_TV_DELAY_MS};
+use crate::input::SessionPhase;
 
 /// The phase is checked at the next boundary (`next_change`); this is the
 /// longest it goes unchecked anyway, in case the calendar or the clock
@@ -248,11 +248,12 @@ pub fn next_session(sessions: &[Session], now: i64) -> Option<&Session> {
 }
 
 /// The session the countdown leads up to at `now`: the first whose start is
-/// less than the longest TV delay ago. Kept past its start like that, so
-/// the countdown can run on until the TV shows the start.
-pub fn countdown_target(sessions: &[Session], now: i64) -> Option<&Session> {
-    let longest_delay = i64::from(MAX_TV_DELAY_MS / 1000);
-    sessions.iter().find(|s| s.start + longest_delay > now)
+/// less than `kept_after_ms` ago. Given the longest TV delay
+/// (`settings::MAX_TV_DELAY_MS`), the countdown can run on until the TV
+/// shows the start.
+pub fn countdown_target(sessions: &[Session], now: i64, kept_after_ms: u32) -> Option<&Session> {
+    let kept_after = i64::from(kept_after_ms / 1000);
+    sessions.iter().find(|s| s.start + kept_after > now)
 }
 
 /// The sessions that can still affect the lamp at `now` (not fully over,
@@ -290,6 +291,7 @@ pub fn awaiting_winner(sessions: &[Session], now: i64) -> Option<&Session> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::MAX_TV_DELAY_MS;
 
     const MINUTE: i64 = 60;
     const HOUR: i64 = 60 * MINUTE;
@@ -650,7 +652,7 @@ mod tests {
         let quali = session(1, SessionKind::Qualifying, START, END);
         let race = session(2, SessionKind::Race, START + 24 * HOUR, END + 24 * HOUR);
         let sessions = [quali, race];
-        let key = |now| countdown_target(&sessions, now).map(|s| s.key);
+        let key = |now| countdown_target(&sessions, now, MAX_TV_DELAY_MS).map(|s| s.key);
         assert_eq!(key(START - HOUR), Some(1));
         // Kept for the longest TV delay after the start, then the next one.
         assert_eq!(key(START + 119), Some(1));

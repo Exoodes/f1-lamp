@@ -4,9 +4,10 @@
 use std::time::{Duration, Instant};
 
 use f1_core::{
+    feed::Stream,
     input::{Input, RaceEvent, SessionPhase, TrackFlag},
     replay::{Replayer, Step},
-    timeline::{Stream, Timeline},
+    timeline::Timeline,
 };
 
 const FILES: [(Stream, &str); 10] = [

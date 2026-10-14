@@ -206,7 +206,7 @@ fn hand_over_streams(dir: &Path) {
 /// replay build doesn't fit an app slot. Lines that don't even split are kept,
 /// so the replay still reports them.
 fn trimmed(source: &Path, stream: &str, target: &Path) -> PathBuf {
-    use f1_core::{stream::parse_line, timeline::Stream};
+    use f1_core::{feed::Stream, stream::parse_line};
 
     let text = std::fs::read_to_string(source)
         .unwrap_or_else(|e| panic!("replay: can't read {}: {e}", slashes(source)));

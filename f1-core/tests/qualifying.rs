@@ -6,9 +6,9 @@ use std::{collections::HashSet, time::Instant};
 
 use f1_core::{
     color::Rgb,
+    feed::Stream,
     input::{Input, RaceEvent},
     replay::{Replayer, Step},
-    timeline::Stream,
 };
 
 const FILES: [(Stream, &str); 9] = [

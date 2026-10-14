@@ -6,7 +6,7 @@
 //! WebSocket message can hold several of them, or only part of one, so
 //! [`Splitter`] collects bytes and hands out complete frames. [`parse`] turns
 //! a frame into a [`Message`]. Stream data stays a borrowed [`RawValue`], a
-//! slice of the frame, until [`Stream::parse`](crate::timeline::Stream::parse)
+//! slice of the frame, until [`Stream::parse`](crate::feed::Stream::parse)
 //! reads it into typed structs: no `serde_json::Value` tree in between.
 
 use std::{collections::BTreeMap, fmt};
@@ -363,7 +363,7 @@ mod tests {
 
     #[test]
     fn feed_data_parses_with_the_stream_parsers() {
-        use crate::{timeline::Stream, track_state::FeedMessage};
+        use crate::feed::{FeedMessage, Stream};
         let frame = r#"{"type":1,"target":"feed","arguments":["TrackStatus",{"Status":"4","Message":"SCDeployed"},"t"]}"#;
         let msg = parse(frame).unwrap();
         let update = msg.feed_update().unwrap();

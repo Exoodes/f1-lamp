@@ -1,6 +1,7 @@
 //! The JSON of F1's live timing streams as typed structs: only the fields the
 //! lamp uses, all optional, because an update carries only what changed. The
-//! live feed and the archive use the same ones.
+//! live feed and the archive use the same ones. [`Stream`] names each stream
+//! and parses its JSON into a [`FeedMessage`].
 
 use crate::color::Rgb;
 use serde::{
@@ -391,6 +392,172 @@ pub struct TimingLine {
     pub in_pit: Option<bool>,
     pub retired: Option<bool>,
     pub stopped: Option<bool>,
+}
+
+/// One parsed message of any stream the lamp reads.
+#[derive(Debug)]
+pub enum FeedMessage {
+    SessionInfo(SessionInfo),
+    Track(TrackStatus),
+    Session(SessionStatus),
+    RaceControl(RcMessage),
+    DriverList(DriverList),
+    TopThree(TopThree),
+    PitLane(PitLaneTimes),
+    TimingStats(TimingStats),
+    Overtakes(OvertakeSeries),
+    SessionData(SessionData),
+    TimingData(TimingData),
+    LapCount(LapCount),
+    Clock(ExtrapolatedClock),
+}
+
+/// Which stream a file holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stream {
+    SessionInfo,
+    TrackStatus,
+    SessionStatus,
+    RaceControl,
+    DriverList,
+    TopThree,
+    /// Public: a car's time in the pit lane, sent as it leaves.
+    PitLane,
+    /// Public: personal bests; the fastest lap has position 1.
+    TimingStats,
+    /// Needs an F1TV token live: one entry per overtake.
+    Overtakes,
+    /// Public: which qualifying part runs.
+    SessionData,
+    /// Public: the timing screen; who is knocked out of qualifying.
+    TimingData,
+    /// Public: a race's current lap and its length.
+    LapCount,
+    /// Public: the session clock, when it starts and stops.
+    Clock,
+}
+
+impl Stream {
+    pub const ALL: [Stream; 13] = [
+        Stream::SessionInfo,
+        Stream::TrackStatus,
+        Stream::SessionStatus,
+        Stream::RaceControl,
+        Stream::DriverList,
+        Stream::TopThree,
+        Stream::PitLane,
+        Stream::TimingStats,
+        Stream::Overtakes,
+        Stream::SessionData,
+        Stream::TimingData,
+        Stream::LapCount,
+        Stream::Clock,
+    ];
+
+    /// The name F1 uses, in the archive file names and the live feed.
+    pub fn name(self) -> &'static str {
+        match self {
+            Stream::SessionInfo => "SessionInfo",
+            Stream::TrackStatus => "TrackStatus",
+            Stream::SessionStatus => "SessionStatus",
+            Stream::RaceControl => "RaceControlMessages",
+            Stream::DriverList => "DriverList",
+            Stream::TopThree => "TopThree",
+            Stream::PitLane => "PitLaneTimeCollection",
+            Stream::TimingStats => "TimingStats",
+            Stream::Overtakes => "OvertakeSeries",
+            Stream::SessionData => "SessionData",
+            Stream::TimingData => "TimingData",
+            Stream::LapCount => "LapCount",
+            Stream::Clock => "ExtrapolatedClock",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Stream> {
+        Stream::ALL.into_iter().find(|s| s.name() == name)
+    }
+
+    /// Whether a line can carry anything the lamp uses, checked without
+    /// parsing. Most TopThree lines only update gaps and lap times, and most
+    /// DriverList lines only the running order; on the ESP32, parsing them
+    /// all would take seconds when jumping through a race.
+    pub fn is_relevant(self, json: &str) -> bool {
+        match self {
+            Stream::TopThree => json.contains("\"RacingNumber\""),
+            Stream::DriverList => json.contains("\"TeamColour\""),
+            // Most pit-lane lines only delete finished entries.
+            Stream::PitLane => json.contains("\"Duration\""),
+            // Most lines are sector times and speeds; a new best lap has a value.
+            Stream::TimingStats => {
+                json.contains("\"PersonalBestLapTime\":{") && json.contains("\"Value\":\"")
+            }
+            // Most lines are status changes.
+            Stream::SessionData => json.contains("\"QualifyingPart\""),
+            // About 9000 lines a qualifying, mostly sector times. Read are
+            // knockouts and, for pole, cars crossing the line, entering the
+            // pits or dropping out: about 360 lines.
+            Stream::TimingData => [
+                "\"KnockedOut\":true",
+                "\"NumberOfLaps\"",
+                "\"InPit\"",
+                "\"Retired\"",
+                "\"Stopped\"",
+            ]
+            .iter()
+            .any(|key| json.contains(key)),
+            _ => true,
+        }
+    }
+
+    /// One JSON message of this stream as feed messages. A race control line
+    /// can hold several messages; the other streams always give one.
+    pub fn parse(self, json: &str) -> Result<Vec<FeedMessage>, serde_json::Error> {
+        Ok(match self {
+            Stream::SessionInfo => vec![FeedMessage::SessionInfo(serde_json::from_str::<
+                SessionInfo,
+            >(json)?)],
+            Stream::TrackStatus => vec![FeedMessage::Track(serde_json::from_str::<TrackStatus>(
+                json,
+            )?)],
+            Stream::SessionStatus => vec![FeedMessage::Session(serde_json::from_str::<
+                SessionStatus,
+            >(json)?)],
+            Stream::RaceControl => serde_json::from_str::<RaceControl>(json)?
+                .messages
+                .map(|m| m.into_vec())
+                .unwrap_or_default()
+                .into_iter()
+                .map(FeedMessage::RaceControl)
+                .collect(),
+            Stream::DriverList => vec![FeedMessage::DriverList(
+                serde_json::from_str::<DriverList>(json)?,
+            )],
+            Stream::TopThree => vec![FeedMessage::TopThree(serde_json::from_str::<TopThree>(
+                json,
+            )?)],
+            Stream::PitLane => vec![FeedMessage::PitLane(serde_json::from_str::<PitLaneTimes>(
+                json,
+            )?)],
+            Stream::TimingStats => vec![FeedMessage::TimingStats(serde_json::from_str::<
+                TimingStats,
+            >(json)?)],
+            Stream::Overtakes => vec![FeedMessage::Overtakes(serde_json::from_str::<
+                OvertakeSeries,
+            >(json)?)],
+            Stream::SessionData => vec![FeedMessage::SessionData(serde_json::from_str::<
+                SessionData,
+            >(json)?)],
+            Stream::TimingData => vec![FeedMessage::TimingData(
+                serde_json::from_str::<TimingData>(json)?,
+            )],
+            Stream::LapCount => vec![FeedMessage::LapCount(serde_json::from_str::<LapCount>(
+                json,
+            )?)],
+            Stream::Clock => vec![FeedMessage::Clock(
+                serde_json::from_str::<ExtrapolatedClock>(json)?,
+            )],
+        })
+    }
 }
 
 #[cfg(test)]

@@ -1,35 +1,13 @@
 //! Which track flag is out, from the feed's session status, track status and
 //! race control messages. Reports each change as a [`RaceEvent`], plus the
-//! start lights and the chequered flag. [`FeedMessage`] is one parsed message
-//! of any stream.
+//! start lights and the chequered flag.
 
 use std::collections::HashSet;
 
 use crate::{
-    feed::{
-        DriverList, ExtrapolatedClock, LapCount, OvertakeSeries, PitLaneTimes, RcMessage,
-        SessionData, SessionInfo, SessionState, SessionStatus, TimingData, TimingStats, TopThree,
-        TrackCode, TrackStatus,
-    },
+    feed::{FeedMessage, LapCount, RcMessage, SessionState, SessionStatus, TrackCode},
     input::{RaceEvent, TrackFlag},
 };
-
-#[derive(Debug)]
-pub enum FeedMessage {
-    SessionInfo(SessionInfo),
-    Track(TrackStatus),
-    Session(SessionStatus),
-    RaceControl(RcMessage),
-    DriverList(DriverList),
-    TopThree(TopThree),
-    PitLane(PitLaneTimes),
-    TimingStats(TimingStats),
-    Overtakes(OvertakeSeries),
-    SessionData(SessionData),
-    TimingData(TimingData),
-    LapCount(LapCount),
-    Clock(ExtrapolatedClock),
-}
 
 #[derive(Debug, Default)]
 pub struct TrackState {
@@ -209,6 +187,7 @@ impl TrackState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::feed::{SessionInfo, TrackStatus};
 
     fn track(code: &str) -> FeedMessage {
         FeedMessage::Track(TrackStatus {

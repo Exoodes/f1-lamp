@@ -22,11 +22,10 @@ use std::{
 use crate::{
     color::Rgb,
     feed::{
-        update_team_colours, OvertakeSeries, PitLaneTimes, SessionState, TimingData, TimingLine,
-        TimingStats, TopThree,
+        update_team_colours, FeedMessage, OvertakeSeries, PitLaneTimes, SessionState, TimingData,
+        TimingLine, TimingStats, TopThree,
     },
     input::RaceEvent,
-    track_state::FeedMessage,
 };
 
 /// Used when a driver's team colour never arrived.
@@ -328,7 +327,7 @@ impl Tracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::timeline::Stream;
+    use crate::feed::Stream;
 
     /// Parses one JSON message of `stream` and feeds it to the tracker;
     /// the first event it caused, if any.
