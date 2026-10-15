@@ -32,6 +32,8 @@ const KNOCKED_OUT_FADE_MS: u32 = 3000;
 /// Two slow flashes: unlike a pit stop's two quick ones.
 const PENALTY_PERIOD_MS: u32 = 1000;
 const PENALTY_FLASHES: u8 = 2;
+/// Twice as slow as a knockout's: out for good, not just out of qualifying.
+const RETIRED_FADE_MS: u32 = 6000;
 
 const WINNER_CHASE_SPEED: f32 = 8.0;
 const WINNER_CHASE_TAIL: u8 = 6;
@@ -90,6 +92,10 @@ pub fn event_overlay(event: RaceEvent) -> Option<Effect> {
             color: team_color,
             period_ms: PENALTY_PERIOD_MS,
             times: Some(PENALTY_FLASHES),
+        }),
+        RaceEvent::Retired { team_color, .. } => Some(Effect::Fade {
+            color: team_color,
+            duration_ms: RETIRED_FADE_MS,
         }),
         RaceEvent::KnockedOut { team_color, .. } => Some(Effect::Fade {
             color: team_color,
@@ -260,6 +266,21 @@ mod tests {
             })
         );
         assert_ne!(penalty, pit);
+    }
+
+    #[test]
+    fn a_retirement_fades_twice_as_slowly_as_a_knockout() {
+        let retired = event_overlay(RaceEvent::Retired {
+            driver: 44,
+            team_color: TEAM,
+        });
+        assert_eq!(
+            retired,
+            Some(Effect::Fade {
+                color: TEAM,
+                duration_ms: 2 * KNOCKED_OUT_FADE_MS
+            })
+        );
     }
 
     #[test]

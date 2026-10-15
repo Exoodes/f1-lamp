@@ -435,6 +435,7 @@
       <label>Overtakes <input type="checkbox" id="fx_overtake"></label>
       <label>Knocked out (qualifying) <input type="checkbox" id="fx_knocked_out"></label>
       <label>Penalties <input type="checkbox" id="fx_penalty"></label>
+      <label>Retirements <input type="checkbox" id="fx_retired"></label>
       <label>Last lap (race) <input type="checkbox" id="fx_last_lap"></label>
       <label>Countdown, 10 min before a session <input type="checkbox" id="fx_countdown"></label>
     </section>
@@ -505,6 +506,7 @@
         <button data-event="winner">Winner</button>
         <button data-event="knocked_out">Knocked out</button>
         <button data-event="penalty">Penalty</button>
+        <button data-event="retired">Retirement</button>
       </div>
       <div class="rowed">
         <label>Team
@@ -558,7 +560,7 @@ const SLIDERS = ["lamp_brightness", "global_brightness", "night_brightness"];
 // The device's effect switches; each has a checkbox with id "fx_<name>".
 // The kinds of session; each has a checkbox with id "ses_<name>".
 const SESSIONS = ["practice", "qualifying", "sprint_qualifying", "sprint", "race"];
-const EFFECTS = ["start_lights", "chequered_flag", "fastest_lap", "winner", "pit_stop", "overtake", "knocked_out", "penalty", "last_lap", "countdown"];
+const EFFECTS = ["start_lights", "chequered_flag", "fastest_lap", "winner", "pit_stop", "overtake", "knocked_out", "penalty", "retired", "last_lap", "countdown"];
 
 // ---- Converting between what the page shows and what the device stores ----
 
@@ -616,6 +618,11 @@ function lifted(hex) {
 function showPanelColor(color) {
   $("s-layer").style.setProperty("--shown", color ? lifted(color).css : "var(--text)");
 }
+
+// The colour from the last status answer (undefined until the first; null
+// for the chequered flag); a flash played late shows its own.
+let panelColor;
+let colorShown;  // what the panel has now, so it's only set on a change
 
 // ---- The panel moving like the lamp ----
 
@@ -692,9 +699,63 @@ function motionLook(m, t) {
   }
 }
 
+// ---- Flashes the polls missed ----
+
+// The lamp numbers its short effects (pit stop, fastest lap...) and sends
+// those that ended in the last few seconds (`flashes`), plus the number of
+// the one showing (`flash`). Each one the page didn't see plays once, late,
+// over what the panel shows, then the panel goes back.
+let lastFlash = null;   // the highest number seen; null until the first answer
+const flashQueue = [];
+let playing = null;     // { flash, start }
+
+function takeFlashes(state) {
+  const numbers = (state.flashes || []).map((f) => f.seq);
+  if (state.flash != null) numbers.push(state.flash);
+  if (lastFlash === null) {
+    // Opening the page: only what comes from now on.
+    lastFlash = Math.max(-1, ...numbers);
+    return;
+  }
+  for (const f of state.flashes || []) {
+    if (f.seq > lastFlash) {
+      flashQueue.push(f);
+      lastFlash = f.seq;
+    }
+  }
+  // The one showing plays as the panel's own motion.
+  if (state.flash != null && state.flash > lastFlash) lastFlash = state.flash;
+}
+
+// How long a short effect lasts (as effect.rs `duration`).
+function motionLength(m) {
+  switch (m.kind) {
+    case "blink": return m.times != null ? m.period_ms * m.times : 0;
+    case "fade":
+    case "chequered": return m.duration_ms;
+    case "start_lights": return m.out_ms + 1000;
+    default: return 0;
+  }
+}
+
 function panelFrame(now) {
   const still = reduceMotion.matches || document.body.classList.contains("offline");
-  const { level, mask } = still ? { level: 1, mask: "" } : motionLook(motion, now - motionStart);
+  if (still) {
+    flashQueue.length = 0;
+    playing = null;
+  }
+  if (!playing && flashQueue.length) playing = { flash: flashQueue.shift(), start: now };
+  if (playing && now - playing.start >= motionLength(playing.flash.motion)) playing = null;
+  const color = playing ? playing.flash.color : panelColor;
+  if (color !== undefined && color !== colorShown) {
+    showPanelColor(color);
+    colorShown = color;
+  }
+  const { level, mask } = still
+    ? { level: 1, mask: "" }
+    : playing
+      ? motionLook(playing.flash.motion, now - playing.start)
+      : motionLook(motion, now - motionStart);
   const word = $("s-word").style;
   word.opacity = Math.max(PANEL_FLOOR, level);
   word.maskImage = word.webkitMaskImage = mask;
@@ -785,8 +846,9 @@ function showStatus(state) {
   $("dot").className = "dot on";
   $("link").textContent = "connected";
   $("s-word").textContent = state.layer;
-  showPanelColor(state.color);
+  panelColor = state.color;
   showMotion(state);
+  takeFlashes(state);
   $("s-phase").textContent = words(state.phase);
   $("s-net").textContent = words(state.net);
   $("s-override").textContent = state.override_active ? "active" : "none";

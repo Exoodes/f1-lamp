@@ -1,6 +1,6 @@
 //! Plays the archived 2026 Singapore GP sprint qualifying through the
 //! replayer, with a fake clock. The streams are trimmed to the lines the lamp
-//! can use (as `build.rs` does for a replay build).
+//! can use (`Stream::is_relevant`).
 
 use std::time::{Duration, Instant};
 

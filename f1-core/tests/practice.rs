@@ -1,7 +1,7 @@
 //! Plays the last half hour of the 2026 Singapore GP's first practice,
 //! captured live by the probe (`f1-probe/captures/2026-10-09_11-01-15`),
 //! through the replayer with a fake clock. The streams are trimmed to the
-//! lines the lamp can use (as `build.rs` does for a replay build).
+//! lines the lamp can use (`Stream::is_relevant`).
 
 use std::time::{Duration, Instant};
 

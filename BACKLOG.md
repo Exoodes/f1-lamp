@@ -21,11 +21,6 @@ Ideas for after the course, in no particular order of size.
   100 B of heap (time and text as strings); store the event and the time
   as a number instead (about 16 B) and write the text when the page asks,
   and send a page that just opened only the newest lines.
-- **Short flashes on the panel too.** The panel moves like the lamp (done
-  2026-10-15), but the page asks every 2 s, so flashes under a second (pit
-  stop, fastest lap) are often missed. Either ask a small endpoint every
-  ~250 ms, or have the lamp keep the effects started in the last few
-  seconds for the page to play a little late (about half a day).
 
 ## From the review, 2026-10-14
 
@@ -71,7 +66,6 @@ with `cargo ota` first) or a video:
 
 ## Maybe
 
-- **Retirement of a followed driver.** A slow fade in the team colour.
 - **Overtakes without an F1TV token**, from position swaps in `DriverList`
   minus pit stops (`PitLaneTimeCollection`). Only if `DriverRaceInfo` (see
   Wanted) isn't enough.

@@ -16,7 +16,7 @@ use crate::{
     effect::Effect,
     frame::Frame,
     input::{Input, NetStatus, RaceEvent, SessionPhase, TrackFlag},
-    overlays::Overlays,
+    overlays::{Overlays, Recent},
     post,
     racelog::{self, LogItem},
     settings::Settings,
@@ -112,6 +112,8 @@ pub struct Controller {
     booted: Instant,
     layers: LayerState,
     overlays: Overlays,
+    /// The overlays that showed and ended, for the page.
+    recent: Recent,
     /// Race events and phase changes until the TV shows them. Settings,
     /// overrides, the clock and the network status act at once.
     delayed: DelayQueue<Delayed>,
@@ -154,6 +156,7 @@ impl Controller {
                 countdown_from: None,
             },
             overlays: Overlays::default(),
+            recent: Recent::default(),
             delayed: DelayQueue::new(),
             tv: TvTiming::default(),
             now,
@@ -201,7 +204,14 @@ impl Controller {
         self.now = now;
         self.release_due(now);
         self.expire_green(now);
-        self.overlays.tick(now);
+        // One under a forced flag or colour didn't show, so the page skips it.
+        let hidden = self.layers.override_effect.is_some();
+        let recent = &mut self.recent;
+        self.overlays.tick(now, |played| {
+            if !hidden {
+                recent.push(played);
+            }
+        });
         self.tick_winner(now);
         self.tick_countdown(now);
     }
@@ -400,7 +410,7 @@ impl Controller {
     fn overlay_layer(&self) -> Option<Scene> {
         self.overlays
             .active()
-            .map(|(effect, started)| Scene { effect, started })
+            .map(|(effect, started, _)| Scene { effect, started })
     }
 
     fn live_track_layer(&self) -> Option<Scene> {
@@ -477,6 +487,10 @@ impl Controller {
             color,
             motion: scene.effect.motion(),
             shown_since: scene.started,
+            flash: (layer == "overlay")
+                .then(|| self.overlays.active().map(|(_, _, seq)| seq))
+                .flatten(),
+            recent: self.recent,
             phase: self.layers.phase,
             net: self.net_status().value,
             override_active: self.layers.override_effect.is_some(),

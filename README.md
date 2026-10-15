@@ -30,6 +30,7 @@ Rust: the course*, with some extras of its own.
 | Knocked out | the team colour fading out over 3 s (followed drivers, after Q1 and Q2; the feed says so about 6 minutes after the part's chequered flag) |
 | Pit stop | two flashes in the team colour (followed drivers) |
 | Overtake | one flash in the team colour (followed drivers, needs F1TV) |
+| Retirement | the team colour fading out over 6 s when a followed driver retires during the session (TimingData `Retired`; cars classified as retired after the flag don't show) |
 | Penalty | two slow flashes in the team colour when the stewards give a followed driver a penalty (time, drive-through, grid…; race control's "PENALTY FOR CAR n") |
 | No network | breathing blue (WiFi connecting) or blinking red (the live feed failed 3 times in a row): after a boot until the lamp is first online, then only around a session |
 
@@ -157,8 +158,9 @@ Any of these work with both `cargo run --release` and `cargo ota`:
 `http://f1-lightbox.local` (same network only):
 
 - what the lamp shows, moving like the lamp (breathing, blinking, the
-  safety car's chase; flashes under a second are often missed, the page
-  asks every 2 s), the session phase and the network state;
+  safety car's chase; a flash that came and went between two of the page's
+  polls, every 2 s, plays a moment late), the session phase and the network
+  state;
 - the race log: every race event in words ("Yellow flag", "VER in the
   pits", "Fastest lap: NOR"), with its time, in step with your TV; events the
   lamp didn't show (switched off, a driver not followed) are dimmed;
@@ -194,10 +196,10 @@ The page uses these, and scripts can too:
 
 | Request | What it does |
 |---|---|
-| `GET /api/state` | What the lamp shows: layer, its colour and how it moves (`motion`, started `age_ms` ago), phase, network, override, settings, and the session clock and lap as the TV shows them (JSON) |
+| `GET /api/state` | What the lamp shows: layer, its colour and how it moves (`motion`, started `age_ms` ago), the number of the short effect showing (`flash`) and those that ended in the last 4 s (`flashes`), phase, network, override, settings, and the session clock and lap as the TV shows them (JSON) |
 | `GET /api/schedule` | This race weekend: the lamp's time, the country, the circuit and the sessions with their state (`done`, `live`, `coming`), whether they're followed, where a moved one was, whether it's cancelled, and P1 of each finished one |
 | `POST /api/settings` | All the settings as JSON: get them from `/api/state`, change, send back |
-| `POST /api/override` | `{"kind":"flag","flag":"red"}`, `{"kind":"color","color":"#ff8800"}` or `{"kind":"release"}`; or plays one effect at once: `{"kind":"event","event":"pit_stop","team":"mclaren"}` (`start_lights`, `chequered_flag`, `last_lap`, `fastest_lap`, `pit_stop`, `overtake`, `winner`, `knocked_out`, `penalty`; teams `alpine`, `aston_martin`, `audi`, `cadillac`, `ferrari`, `haas`, `mclaren`, `mercedes`, `racing_bulls`, `red_bull`, `williams`) |
+| `POST /api/override` | `{"kind":"flag","flag":"red"}`, `{"kind":"color","color":"#ff8800"}` or `{"kind":"release"}`; or plays one effect at once: `{"kind":"event","event":"pit_stop","team":"mclaren"}` (`start_lights`, `chequered_flag`, `last_lap`, `fastest_lap`, `pit_stop`, `overtake`, `winner`, `knocked_out`, `penalty`, `retired`; teams `alpine`, `aston_martin`, `audi`, `cadillac`, `ferrari`, `haas`, `mclaren`, `mercedes`, `racing_bulls`, `red_bull`, `williams`) |
 | `GET /api/token`, `POST /api/token` | The F1TV token's state; post a token (plain text) to set it, an empty one to remove it |
 | `GET /api/racelog?after=<n>` | The race log's lines from number `n` on, where `n` is the last answer's `next` (all kept lines without it): time, text, colour |
 | `GET /api/log?after=<n>` | The log lines after number `n` |
@@ -332,6 +334,9 @@ All seen in real sessions; the code around each has the details.
   later. The knocked-out drivers are marked (`KnockedOut`) only when the
   next part is announced, about 6 minutes after the flag.
 - TopThree patches leave out `TeamColour` when it didn't change.
+- A retirement is one TimingData line (`"Retired":true,"Stopped":true`).
+  Cars that don't finish a race can be marked retired a minute or two after
+  the flag (Singapore 2026: #23, 83 s later).
 - The fastest lap's holder beating their own time sends a patch with `Lap`
   and no `Position`; a deleted lap sends a slower `Value` without `Lap`.
 - Pit stops in practice mostly have an empty `Duration` (a stop to change

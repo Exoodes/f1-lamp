@@ -52,6 +52,11 @@ pub enum RaceEvent {
         driver: u8,
         team_color: Rgb,
     },
+    /// Out of the session while it runs: retired (TimingData `Retired`).
+    Retired {
+        driver: u8,
+        team_color: Rgb,
+    },
     /// The stewards gave the driver a penalty (time, drive-through, grid...).
     Penalty {
         driver: u8,

@@ -6,6 +6,8 @@
 //!   flag (at most [`LAST_LAPS_MAX`] after it);
 //! - knocked out: a driver out of qualifying after Q1 or Q2 (TimingData,
 //!   public);
+//! - retired: a car out of the session while it runs (TimingData, public);
+//! - penalty: the stewards' penalty for a car (race control, public);
 //! - pit stop: a car leaving the pit lane (PitLaneTimeCollection, public);
 //! - fastest lap: a new personal best that is the session's best
 //!   (TimingStats, public);
@@ -93,6 +95,12 @@ pub struct Tracker {
     qualifying_part: Option<u8>,
     /// Shown already: the feed may repeat a driver's `KnockedOut`.
     knocked_out: HashSet<u8>,
+    /// Shown already, like `knocked_out`.
+    retired: HashSet<u8>,
+    /// The session finished and hasn't started again. The feed marks cars
+    /// that didn't finish as retired after the flag (Singapore 2026: #23,
+    /// 83 s later): not news then, and the winner is showing.
+    session_over: bool,
     /// From TimingData updates; the snapshot on connecting is too large to
     /// read, so a car can be missing.
     cars: HashMap<u8, Car>,
@@ -146,6 +154,13 @@ impl Tracker {
             FeedMessage::TopThree(top) => self.read_top_three(top),
             FeedMessage::Session(s) => {
                 if let Some(state) = s.status {
+                    match state {
+                        SessionState::Started => self.session_over = false,
+                        SessionState::Finished | SessionState::Finalised | SessionState::Ends => {
+                            self.session_over = true;
+                        }
+                        _ => {}
+                    }
                     events.extend(self.session_state(state));
                 }
             }
@@ -250,16 +265,17 @@ impl Tracker {
         })
     }
 
-    /// Knockouts, and what each car is doing.
+    /// Knockouts, retirements, and what each car is doing.
     fn timing(&mut self, timing: &TimingData, events: &mut Vec<RaceEvent>) {
         let Some(lines) = &timing.lines else { return };
         for (&driver, line) in lines.iter() {
             self.cars.entry(driver).or_default().update(line);
+            let team_color = self.colour(driver);
             if line.knocked_out == Some(true) && self.knocked_out.insert(driver) {
-                events.push(RaceEvent::KnockedOut {
-                    driver,
-                    team_color: self.colour(driver),
-                });
+                events.push(RaceEvent::KnockedOut { driver, team_color });
+            }
+            if line.retired == Some(true) && !self.session_over && self.retired.insert(driver) {
+                events.push(RaceEvent::Retired { driver, team_color });
             }
         }
     }
@@ -1003,6 +1019,38 @@ mod tests {
         );
         assert_eq!(finish(&mut t), winner(12, "#00d7b6"));
         assert_eq!(finalise(&mut t), None);
+    }
+
+    fn retire(t: &mut Tracker, driver: u8) -> Option<RaceEvent> {
+        timing(
+            t,
+            &format!(r#"{{"Lines":{{"{driver}":{{"Retired":true,"Stopped":true,"Status":92}}}}}}"#),
+        )
+    }
+
+    #[test]
+    fn a_retirement_comes_once_in_team_colour() {
+        let mut t = race();
+        feed(&mut t, Stream::SessionStatus, r#"{"Status":"Started"}"#);
+        assert_eq!(
+            retire(&mut t, 81),
+            Some(RaceEvent::Retired {
+                driver: 81,
+                team_color: "#f47600".parse().unwrap()
+            })
+        );
+        assert_eq!(retire(&mut t, 81), None, "the feed repeats it");
+    }
+
+    #[test]
+    fn a_car_marked_retired_after_the_flag_is_not_news() {
+        let mut t = race();
+        feed(&mut t, Stream::SessionStatus, r#"{"Status":"Started"}"#);
+        finish(&mut t);
+        assert_eq!(retire(&mut t, 81), None);
+        // A restart after a red flag runs again.
+        feed(&mut t, Stream::SessionStatus, r#"{"Status":"Started"}"#);
+        assert!(retire(&mut t, 12).is_some());
     }
 
     #[test]

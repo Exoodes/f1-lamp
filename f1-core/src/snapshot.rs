@@ -1,6 +1,6 @@
 //! [`Snapshot`]: what the web page shows about the lamp (`GET /api/state`).
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -8,6 +8,7 @@ use crate::{
     color::Rgb,
     effect::Motion,
     input::{NetStatus, SessionPhase},
+    overlays::Recent,
     settings::Settings,
     tv_timing::TvView,
 };
@@ -24,6 +25,11 @@ pub struct Snapshot {
     /// When it started; sent as `age_ms` (see [`StateReply`]).
     #[serde(skip)]
     pub shown_since: Instant,
+    /// The number of the overlay showing (see [`Recent`]), if one is.
+    pub flash: Option<u32>,
+    /// Sent as `flashes`: those that ended lately (see [`StateReply`]).
+    #[serde(skip)]
+    pub recent: Recent,
     pub phase: SessionPhase,
     pub net: NetStatus,
     pub override_active: bool,
@@ -33,14 +39,29 @@ pub struct Snapshot {
     pub tv: TvView,
 }
 
+/// An overlay that ended up to this long ago is sent, so the page can play
+/// the ones it didn't see: the panel asks only every 2 s.
+pub const FLASHES_KEPT: Duration = Duration::from_secs(4);
+
 /// What `GET /api/state` answers: the snapshot, how long ago what shows
-/// started, and the TV's clock and lap, all at the moment of answering.
+/// started, the overlays that ended lately, and the TV's clock and lap, all
+/// at the moment of answering.
 #[derive(Debug, Serialize)]
 pub struct StateReply {
     #[serde(flatten)]
     pub snapshot: Snapshot,
     pub age_ms: u32,
+    pub flashes: Vec<Flash>,
     pub tv: TvState,
+}
+
+/// One overlay that showed and ended, for the page to play late.
+#[derive(Debug, PartialEq, Serialize)]
+pub struct Flash {
+    pub seq: u32,
+    pub motion: Motion,
+    /// `None` for the chequered flag, a pattern.
+    pub color: Option<Rgb>,
 }
 
 #[derive(Debug, PartialEq, Serialize)]
@@ -59,6 +80,16 @@ impl StateReply {
         StateReply {
             snapshot,
             age_ms: u32::try_from(age.as_millis()).unwrap_or(u32::MAX),
+            flashes: snapshot
+                .recent
+                .iter()
+                .filter(|p| now.saturating_duration_since(p.ended) <= FLASHES_KEPT)
+                .map(|p| Flash {
+                    seq: p.seq,
+                    motion: p.effect.motion(),
+                    color: p.effect.main_color(),
+                })
+                .collect(),
             tv: TvState {
                 clock_ms: tv.clock.map(|c| c.remaining_at(now)),
                 clock_running: tv.clock.is_some_and(|c| c.running),
@@ -147,6 +178,7 @@ mod tests {
             keys,
             [
                 "color",
+                "flash",
                 "layer",
                 "motion",
                 "net",
@@ -173,6 +205,52 @@ mod tests {
         let json = serde_json::to_value(&reply).unwrap();
         assert_eq!(json["age_ms"], 1500);
         assert_eq!(json["motion"]["kind"], "breathe");
+    }
+
+    const TEAM: Rgb = Rgb::new(0, 210, 190);
+
+    fn pit_stop() -> Input {
+        Input::Preview(crate::input::RaceEvent::PitStop {
+            driver: 44,
+            team_color: TEAM,
+        })
+    }
+
+    #[test]
+    fn a_flash_that_ended_is_sent_for_a_few_seconds() {
+        let t0 = Instant::now();
+        let mut c = Controller::new(t0);
+        c.apply(pit_stop(), t0);
+        c.tick(t0);
+        assert_eq!(c.snapshot().flash, Some(0), "showing now");
+
+        // Two flashes of 300 ms: over by 600 ms, before the page asked.
+        c.tick(t0 + Duration::from_millis(700));
+        let snap = c.snapshot();
+        assert_eq!(snap.flash, None);
+        let reply = StateReply::new(snap, t0 + Duration::from_secs(2));
+        assert_eq!(
+            reply.flashes,
+            [Flash {
+                seq: 0,
+                motion: Effect::flash(TEAM, 2).motion(),
+                color: Some(TEAM),
+            }]
+        );
+        let later = t0 + Duration::from_millis(600) + FLASHES_KEPT + Duration::from_millis(1);
+        assert!(StateReply::new(snap, later).flashes.is_empty());
+    }
+
+    #[test]
+    fn a_flash_hidden_by_a_forced_colour_is_not_sent() {
+        let t0 = Instant::now();
+        let mut c = Controller::new(t0);
+        c.apply(Input::Override(Some(Effect::Solid(Rgb::RED))), t0);
+        c.apply(pit_stop(), t0);
+        c.tick(t0);
+        c.tick(t0 + Duration::from_millis(700));
+        let reply = StateReply::new(c.snapshot(), t0 + Duration::from_secs(1));
+        assert!(reply.flashes.is_empty());
     }
 
     #[test]

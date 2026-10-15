@@ -1,6 +1,6 @@
 //! Plays the archived 2026 Italian GP qualifying through the replayer, the
 //! same way the lamp does, with a fake clock. The streams are trimmed to the
-//! lines the lamp can use (as `build.rs` does for a replay build).
+//! lines the lamp can use (`Stream::is_relevant`).
 
 use std::{collections::HashSet, time::Instant};
 

@@ -42,6 +42,7 @@ pub enum PreviewEvent {
     Winner,
     KnockedOut,
     Penalty,
+    Retired,
 }
 
 /// The 2026 teams, so a preview can only use a real team colour.
@@ -98,6 +99,7 @@ impl PreviewEvent {
             PreviewEvent::Winner => RaceEvent::Winner { driver, team_color },
             PreviewEvent::KnockedOut => RaceEvent::KnockedOut { driver, team_color },
             PreviewEvent::Penalty => RaceEvent::Penalty { driver, team_color },
+            PreviewEvent::Retired => RaceEvent::Retired { driver, team_color },
         }
     }
 }
@@ -274,6 +276,7 @@ mod tests {
             ("winner", PreviewEvent::Winner),
             ("knocked_out", PreviewEvent::KnockedOut),
             ("penalty", PreviewEvent::Penalty),
+            ("retired", PreviewEvent::Retired),
         ];
         for (name, event) in events {
             let json = format!(r#"{{"kind":"event","event":"{name}","team":"ferrari"}}"#);

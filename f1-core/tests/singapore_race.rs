@@ -1,8 +1,7 @@
 //! Plays the 2026 Singapore GP race, captured live by the probe
 //! (`f1-probe/captures/2026-10-11_13-40-12`) from before the start to
 //! `Finalised`, through the replayer with a fake clock. The streams are
-//! trimmed to the lines the lamp can use (as `build.rs` does for a replay
-//! build).
+//! trimmed to the lines the lamp can use (`Stream::is_relevant`).
 
 use std::time::{Duration, Instant};
 
@@ -12,7 +11,7 @@ use f1_core::{
     replay::{Replayer, Step},
 };
 
-const FILES: [(Stream, &str); 10] = [
+const FILES: [(Stream, &str); 11] = [
     (
         Stream::SessionInfo,
         include_str!("data/2026-singapore/race/SessionInfo.jsonStream"),
@@ -52,6 +51,11 @@ const FILES: [(Stream, &str); 10] = [
     (
         Stream::Clock,
         include_str!("data/2026-singapore/race/ExtrapolatedClock.jsonStream"),
+    ),
+    // Only its one `"Retired":true` line, for #23 after the flag.
+    (
+        Stream::TimingData,
+        include_str!("data/2026-singapore/race/TimingData.jsonStream"),
     ),
 ];
 
@@ -106,6 +110,14 @@ fn fastest_laps(events: &[(Duration, RaceEvent)]) -> Vec<(Duration, u8)> {
             _ => None,
         })
         .collect()
+}
+
+#[test]
+fn a_car_classified_as_retired_after_the_flag_doesnt_show() {
+    // #23 was marked retired 83 s after `Finished`.
+    assert!(!events()
+        .iter()
+        .any(|(_, e)| matches!(e, RaceEvent::Retired { .. })));
 }
 
 #[test]

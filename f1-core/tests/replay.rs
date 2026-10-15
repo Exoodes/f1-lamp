@@ -9,7 +9,7 @@ use f1_core::{
     replay::{Replayer, Step},
 };
 
-const FILES: [(Stream, &str); 10] = [
+const FILES: [(Stream, &str); 11] = [
     (
         Stream::SessionInfo,
         include_str!("data/2026-italy/race/SessionInfo.jsonStream"),
@@ -49,6 +49,11 @@ const FILES: [(Stream, &str); 10] = [
     (
         Stream::LapCount,
         include_str!("data/2026-italy/race/LapCount.jsonStream"),
+    ),
+    // Only its two `"Retired":true` lines: a race's TimingData is tens of MB.
+    (
+        Stream::TimingData,
+        include_str!("data/2026-italy/race/TimingData.jsonStream"),
     ),
 ];
 
@@ -275,6 +280,26 @@ fn race_has_sixteen_fastest_laps_nine_pit_stops_and_327_overtakes() {
     assert_eq!(count(|e| matches!(e, RaceEvent::FastestLap { .. })), 16);
     assert_eq!(count(|e| matches!(e, RaceEvent::PitStop { .. })), 9);
     assert_eq!(count(|e| matches!(e, RaceEvent::Overtake { .. })), 327);
+}
+
+#[test]
+fn leclerc_and_alonso_retire_in_team_colour() {
+    let (inputs, _) = play_to_end(60);
+    let retired: Vec<u8> = driver_events(&inputs)
+        .into_iter()
+        .filter_map(|e| match e {
+            RaceEvent::Retired { driver, team_color } => {
+                assert_ne!(
+                    team_color,
+                    "#ffffff".parse().unwrap(),
+                    "colour from DriverList"
+                );
+                Some(driver)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(retired, [16, 14]);
 }
 
 #[test]

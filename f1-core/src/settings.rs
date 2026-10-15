@@ -48,7 +48,7 @@ pub struct Settings {
     /// by older firmware may hold a single `favourite_driver` instead; like
     /// any unknown key it's ignored, so the list then starts empty.
     pub followed_drivers: DriverSet,
-    /// Pit stops, overtakes, knockouts and penalties of every driver,
+    /// Pit stops, overtakes, knockouts, penalties and retirements of every driver,
     /// whatever the list says: to see everything (a race has hundreds of
     /// overtakes).
     pub follow_all: bool,
@@ -118,6 +118,8 @@ pub struct EffectToggles {
     pub last_lap: bool,
     /// A followed driver's penalty.
     pub penalty: bool,
+    /// A followed driver retiring.
+    pub retired: bool,
     /// The countdown before each session (not a race event).
     pub countdown: bool,
 }
@@ -134,6 +136,7 @@ impl Default for EffectToggles {
             knocked_out: true,
             last_lap: true,
             penalty: true,
+            retired: true,
             countdown: true,
         }
     }
@@ -141,8 +144,8 @@ impl Default for EffectToggles {
 
 impl Settings {
     /// Whether the lamp shows `event`: its switch is on and, for pit stops,
-    /// overtakes, knockouts and penalties, the driver is followed (none are by
-    /// default).
+    /// overtakes, knockouts, penalties and retirements, the driver is followed
+    /// (none are by default).
     pub fn shows(&self, event: RaceEvent) -> bool {
         let e = &self.effects;
         // No `_` arm: a new kind of event must get a decision here.
@@ -157,6 +160,7 @@ impl Settings {
             RaceEvent::KnockedOut { driver, .. } => e.knocked_out && self.follows(driver),
             RaceEvent::LastLap => e.last_lap,
             RaceEvent::Penalty { driver, .. } => e.penalty && self.follows(driver),
+            RaceEvent::Retired { driver, .. } => e.retired && self.follows(driver),
         }
     }
 }
@@ -376,6 +380,7 @@ mod tests {
                 knocked_out: false,
                 last_lap: false,
                 penalty: false,
+                retired: false,
                 countdown: false,
             },
             sessions: SessionToggles {
@@ -402,6 +407,7 @@ mod tests {
                 && e.pit_stop
                 && e.overtake
                 && e.penalty
+                && e.retired
                 && e.winner
                 && e.knocked_out
                 && e.last_lap
@@ -573,6 +579,19 @@ mod tests {
     }
 
     #[test]
+    fn retirements_show_only_for_followed_drivers_and_can_be_switched_off() {
+        let retired = |driver| RaceEvent::Retired {
+            driver,
+            team_color: TEAM,
+        };
+        let mut s = following(&[16]);
+        assert!(s.shows(retired(16)));
+        assert!(!s.shows(retired(14)));
+        s.effects.retired = false;
+        assert!(!s.shows(retired(16)));
+    }
+
+    #[test]
     fn a_switched_off_event_is_not_shown() {
         let off = EffectToggles {
             start_lights: false,
@@ -627,6 +646,7 @@ mod tests {
             knocked_out: false,
             last_lap: false,
             penalty: false,
+            retired: false,
             countdown: false,
         };
         assert!(with_effects(all_off).shows(RaceEvent::TrackFlag(TrackFlag::Red)));

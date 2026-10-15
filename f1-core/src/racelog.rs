@@ -65,6 +65,7 @@ pub fn text(item: LogItem, name: &dyn Fn(u8) -> String) -> Option<String> {
         RaceEvent::Winner { driver, .. } => format!("P1: {}", name(driver)),
         RaceEvent::KnockedOut { driver, .. } => format!("{} knocked out", name(driver)),
         RaceEvent::Penalty { driver, .. } => format!("Penalty: {}", name(driver)),
+        RaceEvent::Retired { driver, .. } => format!("{} retired", name(driver)),
     })
 }
 
@@ -83,7 +84,8 @@ pub fn color(item: LogItem) -> Option<Rgb> {
         | RaceEvent::Overtake { team_color, .. }
         | RaceEvent::Winner { team_color, .. }
         | RaceEvent::KnockedOut { team_color, .. }
-        | RaceEvent::Penalty { team_color, .. } => Some(team_color),
+        | RaceEvent::Penalty { team_color, .. }
+        | RaceEvent::Retired { team_color, .. } => Some(team_color),
         RaceEvent::FlagCleared | RaceEvent::StartLights => None,
     }
 }
@@ -204,6 +206,10 @@ mod tests {
         assert_eq!(
             ver(|driver, team_color| RaceEvent::Penalty { driver, team_color }),
             "Penalty: VER"
+        );
+        assert_eq!(
+            ver(|driver, team_color| RaceEvent::Retired { driver, team_color }),
+            "VER retired"
         );
         assert_eq!(
             ver(|driver, team_color| RaceEvent::Winner { driver, team_color }),
