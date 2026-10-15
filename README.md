@@ -191,10 +191,12 @@ Every POST to the lamp must carry the header `X-F1-Lamp` (any value), which
 the page sends; other websites can't, so they can't change the lamp through a
 browser on your network. Scripts must add it too, e.g.
 `curl -H "X-F1-Lamp: 1" -d '{"kind":"release"}' http://f1-lightbox.local/api/override`.
-POSTs must also address the lamp as `f1-lightbox.local`, `f1-lightbox` or
-its IP address: a name the router gives it (e.g. `f1-lightbox.fritz.box`)
-is refused, like any page that tricks a browser into reaching the lamp
-under its own domain.
+POSTs, and GETs of `/api/...`, must also address the lamp as
+`f1-lightbox.local`, `f1-lightbox` or its IP address: a name the router
+gives it (e.g. `f1-lightbox.fritz.box`) is refused with 403, like any page
+that tricks a browser into reaching the lamp under its own domain, so such
+a page can't read the log or the token's status either. The page itself
+opens under any name.
 
 The page uses these, and scripts can too:
 

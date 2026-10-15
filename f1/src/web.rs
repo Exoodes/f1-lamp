@@ -27,7 +27,7 @@ use f1_core::{
     settings::Settings,
     snapshot::{Snapshot, StateReply},
     token::TokenStatus,
-    web_api::{post_refusal, query_number},
+    web_api::{host_refusal, post_refusal, query_number},
     weekend::{weekend, Moved, Results, ScheduleReply},
 };
 use serde::de::DeserializeOwned;
@@ -117,12 +117,18 @@ fn page_routes(
 
     let follow_from = Arc::clone(&snapshot);
     server.fn_handler::<anyhow::Error, _>("/api/state", Method::Get, move |req| {
+        if let Some(why) = get_refusal(&req) {
+            return refuse(req, why);
+        }
         // Copied out, so the lock is released before serialising.
         let state = StateReply::new(*snapshot.lock().unwrap(), Instant::now());
         reply(req, 200, JSON, &serde_json::to_vec(&state)?)
     })?;
 
     server.fn_handler::<anyhow::Error, _>("/api/schedule", Method::Get, move |req| {
+        if let Some(why) = get_refusal(&req) {
+            return refuse(req, why);
+        }
         let now = clock::unix_now();
         let follow = follow_from.lock().unwrap().settings.sessions;
         let weekend = now.and_then(|now| {
@@ -145,6 +151,9 @@ fn page_routes(
     // `?after=<n>`: the race log's lines from number n on (n is the last
     // answer's `next`); without it, all.
     server.fn_handler::<anyhow::Error, _>("/api/racelog", Method::Get, |req| {
+        if let Some(why) = get_refusal(&req) {
+            return refuse(req, why);
+        }
         let after = query_number(req.uri(), "after");
         reply(req, 200, JSON, &serde_json::to_vec(&racelog::page(after))?)
     })?;
@@ -152,6 +161,9 @@ fn page_routes(
     // `?after=<n>`: the lines after number n; without it, only where to start.
     // Logs nothing itself, or every poll would add a line.
     server.fn_handler::<anyhow::Error, _>("/api/log", Method::Get, |req| {
+        if let Some(why) = get_refusal(&req) {
+            return refuse(req, why);
+        }
         let after = query_number(req.uri(), "after");
         reply(req, 200, JSON, &serde_json::to_vec(&weblog::page(after))?)
     })?;
@@ -248,6 +260,9 @@ fn replay_routes(server: &mut EspHttpServer<'static>) -> anyhow::Result<()> {
     use f1_core::replay::ReplayCommand;
 
     server.fn_handler::<anyhow::Error, _>("/api/replay", Method::Get, |req| {
+        if let Some(why) = get_refusal(&req) {
+            return refuse(req, why);
+        }
         let Some(replay) = crate::replay::handle() else {
             return reply(req, 404, TEXT, b"no replay");
         };
@@ -283,6 +298,9 @@ fn token_routes(
 ) -> anyhow::Result<()> {
     let get_tokens = Arc::clone(&tokens);
     server.fn_handler::<anyhow::Error, _>("/api/token", Method::Get, move |req| {
+        if let Some(why) = get_refusal(&req) {
+            return refuse(req, why);
+        }
         let status = get_tokens.status(clock::unix_now());
         reply(req, 200, JSON, &serde_json::to_vec(&status)?)
     })?;
@@ -343,8 +361,14 @@ fn refusal(req: &Request<&mut EspHttpConnection<'_>>) -> Option<&'static str> {
     )
 }
 
+/// Why a GET of the API is refused, if it is (`web_api::host_refusal`): the
+/// page itself is open to any `Host`, the data it reads is not.
+fn get_refusal(req: &Request<&mut EspHttpConnection<'_>>) -> Option<&'static str> {
+    host_refusal(req.header("Host"), mdns::HOSTNAME)
+}
+
 fn refuse(req: Request<&mut EspHttpConnection<'_>>, why: &str) -> anyhow::Result<()> {
-    log::warn!("refused a POST to {}: {why}", req.uri());
+    log::warn!("refused {:?} {}: {why}", req.method(), req.uri());
     reply(req, 403, TEXT, why.as_bytes())
 }
 

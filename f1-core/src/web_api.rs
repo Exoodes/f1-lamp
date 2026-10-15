@@ -21,9 +21,20 @@ pub fn is_lamp_host(host: &str, hostname: &str) -> bool {
         || bracketed_v6
 }
 
+/// Why a request to the API is refused, if it is: its `Host` must name the
+/// lamp (see [`is_lamp_host`]). GETs check only this: a page on another
+/// domain can't read the answers, even through DNS rebinding.
+pub fn host_refusal(host: Option<&str>, hostname: &str) -> Option<&'static str> {
+    if host.is_some_and(|host| is_lamp_host(host, hostname)) {
+        None
+    } else {
+        Some("unknown Host: use f1-lightbox.local or the lamp's IP address")
+    }
+}
+
 /// Why a POST is refused, if it is: it must carry the page's own header
-/// (`X-F1-Lamp`), as the lamp's page and ota.ps1 do, and name the lamp in
-/// `Host` (see [`is_lamp_host`]).
+/// (`X-F1-Lamp`), as the lamp's page and ota.ps1 do, and pass
+/// [`host_refusal`].
 pub fn post_refusal(
     has_page_header: bool,
     host: Option<&str>,
@@ -32,10 +43,7 @@ pub fn post_refusal(
     if !has_page_header {
         return Some("missing X-F1-Lamp header");
     }
-    if !host.is_some_and(|host| is_lamp_host(host, hostname)) {
-        return Some("unknown Host: use f1-lightbox.local or the lamp's IP address");
-    }
-    None
+    host_refusal(host, hostname)
 }
 
 /// `name`'s value in the query string, if it's a number: `/x?after=12` -> 12.
@@ -71,6 +79,15 @@ mod tests {
     fn a_post_to_another_host_or_without_one_is_refused() {
         for host in [Some("evil.example"), None] {
             let why = post_refusal(true, host, NAME).unwrap();
+            assert!(why.starts_with("unknown Host"), "{host:?}: {why}");
+        }
+    }
+
+    #[test]
+    fn a_get_needs_only_the_lamp_as_host() {
+        assert_eq!(host_refusal(Some("192.168.1.54"), NAME), None);
+        for host in [Some("x.example"), None] {
+            let why = host_refusal(host, NAME).unwrap();
             assert!(why.starts_with("unknown Host"), "{host:?}: {why}");
         }
     }
