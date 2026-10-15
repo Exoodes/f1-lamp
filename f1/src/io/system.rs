@@ -27,6 +27,8 @@ pub struct StackLeft(AtomicU32);
 pub static MAIN_STACK: StackLeft = StackLeft::new();
 pub static NET_STACK: StackLeft = StackLeft::new();
 pub static LIVE_STACK: StackLeft = StackLeft::new();
+/// The WebSocket client's task; a new one for each connection.
+pub static WS_STACK: StackLeft = StackLeft::new();
 
 impl StackLeft {
     const fn new() -> Self {

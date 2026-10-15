@@ -308,7 +308,9 @@ places, in this order:
 | replay (replay builds) | 8 KB | 5 | plays the embedded session |
 
 The stacks are in `f1/src/config.rs`; the minute `heap:` log line shows how
-much stack the main, net and live threads have had left at least. The
+much stack the main, net and live threads and the WebSocket client's task
+(the current connection's, measured when it connects and when it ends) have
+had left at least. The
 threads only talk to the render loop through the `Input` queue, and the
 render loop never waits for the network.
 

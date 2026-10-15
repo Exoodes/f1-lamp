@@ -165,6 +165,19 @@ unsafe extern "C" fn on_event(
         )
     };
 
+    // The rare events: after the TLS handshake, and at the end, so a deep
+    // moment in between counts too.
+    #[allow(non_upper_case_globals)]
+    if matches!(
+        id,
+        esp_websocket_event_id_t_WEBSOCKET_EVENT_CONNECTED
+            | esp_websocket_event_id_t_WEBSOCKET_EVENT_DISCONNECTED
+            | esp_websocket_event_id_t_WEBSOCKET_EVENT_CLOSED
+            | esp_websocket_event_id_t_WEBSOCKET_EVENT_ERROR
+    ) {
+        super::system::WS_STACK.measure();
+    }
+
     #[allow(non_upper_case_globals)]
     let event = match id {
         esp_websocket_event_id_t_WEBSOCKET_EVENT_CONNECTED => WsEvent::Connected,

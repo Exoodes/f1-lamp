@@ -308,13 +308,14 @@ impl<'a> Net<'a> {
             let nvs =
                 system::nvs_use().map_or("?".into(), |n| format!("{} of {}", n.used, n.total));
             log::info!(
-                "heap: {} B free, {} B lowest since boot, largest block {} B;                  stack left: main {}, net {}, live {}; nvs entries used: {}",
+                "heap: {} B free, {} B lowest since boot, largest block {} B;                  stack left: main {}, net {}, live {}, WebSocket {}; nvs entries used: {}",
                 heap.free,
                 heap.lowest,
                 heap.largest_block,
                 stack(&system::MAIN_STACK),
                 stack(&system::NET_STACK),
                 stack(&system::LIVE_STACK),
+                stack(&system::WS_STACK),
                 nvs
             );
             self.due.heap_log = now + HEAP_LOG_EVERY;
