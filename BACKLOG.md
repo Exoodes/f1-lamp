@@ -16,18 +16,18 @@
   strings); store the event and the time as a number instead (about 16 B),
   write the text when the page asks, and send a page that just opened only
   the newest lines.
-- **Check `esp_websocket_client` 1.8.0 on the lamp:** reconnects in a
-  session (or a `live-now` build) with no reboot.
-- **Read the WebSocket queue's heap in a session:** the lamp logs
-  `live: after a dropped frame, heap … B free, largest block … B` on each
-  connection. Only if the heap is low there: a bounded `sync_channel`
-  (blocking send slows down TCP), or drop the chunks while the splitter
-  skips a frame.
-- **Read the WebSocket task's stack after a session:** the last figure of
-  the `heap:` line (6 KB, it does the TLS handshake). Raise
-  `config::stack::WS_TASK` if little is left.
-- **Check the host check on the GETs:** `curl -i -H "Host: x.example"
-  http://f1-lightbox.local/api/state` answers 403, and the page still works.
+- **WiFi's first association is rejected on every boot.** Since the USB
+  flash of 2026-10-15 the router answers the lamp's first association within
+  about 10 ms (`wifi:state: assoc -> init (6c0)`, once `2c0`); the retry
+  connects. Last weekend the lamp was online after one or two blue breaths,
+  now after several (online at ~16 s with the 8 s wait of 460bd7d, ~23 s
+  before it). Not the flash itself (Ctrl+R does it too) and not USB power
+  (the adapter does it too). `io/wifi.rs` didn't change before 460bd7d;
+  lower-level changes since last weekend: 6994a37 (flash size 4 MB, 1 KB
+  request headers), 325660a (`esp_websocket_client` 1.8), 6f7f895 (main
+  stack 12 KB), and the new bootloader that USB flash installed. Next:
+  bisect with `cargo ota` from a build of last weekend, power-cycling and
+  timing `wifi up` in the log at each step.
 - **How to sync the TV delay easily, also before a race?** Ideas, most
   useful first:
   - Lap times as the TV shows them: "VER 1:32.456" on the page at the
