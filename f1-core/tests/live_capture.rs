@@ -146,7 +146,11 @@ fn the_lamps_answers() -> (String, String) {
         answer(call["invocationId"].as_str().unwrap(), &names)
     };
     let frames = LiveSession::opening_frames(false);
-    (call(&frames[1]), call(&frames[2]))
+    let race_control = frames
+        .iter()
+        .find(|f| f.contains("[[\"RaceControlMessages\"]]"))
+        .unwrap();
+    (call(&frames[1]), call(race_control))
 }
 
 /// Feeds `answer` to `live` in the pieces the device's WebSocket client hands

@@ -22,11 +22,6 @@ Ideas for after the course, in no particular order of size.
   `f1-probe/captures/2026-10-11_13-40-12`, trimmed to the streams the lamp
   uses (TimingStats 236 KB; only the needed lines). Covers the fastest-lap
   fix; with `DriverRaceInfo`, the overtakes.
-- **No fastest lap from the snapshot on connecting.** Joining a session
-  flashes the current holder's fastest lap as if new: the TimingStats
-  snapshot carries `Position: 1` with a `Value` (seen in the FP1 fixture,
-  `tests/practice.rs`: #12 twice in the first 0.2 s). Remember the holder
-  from the snapshot without an event.
 - **A "winner" for practice.** E.g. the team colour of the driver with the
   fastest lap when the session ends, like pole after qualifying.
 - **Rework the effects.** Some are too fast (seen again in sprint
