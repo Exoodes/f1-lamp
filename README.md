@@ -277,6 +277,97 @@ With `$env:F1TV_TOKEN` set, the probe sends the token as well.
 
 ## Developing
 
+### How data flows
+
+```
+F1 live feed ──WebSocket──▶ WebSocket client task ──channel──▶ live thread
+(SignalR, wss)              (copies 4 KB chunks)               (LiveSession:
+                                                                frames → events)
+                                                                     │
+OpenF1 ──HTTPS──▶ net thread (WiFi, clock, calendar, phase,          │
+                  results, winner fallback) ───────────────────────┐ │
+                                                                   ▼ ▼
+replay thread (replay builds) ───────────────────────────▶   Input queue
+                                                                   │
+web page ──POST──▶ web handlers (settings, overrides) ────────────▶│
+    ▲                                                              ▼
+    │                                         render loop (main): Controller
+    │                                         (TV delay, flags, overlays,
+    │                                         effects) ──▶ 23 LEDs, 50 / s
+    │                                                              │
+    └──── GET /api/state, /api/racelog ◀──── snapshot, race log ◀──┘
+```
+
+Everything that decides something is in f1-core; the firmware only moves
+bytes and `Input`s. The live thread passes events on as they arrive: the TV
+delay is applied in the `Controller`, so the page's overrides and "Try an
+effect" can skip it.
+
+### Session phases
+
+From the calendar (OpenF1, kept in flash), each session puts the lamp in a
+phase (`f1-core/src/schedule.rs`):
+
+| Phase | From | Until | Feed |
+|---|---|---|---|
+| pre-session | 30 min before the scheduled start | the start | connected |
+| live | the scheduled start | 30 min after the scheduled end; while the feed says the session still goes on, up to 45 min more | connected |
+| post-session | the end of live | 60 min later; races and sprints only (the winner window: OpenF1 is asked if the feed missed the winner) | closed |
+| idle | otherwise | | closed |
+
+When windows of two sessions overlap, live beats pre-session beats
+post-session. The countdown runs from 10 minutes before the start until the
+TV shows it (the start plus the TV delay).
+
+### The feed's quirks
+
+All seen in real sessions; the code around each has the details.
+
+- Live data carries `"_kf": true` in every stream's first answer; the
+  archive doesn't.
+- The answer to `Subscribe` is applied silently: it's the state, not news.
+  TimingData's (the whole timing screen) and race control's (about 45 KB
+  after a race) are too large for the device and skipped, so a car can be
+  unknown until its next update.
+- Text frames come in 4 KB chunks that can cut through a multi-byte
+  character (`–`, `’`), so chunks are put together as bytes.
+- The server drops a client that stays quiet for about 30 s, so the lamp
+  pings every 15 s.
+- `SessionStatus` `Started` comes at lights out, not at the formation lap.
+  The feed has no countdown to the start.
+- During a red flag the status can go `Aborted`, then `Inactive` until the
+  restart: still the stoppage, so the lamp stays red.
+- Qualifying and practice are `Finished` when the clock runs out, but cars
+  on their last lap still change the order; `Finalised` can come 18 minutes
+  later. The knocked-out drivers are marked (`KnockedOut`) only when the
+  next part is announced, about 6 minutes after the flag.
+- TopThree patches leave out `TeamColour` when it didn't change.
+- The fastest lap's holder beating their own time sends a patch with `Lap`
+  and no `Position`; a deleted lap sends a slower `Value` without `Lap`.
+- Pit stops in practice mostly have an empty `Duration` (a stop to change
+  the setup); during a red flag every car waits in the pit lane, so a pit
+  lane time over 2 minutes isn't a stop.
+- `OvertakeSeries` is never sent live, even with the F1TV token;
+  `DriverRaceInfo` is (not used yet).
+- OpenF1's free tier answers 401 during live sessions.
+
+### Reading the log
+
+Once a minute (also on the page's log):
+
+- `heap: … B free, … B lowest since boot, largest block … B; stack left:
+  main …, net …, live …, WebSocket …; nvs entries used: … of …`. The
+  largest block matters more than the free total: a TLS handshake needs
+  blocks of several KB, the `Subscribe` answer one of up to `MAX_FRAME`
+  (24 KB). Stacks are the least each has had left; `?` until measured.
+- `frames: … in 60 s, longest gap … ms`: about 3000 frames is smooth; a gap
+  of 100 ms or more is a visible jerk (usually a TLS handshake).
+
+On each connection: `live: subscribed (session …); heap …` and, when race
+control's history is skipped, `frame larger than … bytes, dropped` followed
+by `live: after a dropped frame, heap …`: the moment the most may wait in the
+WebSocket's queue.
+
 ### Adding a stream or an event
 
 A new stream from the feed, and an event the lamp shows from it, touch these

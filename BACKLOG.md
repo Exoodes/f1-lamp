@@ -25,9 +25,8 @@ Ideas for after the course, in no particular order of size.
   qualifying, Singapore 2026-10-09), and some look too much alike.
 - **A new chequered flag.** The current one (one lit pixel in four, swapping
   every 500 ms) doesn't look good and is too short (10 s).
-- **A look of its own for each qualifying part's fastest driver?** Done
-  2026-10-15 with the same chase as pole and the winner switch; maybe a
-  look (or a switch) of its own later.
+- **A look (or a switch) of its own for each qualifying part's fastest
+  driver?** Today it's the same chase as pole, under the winner switch.
 - **The panel animated like the lamp.** Today it only takes the shown
   colour. `GET /api/state` could also send which effect shows, its settings
   and how long ago it started (e.g. breathe, yellow, 3 s a breath, started
@@ -53,6 +52,39 @@ Tests and docs:
 
 - **A sprint race fixture** when one is captured (the practice one is done:
   `tests/practice.rs`).
+
+## From the review, 2026-10-15
+
+Found against HEAD 5fdd174. Done 2026-10-15: pole after a reconnect past
+the flag, the complete `Subscribe` answer test, the sdkconfig comment (the
+partition-table setting stays default: nothing reads it), the small
+cleanups, pinned CI and the docs. What's left needs the lamp (send a build
+with `cargo ota` first) or a video:
+
+1. **`esp_websocket_client` 1.8.0** (was 1.2.3, whose destroy could free
+   the client while its task still used it). Check: reconnects in a session
+   (or a `live-now` build) with no reboot.
+2. **The WebSocket queue.** The lamp now logs `live: after a dropped frame,
+   heap … B free, largest block … B` on each connection. Read it in a
+   session; only if the heap is low there: a bounded `sync_channel`
+   (blocking send slows down TCP), or drop the chunks while the splitter
+   skips a frame.
+3. **The WebSocket task's stack** (6 KB, does the TLS handshake) is now the
+   last figure of the `heap:` line. Read it after a session; raise
+   `config::stack::WS_TASK` if little is left.
+4. **Host check on the GETs.** Check: `curl -i -H "Host: x.example"
+   http://f1-lightbox.local/api/state` answers 403, and the page still
+   works.
+5. **Start lights at a restart after a red flag?** Only the first
+   `Started` shows them (`track_state.rs:79`). Monza 2026: `Aborted`
+   01:01:07, `Started` 01:32:24. First check the video for whether it was
+   a standing start.
+
+Maybe: the length checks in `ota_route`, `check_trial` (the FallBack arm
+in its own function), `Net::round` (`log_heap`); the `wifi_up && unix_now`
+check repeated 3 times in `net.rs`; a shared body reader for `post_json`
+and the token POST. Also `started` in `TrackState` means "start lights
+sent"; rename it.
 
 ## Later
 
@@ -158,7 +190,7 @@ Tests and docs:
 - The BOOT button: it's inside the lamp.
 - Updating firmware from the web page: `cargo ota` covers it.
 - The lamp downloading races itself: replays stay embedded at build time.
-- Clippy's pedantic lints in f1-core (232 warnings, mostly `must_use`, doc
+- Clippy's pedantic lints in f1-core (237 warnings, mostly `must_use`, doc
   backticks, `# Errors`): noise for this project. Its 18 cast warnings were
   read on 2026-10-15 and are all safe (clamped, small or constant values).
   `cargo audit` stays in CI only.
