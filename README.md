@@ -159,8 +159,8 @@ Any of these work with both `cargo run --release` and `cargo ota`:
 
 - what the lamp shows, moving like the lamp (breathing, blinking, the
   safety car's chase; a flash that came and went between two of the page's
-  polls, every 2 s, plays a moment late), the session phase and the network
-  state;
+  polls, every 2 s, plays a moment late; "Animate the panel" on the Lamp tab
+  switches it off in that browser), the session phase and the network state;
 - the race log: every race event in words ("Yellow flag", "VER in the
   pits", "Fastest lap: NOR"), with its time, in step with your TV; events the
   lamp didn't show (switched off, a driver not followed) are dimmed;

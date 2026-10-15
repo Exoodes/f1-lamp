@@ -412,6 +412,13 @@
         <span class="slider"><input type="range" id="night_brightness" min="0" max="100"><output id="night_brightness_out"></output></span>
       </label>
     </section>
+
+    <!-- Kept in this browser, not on the lamp. -->
+    <section class="settings local">
+      <h2>This page</h2>
+      <p class="hint">Remembered by this browser only.</p>
+      <label>Animate the panel like the lamp <input type="checkbox" id="animate_panel"></label>
+    </section>
   </div>
 
   <!-- Events: what the lamp reacts to, and for how long. -->
@@ -633,7 +640,10 @@ let motion = { kind: "solid" };
 let motionStart = 0;
 // The word never goes quite dark, so it stays readable.
 const PANEL_FLOOR = 0.15;
-const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
+// The page's own switch, not the system's reduced-motion setting: the panel
+// is there to mirror the lamp. On unless switched off in this browser.
+let animatePanel = true;
+try { animatePanel = localStorage.getItem("animate_panel") !== "off"; } catch {}
 
 // Takes the effect from a status answer. The same effect is only re-timed
 // when the page drifted, so the polls don't make it jump.
@@ -739,7 +749,7 @@ function motionLength(m) {
 }
 
 function panelFrame(now) {
-  const still = reduceMotion.matches || document.body.classList.contains("offline");
+  const still = !animatePanel || document.body.classList.contains("offline");
   if (still) {
     flashQueue.length = 0;
     playing = null;
@@ -1325,7 +1335,7 @@ async function start() {
   });
   // `change` fires once per finished edit (slider let go, box ticked, text
   // field left), never while dragging, and bubbles up to its section.
-  for (const section of document.querySelectorAll(".settings")) {
+  for (const section of document.querySelectorAll(".settings:not(.local)")) {
     section.addEventListener("change", scheduleSave);
   }
   for (const b of document.querySelectorAll("[data-flag]")) {
@@ -1338,6 +1348,11 @@ async function start() {
     $("try_swatch").style.background = $("try_team").selectedOptions[0].dataset.color;
   };
   $("try_team").addEventListener("change", showTeam);
+  $("animate_panel").checked = animatePanel;
+  $("animate_panel").addEventListener("change", () => {
+    animatePanel = $("animate_panel").checked;
+    try { localStorage.setItem("animate_panel", animatePanel ? "on" : "off"); } catch {}
+  });
   showTeam();
   for (const b of document.querySelectorAll("[data-event]")) {
     b.addEventListener("click", () =>
