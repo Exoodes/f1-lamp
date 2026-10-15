@@ -1,77 +1,33 @@
 # F1 Lightbox backlog
 
-Ideas for after the course, in no particular order of size.
-
-## Wanted
-
 - **Overtakes from `DriverRaceInfo`.** The live feed never sends
-  `OvertakeSeries`: not in FP1, not in today's race, not even to a probe with
-  `--extra` and the F1TV token (the other token-only streams arrived). It
-  seems to be archive-only, so overtakes as built can't work live.
-  `DriverRaceInfo` (token only) arrived all race and marks each pass:
+  `OvertakeSeries` (not even with the F1TV token), so overtakes as built
+  can't work live. `DriverRaceInfo` (token only) arrives all race and marks
+  each pass:
   `{"87":{"Position":"11","OvertakeState":2},"31":{"Position":"12","OvertakeState":0}}`
   (2 = gained the place, 0 = lost it, 1 = reset a few seconds later). A car
   that pits is "passed" by several cars in a row (#5 at 00:35:29 dropped from
   17 to 20 in a second), so stops must be filtered out (in pit lane, or
-  `PitLaneTimeCollection`). The biggest of these. Test data: add the
-  capture's `DriverRaceInfo` to the Singapore race fixture
+  `PitLaneTimeCollection`). Test data: add the capture's `DriverRaceInfo`
+  (`f1-probe/captures/2026-10-11_13-40-12`) to the Singapore race fixture
   (`f1-core/tests/data/2026-singapore/race`, `tests/singapore_race.rs`).
-  The race log then fills up: it has every event now, and all drivers'
-  overtakes are about 300 a race, past its 120 lines. A line costs about
-  100 B of heap (time and text as strings); store the event and the time
-  as a number instead (about 16 B) and write the text when the page asks,
-  and send a page that just opened only the newest lines.
-
-## From the review, 2026-10-14
-
-In this order; `check.ps1` after each. The bugs and the small items are
-done (2026-10-14).
-
-Tests and docs:
-
-- **A sprint race fixture** when one is captured (the practice one is done:
-  `tests/practice.rs`).
-
-## From the review, 2026-10-15
-
-Found against HEAD 5fdd174. Done 2026-10-15: pole after a reconnect past
-the flag, the complete `Subscribe` answer test, the sdkconfig comment (the
-partition-table setting stays default: nothing reads it), the small
-cleanups, pinned CI and the docs. What's left needs the lamp (send a build
-with `cargo ota` first) or a video:
-
-1. **`esp_websocket_client` 1.8.0** (was 1.2.3, whose destroy could free
-   the client while its task still used it). Check: reconnects in a session
-   (or a `live-now` build) with no reboot.
-2. **The WebSocket queue.** The lamp now logs `live: after a dropped frame,
-   heap … B free, largest block … B` on each connection. Read it in a
-   session; only if the heap is low there: a bounded `sync_channel`
-   (blocking send slows down TCP), or drop the chunks while the splitter
-   skips a frame.
-3. **The WebSocket task's stack** (6 KB, does the TLS handshake) is now the
-   last figure of the `heap:` line. Read it after a session; raise
-   `config::stack::WS_TASK` if little is left.
-4. **Host check on the GETs.** Check: `curl -i -H "Host: x.example"
-   http://f1-lightbox.local/api/state` answers 403, and the page still
-   works.
-5. **Start lights at a restart after a red flag?** Only the first
-   `Started` shows them (`track_state.rs:79`). Monza 2026: `Aborted`
-   01:01:07, `Started` 01:32:24. First check the video for whether it was
-   a standing start.
-
-## Later
-
-- **Home Assistant over MQTT.** Written by me: the lamp's state out,
-  the web page's commands in.
-
-## Maybe
-
-- **Overtakes without an F1TV token**, from position swaps in `DriverList`
-  minus pit stops (`PitLaneTimeCollection`). Only if `DriverRaceInfo` (see
-  Wanted) isn't enough.
-
-## Open questions
-
+  The race log then fills up: all drivers' overtakes are about 300 a race,
+  past its 120 lines. A line costs about 100 B of heap (time and text as
+  strings); store the event and the time as a number instead (about 16 B),
+  write the text when the page asks, and send a page that just opened only
+  the newest lines.
+- **Check `esp_websocket_client` 1.8.0 on the lamp:** reconnects in a
+  session (or a `live-now` build) with no reboot.
+- **Read the WebSocket queue's heap in a session:** the lamp logs
+  `live: after a dropped frame, heap … B free, largest block … B` on each
+  connection. Only if the heap is low there: a bounded `sync_channel`
+  (blocking send slows down TCP), or drop the chunks while the splitter
+  skips a frame.
+- **Read the WebSocket task's stack after a session:** the last figure of
+  the `heap:` line (6 KB, it does the TLS handshake). Raise
+  `config::stack::WS_TASK` if little is left.
+- **Check the host check on the GETs:** `curl -i -H "Host: x.example"
+  http://f1-lightbox.local/api/state` answers 403, and the page still works.
 - **How to sync the TV delay easily, also before a race?** Ideas, most
   useful first:
   - Lap times as the TV shows them: "VER 1:32.456" on the page at the
@@ -89,79 +45,14 @@ with `cargo ota` first) or a video:
     flag: easier to judge by ear while watching.
   - Calibration mode: for a few minutes the lamp gives a tiny flash at each
     leader lap change or sector, to match against the TV next to it.
-  - A delay per stream ("F1 TV", "TV broadcast"), switched with one tap; this
-    stream was steady at 43-44 s (FP1, qualifying Singapore 2026).
+  - A delay per stream ("F1 TV", "TV broadcast"), switched with one tap.
   - Suggest from history: the median of the last few delays found.
   - A delay change applies to events arriving afterwards only; retiming the
     events already waiting would make a correction act at once (matters
     just before the start lights).
   - A fixed 0.2-0.3 s lead: a lamp a moment early feels in sync, a late one
     laggy.
-  - Streams drift (pausing, buffering): only a quick correction helps.
-  - Probably not worth it: reading F1 TV's video timestamps in the browser
-    (exact, but research and F1 TV only); a light sensor or microphone on
-    the lamp (too complex).
-  - Before a race the feed has little the broadcast shows: "GREEN LIGHT -
-    PIT EXIT OPEN" about 40 minutes before, "PIT EXIT CLOSED" later, cars
-    leaving the pits (`InPit`). The feed has no countdown to the start, and
-    SessionStatus `Started` comes at lights out, not at the formation lap
-    (Monza 2026 race: lap 2 began 88 s after it, a normal first lap). So the
-    start lights depend on the delay set beforehand.
-
-## Seen in sessions
-
-- **Qualifying knockouts come late:** the feed marks the knocked-out drivers
-  (`TimingData` `KnockedOut`) only when the next part is announced, about 6
-  minutes after the chequered flag (Monza 2026). The leader, too, can
-  change after the flag: at Monza a new leader came 70 s after Q3's clock
-  ran out.
-
-- **Race Singapore, 2026-10-11:** TV delay about 46 s (HAM's fastest lap:
-  feed 14:40:31, lamp 14:41:17). Lights out in the feed 14:03:41. No
-  overtakes (see Wanted), one fastest lap missed (see Wanted). VER, PIA, HAD
-  set fastest laps on laps 35-36 within 3 minutes (feed 15:01:31, 15:01:57,
-  15:04:33), all proper `Position: 1` messages; not confirmed on the lamp
-  because the saved log stops at 14:57: check the video at about 15:02:17,
-  15:02:43, 15:05:19. The race log repeated "Session started" every 2 s
-  (paging bug, fixed after the race, not yet flashed). Heap lowest since
-  boot 41,788 B.
-- **Sprint qualifying Singapore, 2026-10-09:** pole came too early, right
-  after the chequered flag, while many drivers were still on their flying
-  laps (that build was older than 28ce6c2). 28ce6c2 made it wait for
-  `Finalised`, 18 min 51 s after SQ3's flag here; now it waits until every
-  car on track has finished its lap, at most 2 minutes (88 s in this
-  session). Also seen: the lamp went white during SQ1's red flag while the
-  session was `Inactive` before the restart; fixed, it stays red now.
-- **Qualifying Singapore, 2026-10-10:** TV delay 44 s all session (feed
-  green 15:30:02, lamp 15:30:46; each chequered flag the same). Pole (#3)
-  came 2 min after Q3's flag, at the cap: the lamp had reconnected at
-  16:25:20, mid-Q3, so it knew nothing about cars already in the garage
-  (the timing snapshot is too large and is dropped). To check against the
-  archive once it's up: when every car was done without the reconnect.
-  No red flag, so that fix is still untested live. Two WiFi drops an hour
-  apart (15:22, 16:23; the router's fault), ~1 min 45 s without the feed
-  each. Lowest heap since boot 46,576 B, reached before 15:21 (earlier
-  measurements ~120 KB); worth finding what took it. Largest block right
-  after the mid-session reconnect: 32,768 B.
-- **FP1 Singapore, 2026-10-09:** the TV delay is about 43 s. The logs and
-  everything else worked.
-- **Pit stops in practice** mostly don't show, and that's the feed: of 78
-  `PitLaneTimeCollection` messages only 19 had a `Duration`, the rest
-  `"Duration":""` (e.g. a stop to change the setup). The lamp needs the
-  duration to tell a stop from a red-flag wait.
-- **No overtakes in practice:** the feed sends none. With the F1TV token, both
-  the lamp and a probe run with `--extra` got no `OvertakeSeries` data in FP1;
-  overtakes come only in races (and sprints).
-
-## Not planned
-
-- Reworking the effects, a new chequered flag, and a look of its own for
-  each qualifying part's fastest driver (decided 2026-10-15).
-- The BOOT button: it's inside the lamp.
-- Updating firmware from the web page: `cargo ota` covers it.
-- Replays on the lamp: removed 2026-10-15 (never used, and they held the
-  image size back). The tests still play recorded sessions in f1-core.
-- Clippy's pedantic lints in f1-core (237 warnings, mostly `must_use`, doc
-  backticks, `# Errors`): noise for this project. Its 18 cast warnings were
-  read on 2026-10-15 and are all safe (clamped, small or constant values).
-  `cargo audit` stays in CI only.
+  - Before a race the feed has little the broadcast shows ("GREEN LIGHT -
+    PIT EXIT OPEN" about 40 minutes before, cars leaving the pits), and
+    `Started` comes at lights out, so the start lights depend on the delay
+    set beforehand.
