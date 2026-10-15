@@ -74,8 +74,7 @@ with `cargo ota` first) or a video:
    01:01:07, `Started` 01:32:24. First check the video for whether it was
    a standing start.
 
-Maybe: `check_trial` (the FallBack arm
-in its own function), `Net::round` (`log_heap`); the `wifi_up && unix_now`
+Maybe: `Net::round` (`log_heap`); the `wifi_up && unix_now`
 check repeated 3 times in `net.rs`; a shared body reader for `post_json`
 and the token POST.
 

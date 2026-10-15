@@ -98,27 +98,29 @@ fn check_trial(nvs: &EspNvs<NvsDefault>) {
                 Err(e) => log::error!("ota: can't count the trial boot, so no trial: {e}"),
             }
         }
-        BootDecision::FallBack => {
-            // Cleared first: whatever happens next, no endless switching. If
-            // it can't be cleared, the other firmware would find the same
-            // trial, so stay.
-            if let Err(e) = ota_trial::end(&mut trial) {
-                log::error!("ota: can't end the trial, staying on this firmware: {e}");
-                return;
-            }
-            match switch_to_other_slot() {
-                Ok(()) => {
-                    let _ = nvs.set_u8(OTA_FELL_BACK, 1);
-                    log::error!(
-                        "ota: new firmware never got healthy; going back to the previous one"
-                    );
-                    system::restart();
-                }
-                // E.g. the other slot was half overwritten: nothing to go back
-                // to, so carry on with what runs.
-                Err(e) => log::error!("ota: can't go back to the previous firmware: {e:#}"),
-            }
+        BootDecision::FallBack => fall_back(nvs, &mut trial),
+    }
+}
+
+/// The firmware on trial never got healthy: ends the trial and restarts
+/// into the previous firmware, or carries on if there's none to go back to.
+fn fall_back(nvs: &EspNvs<NvsDefault>, trial: &mut NvsTrial<'_>) {
+    // Cleared first: whatever happens next, no endless switching. If it
+    // can't be cleared, the other firmware would find the same trial, so
+    // stay.
+    if let Err(e) = ota_trial::end(trial) {
+        log::error!("ota: can't end the trial, staying on this firmware: {e}");
+        return;
+    }
+    match switch_to_other_slot() {
+        Ok(()) => {
+            let _ = nvs.set_u8(OTA_FELL_BACK, 1);
+            log::error!("ota: new firmware never got healthy; going back to the previous one");
+            system::restart();
         }
+        // E.g. the other slot was half overwritten: nothing to go back to,
+        // so carry on with what runs.
+        Err(e) => log::error!("ota: can't go back to the previous firmware: {e:#}"),
     }
 }
 
