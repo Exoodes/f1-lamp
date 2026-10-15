@@ -516,6 +516,38 @@ mod tests {
     }
 
     #[test]
+    fn joining_after_the_last_qualifying_flag_shows_pole_at_the_cap() {
+        // Car 81 has sent no TimingData, so it may still be on track; the
+        // two minutes count from the first update after connecting.
+        let mut live = LiveSession::new(64 * 1024);
+        live.receive(
+            completion(
+                r#"{"SessionInfo":{"Type":"Qualifying","Name":"Qualifying"},
+                "SessionData":{"Series":[{"Utc":"t","QualifyingPart":3}]},
+                "DriverList":{"81":{"TeamColour":"F47600"}},
+                "TopThree":{"Lines":[{"RacingNumber":"81"}]},
+                "SessionStatus":{"Status":"Finished"}}"#,
+            )
+            .as_bytes(),
+        );
+        let heartbeat = |at: &str| {
+            format!(
+                r#"{{"type":1,"target":"feed","arguments":["Heartbeat",{{"Utc":"{at}"}},"{at}"]}}{RS}"#
+            )
+        };
+        let r = live.receive(heartbeat("2026-10-09T09:00:00Z").as_bytes());
+        assert!(r.events.is_empty());
+        let r = live.receive(heartbeat("2026-10-09T09:02:01Z").as_bytes());
+        assert_eq!(
+            r.events,
+            [RaceEvent::Winner {
+                driver: 81,
+                team_color: "#f47600".parse().unwrap()
+            }]
+        );
+    }
+
+    #[test]
     fn bytes_can_arrive_in_any_pieces() {
         let (_, whole) = racing();
         let mut live = LiveSession::new(64 * 1024);

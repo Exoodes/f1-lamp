@@ -74,7 +74,8 @@ impl Car {
 /// From qualifying's last flag until pole is known.
 #[derive(Debug)]
 struct LastLaps {
-    /// Feed time of the flag; `None` before the first timestamp.
+    /// Feed time of the flag; `None` until the first timestamp, which then
+    /// stands in for it.
     flag_at: Option<Duration>,
     /// The cars that may still set a time, with their lap count at the
     /// flag. A car is done when it crosses the line (the count changes) or
@@ -112,7 +113,13 @@ impl Tracker {
     /// replay's position. Returns pole when the cars' last laps run out of
     /// time.
     pub fn tick(&mut self, at: Duration) -> Option<RaceEvent> {
-        self.now = Some(self.now.map_or(at, |now| now.max(at)));
+        let now = self.now.map_or(at, |now| now.max(at));
+        self.now = Some(now);
+        // A flag before the first timestamp (in the state on connecting)
+        // counts from the first one: otherwise the cap never runs out.
+        if let Some(last) = &mut self.last_laps {
+            last.flag_at.get_or_insert(now);
+        }
         self.pole_after_last_laps()
     }
 
@@ -890,6 +897,21 @@ mod tests {
     fn pole_comes_two_minutes_after_the_flag_at_the_latest() {
         let mut t = q3_flag();
         timing(&mut t, r#"{"Lines":{"10":{"NumberOfLaps":15}}}"#);
+        assert_eq!(
+            t.tick(secs(1000) + LAST_LAPS_MAX - Duration::from_millis(1)),
+            None
+        );
+        assert_eq!(t.tick(secs(1000) + LAST_LAPS_MAX), winner(10, "#00a1e8"));
+    }
+
+    #[test]
+    fn a_flag_before_any_timestamp_counts_from_the_first_one() {
+        // Connected after the flag: the state has no timestamp.
+        let mut t = qualifying();
+        part(&mut t, 3);
+        timing(&mut t, r#"{"Lines":{"10":{"NumberOfLaps":14}}}"#);
+        assert_eq!(finish(&mut t), None);
+        assert_eq!(t.tick(secs(1000)), None);
         assert_eq!(
             t.tick(secs(1000) + LAST_LAPS_MAX - Duration::from_millis(1)),
             None
