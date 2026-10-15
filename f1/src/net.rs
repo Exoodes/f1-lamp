@@ -312,6 +312,12 @@ impl<'a> Net<'a> {
         self.heartbeat.beat(Instant::now());
     }
 
+    /// Unix seconds now, once the clock is set and WiFi is up: what every
+    /// OpenF1 request needs.
+    fn online_now(&self) -> Option<i64> {
+        clock::unix_now().filter(|_| self.wifi_up())
+    }
+
     fn wifi_up(&self) -> bool {
         self.wifi.is_up().unwrap_or(false)
     }
@@ -409,7 +415,7 @@ impl<'a> Net<'a> {
     /// just before or during a session. Returns when it's next due. Never
     /// fails: the lamp works without a calendar.
     fn update_calendar(&mut self, now: Instant) -> Instant {
-        let (Some(unix), true) = (clock::unix_now(), self.wifi_up()) else {
+        let Some(unix) = self.online_now() else {
             return now + CALENDAR_WAITING_EVERY;
         };
         let feed_running = self.shared.live.feed_running();
@@ -489,7 +495,7 @@ impl<'a> Net<'a> {
     /// Returns when to look again: at once after a success, as more may be
     /// missing. Never fails: the page works without results.
     fn update_results(&mut self, now: Instant) -> Instant {
-        let (Some(unix), true) = (clock::unix_now(), self.wifi_up()) else {
+        let Some(unix) = self.online_now() else {
             return now + RESULTS_EVERY;
         };
         let calendar = &self.schedule.calendar;
@@ -539,7 +545,7 @@ impl<'a> Net<'a> {
     /// looks it up and sends `RaceEvent::Winner`. Failures only log: it's
     /// tried again a minute later.
     fn look_for_winner(&mut self) -> anyhow::Result<()> {
-        let (Some(now_unix), true) = (clock::unix_now(), self.wifi_up()) else {
+        let Some(now_unix) = self.online_now() else {
             return Ok(());
         };
         let lookup = schedule::winner_lookup(
