@@ -386,7 +386,7 @@ places, in this order:
 
 | Task | Stack | Priority | Does |
 |---|---|---|---|
-| main (render loop) | 8 KB (`sdkconfig.defaults`) | 6 | the `Controller`, the LEDs, saving settings; checks the threads |
+| main (render loop) | 12 KB (`sdkconfig.defaults`) | 6 | the `Controller`, the LEDs, saving settings; checks the threads |
 | net | 16 KB | 5 | WiFi, the clock, OpenF1, starts the web server |
 | live | 12 KB | 5 | negotiate, the WebSocket, parsing the feed |
 | web handlers | 10 KB | 5 | every request, OTA uploads included |

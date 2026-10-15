@@ -1,6 +1,7 @@
 # The main task is the render loop: the controller, serialising the snapshot
-# to JSON and logging it. The default 3 KB is too small for that.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# to JSON and logging it. The default 3 KB is too small for that, and 8 KB
+# had only 488 B left at its lowest (2026-10-15).
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=12288
 
 # Above their defaults, as in esp-idf-template; never measured lower.
 CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
