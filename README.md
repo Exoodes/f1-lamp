@@ -237,6 +237,8 @@ the lamp:
   a red flag);
 - the last half hour of the 2026 Singapore GP FP1, captured live by the
   probe (VSC ending, chequered flag in practice);
+- the whole 2026 Singapore GP race, captured live by the probe (start
+  lights, two VSCs, fastest laps, pit stops, last lap, winner);
 - the live feed's answer to `Subscribe` after the 2026 Bahrain GP race, from
   the probe (live data differs from the archive);
 - the hand-written showcase (`--features showcase`);

@@ -13,15 +13,13 @@ Ideas for after the course, in no particular order of size.
   (2 = gained the place, 0 = lost it, 1 = reset a few seconds later). A car
   that pits is "passed" by several cars in a row (#5 at 00:35:29 dropped from
   17 to 20 in a second), so stops must be filtered out (in pit lane, or
-  `PitLaneTimeCollection`). The biggest of these.
+  `PitLaneTimeCollection`). The biggest of these. Test data: add the
+  capture's `DriverRaceInfo` to the Singapore race fixture
+  (`f1-core/tests/data/2026-singapore/race`, `tests/singapore_race.rs`).
 - **The race log shows everything.** Every event, not only what the lamp
   shows: pit stops when switched off, drivers not followed, switched-off
   effects; still in step with the TV. Lines the lamp didn't show dimmed.
   Today logging is in `controller.rs` `apply_race_event` after `shows()`.
-- **Today's race as test data**, from the probe capture
-  `f1-probe/captures/2026-10-11_13-40-12`, trimmed to the streams the lamp
-  uses (TimingStats 236 KB; only the needed lines). Covers the fastest-lap
-  fix; with `DriverRaceInfo`, the overtakes.
 - **A "winner" for practice.** E.g. the team colour of the driver with the
   fastest lap when the session ends, like pole after qualifying.
 - **Rework the effects.** Some are too fast (seen again in sprint
