@@ -302,22 +302,7 @@ impl<'a> Net<'a> {
             self.due.results = self.update_results(now);
         }
         if now >= self.due.heap_log {
-            system::NET_STACK.measure();
-            let heap = system::heap();
-            let stack = |s: &system::StackLeft| s.get().map_or("?".into(), |b| format!("{b} B"));
-            let nvs =
-                system::nvs_use().map_or("?".into(), |n| format!("{} of {}", n.used, n.total));
-            log::info!(
-                "heap: {} B free, {} B lowest since boot, largest block {} B; stack left: main {}, net {}, live {}, WebSocket {}; nvs entries used: {}",
-                heap.free,
-                heap.lowest,
-                heap.largest_block,
-                stack(&system::MAIN_STACK),
-                stack(&system::NET_STACK),
-                stack(&system::LIVE_STACK),
-                stack(&system::WS_STACK),
-                nvs
-            );
+            log_heap();
             self.due.heap_log = now + HEAP_LOG_EVERY;
         }
         Ok(())
@@ -627,6 +612,26 @@ fn fetch_calendar(now_unix: i64) -> anyhow::Result<Vec<Session>> {
     // `None` is OpenF1's 404 for "no sessions", e.g. in the winter break.
     let dtos = http::get_json::<Vec<SessionDto>>(&url)?.unwrap_or_default();
     Ok(openf1::all_sessions(dtos))
+}
+
+/// The minute `heap:` line: the heap, each thread's least stack left and
+/// NVS use. On the net thread, which measures its own stack here.
+fn log_heap() {
+    system::NET_STACK.measure();
+    let heap = system::heap();
+    let stack = |s: &system::StackLeft| s.get().map_or("?".into(), |b| format!("{b} B"));
+    let nvs = system::nvs_use().map_or("?".into(), |n| format!("{} of {}", n.used, n.total));
+    log::info!(
+        "heap: {} B free, {} B lowest since boot, largest block {} B; stack left: main {}, net {}, live {}, WebSocket {}; nvs entries used: {}",
+        heap.free,
+        heap.lowest,
+        heap.largest_block,
+        stack(&system::MAIN_STACK),
+        stack(&system::NET_STACK),
+        stack(&system::LIVE_STACK),
+        stack(&system::WS_STACK),
+        nvs
+    );
 }
 
 fn log_calendar(sessions: &[Session], now_unix: i64) {
