@@ -35,6 +35,13 @@ CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT=y
 # server keeps one buffer of this size.
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
 
-# The XIAO ESP32-C3 has 4 MB of flash, and partitions.csv uses all of it
-# (the second app slot ends at 0x3F2000).
+# The XIAO ESP32-C3 has 4 MB of flash, and partitions.csv uses nearly all of
+# it (the second app slot ends at 0x3F0000, otadata at 0x3F2000).
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# The partition table stays at ESP-IDF's default (single app) here on
+# purpose; nothing reads that setting. espflash (the cargo runner) and
+# ota.ps1 get partitions.csv themselves, and the bootloader and the OTA code
+# read the table from flash. Pointing CONFIG_PARTITION_TABLE_CUSTOM_FILENAME
+# at partitions.csv would need a path relative to esp-idf-sys's build folder
+# deep in target/, which moves with cargo's layout.
