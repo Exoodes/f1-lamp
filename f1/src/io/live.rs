@@ -393,6 +393,16 @@ fn handle(
     for problem in &received.problems {
         log::warn!("live: {problem}");
     }
+    if received.dropped_frames > 0 {
+        // The rest of that frame may still wait in the WebSocket's queue,
+        // which has no limit: is the heap low now?
+        let heap = system::heap();
+        log::warn!(
+            "live: after a dropped frame, heap {} B free, largest block {} B",
+            heap.free,
+            heap.largest_block
+        );
+    }
     if received.subscribed {
         on_subscribed(received.session_key, conn, tx, health, retry)?;
     }

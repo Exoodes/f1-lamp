@@ -87,6 +87,9 @@ pub struct Received {
     pub events: Vec<RaceEvent>,
     /// Things worth a log line: frames that didn't parse, refused calls.
     pub problems: Vec<String>,
+    /// Frames too large for the splitter, among `problems`: the moment the
+    /// most may be waiting in the WebSocket's queue.
+    pub dropped_frames: usize,
     /// The server answered `Subscribe` in this batch.
     pub subscribed: bool,
     /// The server is closing the connection, with its reason.
@@ -160,7 +163,12 @@ impl LiveSession {
         for frame in self.splitter.push(bytes) {
             match frame {
                 Ok(frame) => self.frame(&frame, &mut out),
-                Err(e) => out.problems.push(e.to_string()),
+                Err(e) => {
+                    if matches!(e, signalr::FrameError::TooLarge { .. }) {
+                        out.dropped_frames += 1;
+                    }
+                    out.problems.push(e.to_string());
+                }
             }
         }
         out.session_key = self.session_key;
@@ -426,11 +434,13 @@ mod tests {
             vec![r#"{"Category":"Other","Message":"LONG HISTORY"}"#; 40].join(",")
         );
         live.expect(history.len());
-        let mut problems = 0;
+        let (mut problems, mut dropped) = (0, 0);
         for piece in history.as_bytes().chunks(100) {
-            problems += live.receive(piece).problems.len();
+            let r = live.receive(piece);
+            problems += r.problems.len();
+            dropped += r.dropped_frames;
         }
-        assert_eq!(problems, 1);
+        assert_eq!((problems, dropped), (1, 1));
         let r = live.receive(feed("TrackStatus", r#"{"Status":"2"}"#).as_bytes());
         assert_eq!(r.events, [RaceEvent::TrackFlag(TrackFlag::Yellow)]);
     }
