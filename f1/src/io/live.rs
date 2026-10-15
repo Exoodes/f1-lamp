@@ -394,16 +394,7 @@ fn handle(
         log::warn!("live: {problem}");
     }
     if received.subscribed {
-        conn.subscribed();
-        retry.reset();
-        tell(tx, health.working())?;
-        let heap = system::heap();
-        log::info!(
-            "live: subscribed (session {:?}); heap {} B free, largest block {} B",
-            received.session_key,
-            heap.free,
-            heap.largest_block
-        );
+        on_subscribed(received.session_key, conn, tx, health, retry)?;
     }
     if let Some(running) = received.running {
         control.set_running(running);
@@ -411,7 +402,38 @@ fn handle(
     for (number, name) in received.names {
         racelog::set_name(number, name);
     }
-    for info in received.timing {
+    forward_timing(received.timing, tx)?;
+    forward_events(received.events, received.session_key, control, tx)?;
+    if let Some(reason) = received.closed {
+        bail!("server closed the connection: {reason}");
+    }
+    Ok(())
+}
+
+/// The answer to `Subscribe`: the connection works.
+fn on_subscribed(
+    session_key: Option<u32>,
+    conn: &mut Connection,
+    tx: &SyncSender<Input>,
+    health: &mut FeedHealth,
+    retry: &mut Backoff,
+) -> anyhow::Result<()> {
+    conn.subscribed();
+    retry.reset();
+    tell(tx, health.working())?;
+    let heap = system::heap();
+    log::info!(
+        "live: subscribed (session {session_key:?}); heap {} B free, largest block {} B",
+        heap.free,
+        heap.largest_block
+    );
+    Ok(())
+}
+
+/// The session clock and the leader's lap, for the page's TV timing. A clock
+/// reading is timed by when it was valid, not when it arrived.
+fn forward_timing(timing: Vec<TimingInfo>, tx: &SyncSender<Input>) -> anyhow::Result<()> {
+    for info in timing {
         let arrival = Instant::now();
         let at = match (info, clock::unix_now_ms()) {
             (TimingInfo::Clock { utc_ms, .. }, Some(now_ms)) => {
@@ -422,19 +444,27 @@ fn handle(
         tx.send(Input::Timing { info, at })
             .context("render loop is gone")?;
     }
-    for event in received.events {
+    Ok(())
+}
+
+/// Race events to the render loop. A winner is noted, so the net thread
+/// doesn't look it up again.
+fn forward_events(
+    events: Vec<RaceEvent>,
+    session_key: Option<u32>,
+    control: &LiveControl,
+    tx: &SyncSender<Input>,
+) -> anyhow::Result<()> {
+    for event in events {
         log::info!("live: {event:?}");
         if matches!(event, RaceEvent::Winner { .. }) {
-            *control.winner_shown.lock().unwrap() = received.session_key;
+            *control.winner_shown.lock().unwrap() = session_key;
         }
         tx.send(Input::Race {
             event,
             received: Instant::now(),
         })
         .context("render loop is gone")?;
-    }
-    if let Some(reason) = received.closed {
-        bail!("server closed the connection: {reason}");
     }
     Ok(())
 }

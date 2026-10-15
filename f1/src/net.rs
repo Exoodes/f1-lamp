@@ -33,7 +33,7 @@ use crate::{
         clock, http, live::LiveControl, mdns, ota, storage::ScheduleStore, system,
         token_store::TokenKeeper, wifi,
     },
-    web,
+    web::{self, WebState},
 };
 
 /// What the net thread shares with the other threads.
@@ -367,14 +367,14 @@ impl<'a> Net<'a> {
                 snapshot, tokens, ..
             } = &self.shared;
             self.server = Some(
-                web::start(
-                    Arc::clone(snapshot),
-                    Arc::clone(&self.schedule.page),
-                    Arc::clone(&self.schedule.moved),
-                    Arc::clone(&self.results),
-                    self.tx.clone(),
-                    Arc::clone(tokens),
-                )
+                web::start(WebState {
+                    snapshot: Arc::clone(snapshot),
+                    schedule: Arc::clone(&self.schedule.page),
+                    moved: Arc::clone(&self.schedule.moved),
+                    results: Arc::clone(&self.results),
+                    tx: self.tx.clone(),
+                    tokens: Arc::clone(tokens),
+                })
                 .context("start web server")?,
             );
             self.server_since = Some(now);

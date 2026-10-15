@@ -61,14 +61,29 @@ const TEXT: &str = "text/plain; charset=utf-8";
 
 /// Starts the web server. Handlers read the snapshot and hand inputs to the
 /// render loop; they never block on it. Dropping the server stops it.
-pub fn start(
-    snapshot: Arc<Mutex<Snapshot>>,
-    schedule: Arc<Mutex<Vec<Session>>>,
-    moved: Arc<Mutex<Moved>>,
-    results: Arc<Mutex<Results>>,
-    tx: SyncSender<Input>,
-    tokens: Arc<TokenKeeper>,
-) -> anyhow::Result<EspHttpServer<'static>> {
+/// What the web server's handlers share with the rest of the firmware.
+pub struct WebState {
+    /// Written by the render loop.
+    pub snapshot: Arc<Mutex<Snapshot>>,
+    /// The calendar for the page's weekend; set by the net thread, like
+    /// `moved` and `results`.
+    pub schedule: Arc<Mutex<Vec<Session>>>,
+    pub moved: Arc<Mutex<Moved>>,
+    pub results: Arc<Mutex<Results>>,
+    /// Commands and settings for the render loop.
+    pub tx: SyncSender<Input>,
+    pub tokens: Arc<TokenKeeper>,
+}
+
+pub fn start(state: WebState) -> anyhow::Result<EspHttpServer<'static>> {
+    let WebState {
+        snapshot,
+        schedule,
+        moved,
+        results,
+        tx,
+        tokens,
+    } = state;
     let config = Configuration {
         stack_size: crate::config::stack::WEB,
         ..Default::default()

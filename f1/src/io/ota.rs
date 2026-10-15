@@ -20,7 +20,7 @@ use anyhow::{bail, Context};
 use esp_idf_svc::{
     http::server::{EspHttpConnection, Request},
     nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault},
-    ota::EspOta,
+    ota::{EspOta, EspOtaUpdate},
     sys::{
         esp, esp_app_desc_t, esp_app_get_description, esp_fill_random,
         esp_ota_get_next_update_partition, esp_ota_get_partition_description,
@@ -296,14 +296,31 @@ pub fn receive(
         .initiate_update_with_known_size(len)
         .context("start the update")?;
     log::info!("ota: receiving {len} bytes");
+    // On any error from here `update` is dropped, which aborts it: the slot
+    // stays unused.
+    write_image(req, &mut update, &mut check, len)?;
+    if !check.verify(OTA_KEY, tags.image) {
+        bail!("wrong update key, or the image changed on the way");
+    }
+    activate(update)?;
+    log::info!("ota: done, {len} bytes; restarting into the new firmware");
+    Ok(())
+}
 
+/// Writes the `len` bytes of the request body to the free slot, hashing
+/// them for the check at the end.
+fn write_image(
+    req: &mut Request<&mut EspHttpConnection<'_>>,
+    update: &mut EspOtaUpdate<'_>,
+    check: &mut UploadCheck,
+    len: usize,
+) -> anyhow::Result<()> {
     let mut buf = vec![0u8; CHUNK];
     let mut received = 0;
     let mut next_report = len / 4;
     while received < len {
         let n = req.read(&mut buf).context("read the upload")?;
         if n == 0 {
-            // `update` is dropped here, which aborts it: the slot stays unused.
             bail!("upload ended after {received} of {len} bytes");
         }
         // The first write also checks that this is an ESP32 image at all.
@@ -317,11 +334,11 @@ pub fn receive(
             next_report += len / 4;
         }
     }
+    Ok(())
+}
 
-    if !check.verify(OTA_KEY, tags.image) {
-        bail!("wrong update key, or the image changed on the way");
-    }
-    // The new firmware starts on trial, then its slot becomes the boot slot.
+/// The new firmware starts on trial, then its slot becomes the boot slot.
+fn activate(update: EspOtaUpdate<'_>) -> anyhow::Result<()> {
     let image = update_image()?;
     let complete = move || update.complete();
     let armed = match trial_store() {
@@ -332,6 +349,5 @@ pub fn receive(
         ArmError::Store(e) => anyhow::Error::from(e).context("start the trial"),
         ArmError::Switch(e) => anyhow::Error::from(e).context("the image doesn't check out"),
     })?;
-    log::info!("ota: done, {received} bytes; restarting into the new firmware");
     Ok(())
 }

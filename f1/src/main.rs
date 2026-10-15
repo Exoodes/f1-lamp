@@ -64,6 +64,13 @@ fn main() {
 
 fn run() -> anyhow::Result<()> {
     let booted = Instant::now();
+    let (lamp, rx, threads) = start()?;
+    render_loop(lamp, &rx, &threads, booted)
+}
+
+/// Everything before the first frame: the trial check, the settings, the
+/// LEDs and the threads.
+fn start() -> anyhow::Result<(Lamp, Receiver<Input>, [Watched; 2])> {
     if config::wifi::SSID.is_empty() {
         log::warn!("WiFi SSID is empty: set wifi_ssid in f1/cfg.toml");
     }
@@ -90,10 +97,11 @@ fn run() -> anyhow::Result<()> {
     // Written by the render loop, read by the web server.
     let snapshot = Arc::new(Mutex::new(controller.snapshot()));
 
+    // Each thread and the web server send through their own clone.
     let (tx, rx) = mpsc::sync_channel::<Input>(config::INPUT_QUEUE);
     let threads = spawn_threads(peripherals.modem, sys_loop, nvs, &tx, &snapshot)?;
 
-    let mut lamp = Lamp {
+    let lamp = Lamp {
         last_snapshot: controller.snapshot(),
         controller,
         leds,
@@ -103,8 +111,14 @@ fn run() -> anyhow::Result<()> {
         snapshot,
         stats: FrameStats::new(Instant::now()),
     };
-    // From here on the main task is the render loop: it must not wait for
-    // the network threads' work. Why 6: `config::RENDER_PRIORITY`.
+    Ok((lamp, rx, threads))
+}
+
+/// The main task from here on: a frame every `FRAME_INTERVAL`, and a look
+/// at the threads every `THREAD_CHECK_EVERY`.
+fn render_loop(mut lamp: Lamp, rx: &Receiver<Input>, threads: &[Watched], booted: Instant) -> ! {
+    // It must not wait for the network threads' work. Why 6:
+    // `config::RENDER_PRIORITY`.
     io::system::set_own_priority(config::RENDER_PRIORITY);
     if let Err(e) = io::system::watch_own_task(config::RENDER_WATCHDOG) {
         log::warn!("watchdog not started: {e:#}");
@@ -115,10 +129,10 @@ fn run() -> anyhow::Result<()> {
         io::system::feed_watchdog();
         let now = Instant::now();
         if now >= next_check {
-            supervise(&threads, booted, now);
+            supervise(threads, booted, now);
             next_check = now + THREAD_CHECK_EVERY;
         }
-        lamp.take_inputs(&rx, now);
+        lamp.take_inputs(rx, now);
         lamp.show(now);
         io::racelog::record(lamp.controller.take_log());
         lamp.publish_snapshot();
