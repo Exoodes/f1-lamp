@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use esp_idf_svc::hal::{modem::Modem, peripherals::Peripherals};
+use esp_idf_svc::hal::{modem::Modem, peripherals::Peripherals, task::watchdog::TWDT};
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use f1_core::{
     controller::Controller, frame::Frame, frame_stats::FrameStats, heartbeat::Heartbeat,
@@ -64,13 +64,14 @@ fn main() {
 
 fn run() -> anyhow::Result<()> {
     let booted = Instant::now();
-    let (lamp, rx, threads) = start()?;
-    render_loop(lamp, &rx, &threads, booted)
+    let (lamp, rx, threads, twdt) = start()?;
+    render_loop(lamp, &rx, &threads, twdt, booted)
 }
 
 /// Everything before the first frame: the trial check, the settings, the
-/// LEDs and the threads.
-fn start() -> anyhow::Result<(Lamp, Receiver<Input>, [Watched; 2])> {
+/// LEDs and the threads. Also hands over the task watchdog, for the render
+/// loop.
+fn start() -> anyhow::Result<(Lamp, Receiver<Input>, [Watched; 2], TWDT<'static>)> {
     if config::wifi::SSID.is_empty() {
         log::warn!("WiFi SSID is empty: set wifi_ssid in f1/cfg.toml");
     }
@@ -111,22 +112,38 @@ fn start() -> anyhow::Result<(Lamp, Receiver<Input>, [Watched; 2])> {
         snapshot,
         stats: FrameStats::new(Instant::now()),
     };
-    Ok((lamp, rx, threads))
+    Ok((lamp, rx, threads, peripherals.twdt))
 }
 
 /// The main task from here on: a frame every `FRAME_INTERVAL`, and a look
 /// at the threads every `THREAD_CHECK_EVERY`.
-fn render_loop(mut lamp: Lamp, rx: &Receiver<Input>, threads: &[Watched], booted: Instant) -> ! {
+fn render_loop(
+    mut lamp: Lamp,
+    rx: &Receiver<Input>,
+    threads: &[Watched],
+    twdt: TWDT<'static>,
+    booted: Instant,
+) -> ! {
     // It must not wait for the network threads' work. Why 6:
     // `config::RENDER_PRIORITY`.
     io::system::set_own_priority(config::RENDER_PRIORITY);
-    if let Err(e) = io::system::watch_own_task(config::RENDER_WATCHDOG) {
-        log::warn!("watchdog not started: {e:#}");
-    }
+    // Both live as long as the loop, which never ends; without them the
+    // lamp still runs, unwatched.
+    let mut watchdog = io::system::watchdog(twdt, config::RENDER_WATCHDOG)
+        .inspect_err(|e| log::warn!("watchdog not started: {e:#}"))
+        .ok();
+    let mut watch = watchdog.as_mut().and_then(|w| {
+        w.watch_current_task()
+            .inspect_err(|e| log::warn!("watchdog not watching: {e}"))
+            .ok()
+    });
     let mut next_check = Instant::now() + THREAD_CHECK_EVERY;
     let mut pacer = io::system::Pacer::new(FRAME_INTERVAL);
     loop {
-        io::system::feed_watchdog();
+        if let Some(watch) = &mut watch {
+            // Can't fail once the task is watched.
+            let _ = watch.feed();
+        }
         let now = Instant::now();
         if now >= next_check {
             supervise(threads, booted, now);

@@ -42,12 +42,6 @@ Ideas for after the course, in no particular order of size.
 In this order; `check.ps1` after each. The bugs and the small items are
 done (2026-10-14).
 
-Structure:
-
-- **Maybe `TWDTDriver`** instead of the raw watchdog calls (`system.rs`,
-  4 `esp_task_wdt` calls). Optional; the rest of Structure is done
-  (2026-10-15).
-
 Tests and docs:
 
 - **A sprint race fixture** when one is captured (the practice one is done:

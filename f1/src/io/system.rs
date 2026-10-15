@@ -6,7 +6,13 @@ use std::{
     time::Duration,
 };
 
-use esp_idf_svc::{hal::delay::TickType, sys};
+use esp_idf_svc::{
+    hal::{
+        delay::TickType,
+        task::watchdog::{TWDTConfig, TWDTDriver, TWDT},
+    },
+    sys,
+};
 
 /// The heap, in bytes.
 pub struct Heap {
@@ -106,27 +112,16 @@ pub fn set_own_priority(priority: u32) {
     unsafe { sys::vTaskPrioritySet(std::ptr::null_mut(), priority) }
 }
 
-/// Restarts the chip when the calling task goes `timeout` without
-/// [`feed_watchdog`]. Only this task is watched: the idle task, which a long
-/// TLS handshake can keep from running for seconds, no longer is.
-pub fn watch_own_task(timeout: Duration) -> anyhow::Result<()> {
-    let config = sys::esp_task_wdt_config_t {
-        timeout_ms: u32::try_from(timeout.as_millis())?,
-        idle_core_mask: 0,
-        trigger_panic: true,
-    };
-    // SAFETY: the watchdog is set up at boot (`CONFIG_ESP_TASK_WDT_INIT`)
-    // and `config` lives through the call.
-    sys::esp!(unsafe { sys::esp_task_wdt_reconfigure(&config) })?;
-    // SAFETY: a null handle means the calling task, which exists while it
-    // calls.
-    sys::esp!(unsafe { sys::esp_task_wdt_add(std::ptr::null_mut()) })?;
-    Ok(())
-}
-
-pub fn feed_watchdog() {
-    // SAFETY: only resets the calling task's watchdog entry.
-    unsafe { sys::esp_task_wdt_reset() };
+/// The task watchdog, set to restart the chip when a watched task goes
+/// `timeout` without feeding it. The idle task, which a long TLS handshake
+/// can keep from running for seconds, isn't watched. A task joins with
+/// `watch_current_task` and feeds through what that returns.
+pub fn watchdog(twdt: TWDT<'static>, timeout: Duration) -> anyhow::Result<TWDTDriver<'static>> {
+    let mut config = TWDTConfig::new();
+    config.duration = timeout;
+    config.panic_on_trigger = true;
+    config.subscribed_idle_tasks.clear();
+    Ok(TWDTDriver::new(twdt, &config)?)
 }
 
 pub fn heap() -> Heap {
