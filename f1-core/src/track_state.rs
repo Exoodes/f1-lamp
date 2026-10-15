@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 
 use crate::{
-    feed::{FeedMessage, LapCount, RcMessage, SessionState, SessionStatus, TrackCode},
+    feed::{FeedMessage, LapCount, RcMessage, SessionState, SessionStatus, SessionType, TrackCode},
     input::{RaceEvent, TrackFlag},
 };
 
@@ -19,7 +19,7 @@ pub struct TrackState {
     /// The feed says the session began, maybe before the lamp connected
     /// (`SessionStatus.Started`).
     begun: bool,
-    is_race: Option<bool>,
+    session_type: SessionType,
     /// Stopped by a red flag (`Aborted`) and not restarted yet: before the
     /// restart the session goes `Inactive`, still under the red flag.
     suspended: bool,
@@ -47,8 +47,8 @@ impl TrackState {
             // Only for the page's TV clock (see `live`).
             FeedMessage::Clock(_) => None,
             FeedMessage::SessionInfo(info) => {
-                if let Some(is_race) = info.is_race() {
-                    self.is_race = Some(is_race);
+                if let Some(kind) = info.session_type() {
+                    self.session_type = kind;
                 }
                 None
             }
@@ -80,7 +80,7 @@ impl TrackState {
             return None;
         }
         self.started = true;
-        (self.is_race != Some(false)).then_some(RaceEvent::StartLights)
+        self.may_be_race().then_some(RaceEvent::StartLights)
     }
 
     /// The leader starting the last lap, once: the current lap reaches the
@@ -97,7 +97,7 @@ impl TrackState {
             (self.current_lap, self.total_laps),
             (Some(lap), Some(total)) if total > 0 && lap >= total
         );
-        let racing = self.session == Some(SessionState::Started) && self.is_race != Some(false);
+        let racing = self.session == Some(SessionState::Started) && self.may_be_race();
         if !last || !racing || self.last_lap_sent {
             return None;
         }
@@ -140,6 +140,16 @@ impl TrackState {
         Some(new.map_or(RaceEvent::FlagCleared, RaceEvent::TrackFlag))
     }
 
+    /// A race, or not known yet: the start lights and the last lap would
+    /// rather show in a session they don't belong to than be missed in a
+    /// race whose SessionInfo didn't come.
+    fn may_be_race(&self) -> bool {
+        !matches!(
+            self.session_type,
+            SessionType::Qualifying | SessionType::Practice
+        )
+    }
+
     pub fn flag(&self) -> Option<TrackFlag> {
         self.shown
     }
@@ -155,7 +165,7 @@ impl TrackState {
             // Between qualifying's parts, or before a restart after a red
             // flag; also when the lamp connected only then.
             Some(Inactive) => self.started || self.begun,
-            Some(Finished) => self.is_race == Some(false),
+            Some(Finished) => !self.may_be_race(),
             _ => false,
         }
     }
@@ -567,6 +577,16 @@ mod tests {
             name: None,
             key: None,
         })
+    }
+
+    #[test]
+    fn a_start_without_session_info_has_start_lights() {
+        // Better start lights in a session they don't belong to than none
+        // in a race whose SessionInfo didn't come.
+        let mut s = TrackState::default();
+        assert!(s
+            .apply(session(SessionState::Started))
+            .contains(&RaceEvent::StartLights));
     }
 
     #[test]

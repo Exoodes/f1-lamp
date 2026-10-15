@@ -22,8 +22,8 @@ use std::{
 use crate::{
     color::Rgb,
     feed::{
-        update_team_colours, FeedMessage, OvertakeSeries, PitLaneTimes, SessionState, TimingData,
-        TimingLine, TimingStats, TopThree,
+        update_team_colours, FeedMessage, OvertakeSeries, PitLaneTimes, SessionState, SessionType,
+        TimingData, TimingLine, TimingStats, TopThree,
     },
     input::RaceEvent,
 };
@@ -85,11 +85,10 @@ struct LastLaps {
 
 #[derive(Debug, Default)]
 pub struct Tracker {
-    /// From SessionInfo; a sprint is of type "Race" too.
-    is_race: bool,
-    /// From SessionInfo. Qualifying ends each part with `Finished`; only
-    /// the last part has a winner: pole.
-    is_qualifying: bool,
+    /// From SessionInfo. Unknown has no winner: better none than a wrong
+    /// one. Qualifying ends each part with `Finished`; only the last part
+    /// has a winner: pole.
+    session_type: SessionType,
     /// From SessionData.
     qualifying_part: Option<u8>,
     /// Shown already: the feed may repeat a driver's `KnockedOut`.
@@ -122,11 +121,8 @@ impl Tracker {
         let mut events = Vec::new();
         match msg {
             FeedMessage::SessionInfo(info) => {
-                if let Some(is_race) = info.is_race() {
-                    self.is_race = is_race;
-                }
-                if let Some(is_qualifying) = info.is_qualifying() {
-                    self.is_qualifying = is_qualifying;
+                if let Some(kind) = info.session_type() {
+                    self.session_type = kind;
                 }
             }
             FeedMessage::SessionData(data) => {
@@ -160,9 +156,11 @@ impl Tracker {
     /// waits for them. `Finalised`, often many minutes later, is the
     /// fallback.
     fn session_state(&mut self, state: SessionState) -> Option<RaceEvent> {
-        let last_part = self.is_qualifying && self.qualifying_part == Some(LAST_QUALIFYING_PART);
+        let is_race = self.session_type == SessionType::Race;
+        let last_part = self.session_type == SessionType::Qualifying
+            && self.qualifying_part == Some(LAST_QUALIFYING_PART);
         match state {
-            SessionState::Finished if self.is_race => self.winner(),
+            SessionState::Finished if is_race => self.winner(),
             SessionState::Finished if last_part => {
                 self.start_last_laps();
                 self.pole_after_last_laps()

@@ -195,14 +195,28 @@ pub struct SessionInfo {
     pub key: Option<u32>,
 }
 
-impl SessionInfo {
-    pub fn is_race(&self) -> Option<bool> {
-        self.kind.as_deref().map(|k| k == "Race")
-    }
+/// What kind of session the feed is about, from SessionInfo's `Type`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SessionType {
+    /// A race or a sprint.
+    Race,
+    /// Qualifying or sprint qualifying.
+    Qualifying,
+    /// Practice, or any other type (testing): no start lights, no winner.
+    Practice,
+    /// SessionInfo hasn't said yet.
+    #[default]
+    Unknown,
+}
 
-    /// Sprint qualifying is of type "Qualifying" too.
-    pub fn is_qualifying(&self) -> Option<bool> {
-        self.kind.as_deref().map(|k| k == "Qualifying")
+impl SessionInfo {
+    /// `None` for a message without `Type`, which leaves it as it was.
+    pub fn session_type(&self) -> Option<SessionType> {
+        self.kind.as_deref().map(|kind| match kind {
+            "Race" => SessionType::Race,
+            "Qualifying" => SessionType::Qualifying,
+            _ => SessionType::Practice,
+        })
     }
 }
 
@@ -568,14 +582,26 @@ mod tests {
     fn session_info_type_race_is_a_race() {
         let info: SessionInfo =
             serde_json::from_str(r#"{"Type":"Race","Name":"Sprint","Key":1}"#).unwrap();
-        assert_eq!(info.is_race(), Some(true));
+        assert_eq!(info.session_type(), Some(SessionType::Race));
         assert_eq!(info.name.as_deref(), Some("Sprint"));
     }
 
     #[test]
-    fn session_info_qualifying_is_not_a_race() {
-        let info: SessionInfo = serde_json::from_str(r#"{"Type":"Qualifying"}"#).unwrap();
-        assert_eq!(info.is_race(), Some(false));
+    fn session_info_types_are_told_apart() {
+        let kind = |json: &str| {
+            serde_json::from_str::<SessionInfo>(json)
+                .unwrap()
+                .session_type()
+        };
+        assert_eq!(
+            kind(r#"{"Type":"Qualifying"}"#),
+            Some(SessionType::Qualifying)
+        );
+        assert_eq!(kind(r#"{"Type":"Practice"}"#), Some(SessionType::Practice));
+        // Anything else behaves like practice: no start lights, no winner.
+        assert_eq!(kind(r#"{"Type":"Testing"}"#), Some(SessionType::Practice));
+        // A message without a type changes nothing.
+        assert_eq!(kind(r#"{"Key":1}"#), None);
     }
 
     #[test]
