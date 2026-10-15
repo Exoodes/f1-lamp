@@ -25,7 +25,7 @@ Rust: the course*, with some extras of its own.
 | Start lights | five red lights going out with the TV (needs a TV delay of at least 6 s) |
 | Last lap | two white flashes when the leader starts a race's last lap |
 | Chequered flag | a white pattern (one lit LED, three dark) that jumps back and forth, for 10 s, at the end of every session; in qualifying after Q1 and Q2 too |
-| Winner | a chase in the winner's team colour, after the chequered flag; after qualifying, pole's, and after practice, the fastest driver's (once every car has finished its last lap, at most 2 minutes after the flag) |
+| Winner | a chase in the winner's team colour, after the chequered flag; in qualifying the fastest driver's after each part (pole's after the last), and after practice the fastest driver's (once every car has finished its last lap, at most 2 minutes after the flag) |
 | Fastest lap | three purple flashes, for every new session best |
 | Knocked out | the team colour fading out over 3 s (followed drivers, after Q1 and Q2; the feed says so about 6 minutes after the part's chequered flag) |
 | Pit stop | two flashes in the team colour (followed drivers) |

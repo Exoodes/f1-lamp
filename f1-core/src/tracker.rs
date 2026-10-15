@@ -1,9 +1,9 @@
 //! Driver events from the feed, each in the driver's team colour:
 //!
 //! - winner: the leader in TopThree when a race's SessionStatus becomes
-//!   `Finished`; pole, or practice's fastest driver, once every car has
-//!   finished its lap after the last flag of qualifying or practice (at
-//!   most [`LAST_LAPS_MAX`] after it);
+//!   `Finished`; the fastest driver of each qualifying part (pole after the
+//!   last) or of practice, once every car has finished its lap after the
+//!   flag (at most [`LAST_LAPS_MAX`] after it);
 //! - knocked out: a driver out of qualifying after Q1 or Q2 (TimingData,
 //!   public);
 //! - pit stop: a car leaving the pit lane (PitLaneTimeCollection, public);
@@ -34,8 +34,6 @@ const UNKNOWN_TEAM: Rgb = Rgb::WHITE;
 /// A pit-lane time longer than this isn't a pit stop: during a red flag every
 /// car waits in the pit lane, for half an hour at Monza.
 const MAX_PIT_LANE_SECS: f32 = 120.0;
-/// Qualifying (and sprint qualifying) ends with its third part.
-const LAST_QUALIFYING_PART: u8 = 3;
 /// After qualifying's last flag, pole waits at most this long for the cars
 /// still on track to finish their laps. Singapore 2026 sprint qualifying:
 /// all done 88 s after the flag; `Finalised` came after 18 minutes.
@@ -87,8 +85,8 @@ struct LastLaps {
 #[derive(Debug, Default)]
 pub struct Tracker {
     /// From SessionInfo. Unknown has no winner: better none than a wrong
-    /// one. Qualifying ends each part with `Finished`; only the last part
-    /// has a winner: pole.
+    /// one. Qualifying ends each part with `Finished`, and each part's
+    /// fastest driver shows like pole after the last.
     session_type: SessionType,
     /// From SessionData.
     qualifying_part: Option<u8>,
@@ -105,6 +103,7 @@ pub struct Tracker {
     /// Racing number at `Position: 1` in TimingStats' personal bests.
     fastest_lap_holder: Option<u8>,
     colours: HashMap<u8, Rgb>,
+    /// For this session, or this qualifying part.
     winner_sent: bool,
 }
 
@@ -128,6 +127,11 @@ impl Tracker {
             }
             FeedMessage::SessionData(data) => {
                 if let Some(part) = data.qualifying_part() {
+                    if self.qualifying_part != Some(part) {
+                        // A new part has a fastest driver of its own.
+                        self.winner_sent = false;
+                        self.last_laps = None;
+                    }
                     self.qualifying_part = Some(part);
                 }
             }
@@ -160,7 +164,8 @@ impl Tracker {
     fn session_state(&mut self, state: SessionState) -> Option<RaceEvent> {
         let is_race = self.session_type == SessionType::Race;
         let after_last_laps = match self.session_type {
-            SessionType::Qualifying => self.qualifying_part == Some(LAST_QUALIFYING_PART),
+            // Each part; a part not known yet has no P1 to show.
+            SessionType::Qualifying => self.qualifying_part.is_some(),
             SessionType::Practice => true,
             SessionType::Race | SessionType::Unknown => false,
         };
@@ -769,12 +774,31 @@ mod tests {
     }
 
     #[test]
-    fn the_end_of_q1_and_q2_has_no_winner() {
+    fn each_qualifying_part_shows_its_fastest_driver_after_the_last_laps() {
         let mut t = qualifying();
-        for n in [1, 2] {
+        for n in 1..=3u8 {
+            let laps = u32::from(n) * 10;
             part(&mut t, n);
-            assert_eq!(finish(&mut t), None, "Q{n}");
-            assert_eq!(finalise(&mut t), None, "Q{n}");
+            timing(
+                &mut t,
+                &format!(
+                    r#"{{"Lines":{{"10":{{"NumberOfLaps":{laps},"InPit":false}},"12":{{"NumberOfLaps":{laps},"InPit":false}}}}}}"#
+                ),
+            );
+            t.tick(secs(1000 * u64::from(n)));
+            assert_eq!(finish(&mut t), None, "Q{n} at the flag");
+            let done = laps + 1;
+            assert_eq!(
+                timing(
+                    &mut t,
+                    &format!(
+                        r#"{{"Lines":{{"10":{{"NumberOfLaps":{done}}},"12":{{"NumberOfLaps":{done}}}}}}}"#
+                    ),
+                ),
+                winner(10, "#00a1e8"),
+                "Q{n}"
+            );
+            assert_eq!(finish(&mut t), None, "Q{n} only once");
         }
     }
 
@@ -900,12 +924,16 @@ mod tests {
     }
 
     #[test]
-    fn the_end_of_q1_doesnt_wait_for_last_laps() {
+    fn the_end_of_q1_waits_two_minutes_at_most_too() {
         let mut t = qualifying();
         part(&mut t, 1);
+        timing(
+            &mut t,
+            r#"{"Lines":{"10":{"NumberOfLaps":14,"InPit":false}}}"#,
+        );
         t.tick(secs(1000));
-        finish(&mut t);
-        assert_eq!(t.tick(secs(1000) + LAST_LAPS_MAX), None);
+        assert_eq!(finish(&mut t), None);
+        assert_eq!(t.tick(secs(1000) + LAST_LAPS_MAX), winner(10, "#00a1e8"));
     }
 
     #[test]

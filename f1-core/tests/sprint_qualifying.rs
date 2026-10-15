@@ -77,7 +77,7 @@ fn events() -> Vec<(Duration, RaceEvent)> {
 }
 
 #[test]
-fn pole_comes_when_the_last_car_has_finished_its_lap() {
+fn pole_comes_last_when_the_last_car_has_finished_its_lap() {
     let winners: Vec<(Duration, u8)> = events()
         .into_iter()
         .filter_map(|(at, e)| match e {
@@ -85,7 +85,8 @@ fn pole_comes_when_the_last_car_has_finished_its_lap() {
             _ => None,
         })
         .collect();
-    let [(at, driver)] = winners[..] else {
+    // SQ1's and SQ2's fastest, then pole.
+    let [(_, 3), (_, 16), (at, driver)] = winners[..] else {
         panic!("{winners:?}")
     };
     // Car 16 led at the flag; car 3 took pole 17 s later.

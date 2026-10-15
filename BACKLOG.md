@@ -25,14 +25,9 @@ Ideas for after the course, in no particular order of size.
   qualifying, Singapore 2026-10-09), and some look too much alike.
 - **A new chequered flag.** The current one (one lit pixel in four, swapping
   every 500 ms) doesn't look good and is too short (10 s).
-- **Fastest driver of each qualifying part.** At the end of Q1 and Q2 (and
-  SQ1/SQ2) show the team colour of the part's quickest driver, like pole
-  after Q3. The leader is only certain once the last cars finish their laps
-  after the flag (Singapore SQ1: a new P1 48 s after the flag). Pole
-  already waits for that (`tracker.rs`: `start_last_laps`,
-  `pole_after_last_laps`, at most `LAST_LAPS_MAX` after the flag); the same
-  check can end Q1 and Q2. To decide: the same look as the winner or one of
-  its own, and whether the winner's on/off setting covers it.
+- **A look of its own for each qualifying part's fastest driver?** Done
+  2026-10-15 with the same chase as pole and the winner switch; maybe a
+  look (or a switch) of its own later.
 - **The panel animated like the lamp.** Today it only takes the shown
   colour. `GET /api/state` could also send which effect shows, its settings
   and how long ago it started (e.g. breathe, yellow, 3 s a breath, started

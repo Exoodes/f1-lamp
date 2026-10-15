@@ -129,7 +129,7 @@ fn knockouts_come_between_their_part_and_the_next_one() {
 }
 
 #[test]
-fn pole_is_shown_once_after_the_last_chequered_flag_in_team_colour() {
+fn each_part_shows_its_fastest_driver_and_pole_comes_last_in_team_colour() {
     let events = events();
     let winners: Vec<(usize, u8, Rgb)> = events
         .iter()
@@ -139,14 +139,19 @@ fn pole_is_shown_once_after_the_last_chequered_flag_in_team_colour() {
             _ => None,
         })
         .collect();
-    let [(at, driver, colour)] = winners[..] else {
-        panic!("{winners:?}")
-    };
-    // Car 63 led when Q3's clock ran out; car 10 took pole on the last lap.
-    assert_eq!(driver, POLE);
-    assert_ne!(colour, Rgb::WHITE, "no team colour");
-    let last_chequered = position(&events, |e| *e == RaceEvent::ChequeredFlag)[2];
-    assert!(at > last_chequered);
+    // Q1: car 10, Q2: car 12. Car 63 led when Q3's clock ran out; car 10
+    // took pole on the last lap.
+    let drivers: Vec<u8> = winners.iter().map(|&(_, driver, _)| driver).collect();
+    assert_eq!(drivers, [10, 12, POLE]);
+    assert!(winners.iter().all(|&(_, _, colour)| colour != Rgb::WHITE));
+    // Each one after its own part's chequered flag.
+    let chequered = position(&events, |e| *e == RaceEvent::ChequeredFlag);
+    for (part, &(at, _, _)) in winners.iter().enumerate() {
+        assert!(at > chequered[part], "Q{}", part + 1);
+        if let Some(&next) = chequered.get(part + 1) {
+            assert!(at < next, "Q{}", part + 1);
+        }
+    }
 }
 
 #[test]
