@@ -1,8 +1,9 @@
 //! Driver events from the feed, each in the driver's team colour:
 //!
 //! - winner: the leader in TopThree when a race's SessionStatus becomes
-//!   `Finished`, or pole once every car has finished its lap after the
-//!   last part of qualifying (at most [`LAST_LAPS_MAX`] after the flag);
+//!   `Finished`; pole, or practice's fastest driver, once every car has
+//!   finished its lap after the last flag of qualifying or practice (at
+//!   most [`LAST_LAPS_MAX`] after it);
 //! - knocked out: a driver out of qualifying after Q1 or Q2 (TimingData,
 //!   public);
 //! - pit stop: a car leaving the pit lane (PitLaneTimeCollection, public);
@@ -150,22 +151,26 @@ impl Tracker {
     }
 
     /// The winner, if the session reaching `state` names one. A race is
-    /// `Finished` when the leader takes the flag. Qualifying is `Finished`
-    /// when the clock runs out, but drivers still complete their last laps,
-    /// which often take pole (Monza 2026: 70 s later, a new leader), so pole
-    /// waits for them. `Finalised`, often many minutes later, is the
-    /// fallback.
+    /// `Finished` when the leader takes the flag. Qualifying and practice
+    /// are `Finished` when the clock runs out, but drivers still complete
+    /// their last laps, which often take pole (Monza 2026: 70 s later, a new
+    /// leader), so P1 waits for them. There TopThree is ordered by best lap,
+    /// so its leader is the fastest driver. `Finalised`, often many minutes
+    /// later, is the fallback.
     fn session_state(&mut self, state: SessionState) -> Option<RaceEvent> {
         let is_race = self.session_type == SessionType::Race;
-        let last_part = self.session_type == SessionType::Qualifying
-            && self.qualifying_part == Some(LAST_QUALIFYING_PART);
+        let after_last_laps = match self.session_type {
+            SessionType::Qualifying => self.qualifying_part == Some(LAST_QUALIFYING_PART),
+            SessionType::Practice => true,
+            SessionType::Race | SessionType::Unknown => false,
+        };
         match state {
             SessionState::Finished if is_race => self.winner(),
-            SessionState::Finished if last_part => {
+            SessionState::Finished if after_last_laps => {
                 self.start_last_laps();
                 self.pole_after_last_laps()
             }
-            SessionState::Finalised if last_part => self.winner(),
+            SessionState::Finalised if after_last_laps => self.winner(),
             _ => None,
         }
     }

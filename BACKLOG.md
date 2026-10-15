@@ -20,8 +20,6 @@ Ideas for after the course, in no particular order of size.
   shows: pit stops when switched off, drivers not followed, switched-off
   effects; still in step with the TV. Lines the lamp didn't show dimmed.
   Today logging is in `controller.rs` `apply_race_event` after `shows()`.
-- **A "winner" for practice.** E.g. the team colour of the driver with the
-  fastest lap when the session ends, like pole after qualifying.
 - **Rework the effects.** Some are too fast (seen again in sprint
   qualifying, Singapore 2026-10-09), and some look too much alike.
 - **A new chequered flag.** The current one (one lit pixel in four, swapping

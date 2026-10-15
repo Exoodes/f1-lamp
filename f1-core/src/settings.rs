@@ -110,6 +110,7 @@ pub struct EffectToggles {
     pub fastest_lap: bool,
     pub pit_stop: bool,
     pub overtake: bool,
+    /// The race's winner, pole after qualifying, the fastest after practice.
     pub winner: bool,
     pub knocked_out: bool,
     pub last_lap: bool,

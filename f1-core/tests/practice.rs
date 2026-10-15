@@ -9,9 +9,10 @@ use f1_core::{
     feed::Stream,
     input::{Input, RaceEvent, SessionPhase, TrackFlag},
     replay::{Replayer, Step},
+    tracker::LAST_LAPS_MAX,
 };
 
-const FILES: [(Stream, &str); 9] = [
+const FILES: [(Stream, &str); 10] = [
     (
         Stream::SessionInfo,
         include_str!("data/2026-singapore/practice-1/SessionInfo.jsonStream"),
@@ -47,6 +48,10 @@ const FILES: [(Stream, &str); 9] = [
     (
         Stream::Clock,
         include_str!("data/2026-singapore/practice-1/ExtrapolatedClock.jsonStream"),
+    ),
+    (
+        Stream::TimingData,
+        include_str!("data/2026-singapore/practice-1/TimingData.jsonStream"),
     ),
 ];
 
@@ -85,11 +90,29 @@ fn ms(n: u64) -> Duration {
 }
 
 #[test]
-fn practice_has_no_start_lights_and_no_winner() {
-    let events = events();
-    assert!(!events
-        .iter()
-        .any(|(_, e)| matches!(e, RaceEvent::StartLights | RaceEvent::Winner { .. })));
+fn practice_has_no_start_lights() {
+    assert!(!events().iter().any(|(_, e)| *e == RaceEvent::StartLights));
+}
+
+#[test]
+fn the_fastest_driver_shows_after_the_last_laps() {
+    let winners: Vec<(Duration, u8)> = events()
+        .into_iter()
+        .filter_map(|(at, e)| match e {
+            RaceEvent::Winner { driver, .. } => Some((at, driver)),
+            _ => None,
+        })
+        .collect();
+    // #63 set the last fastest lap; `Finished` came at 00:28:45.079, and a
+    // car still out then never showed a finished lap: at most two minutes.
+    let [(at, 63)] = winners[..] else {
+        panic!("{winners:?}")
+    };
+    let flag = ms(1_725_079);
+    assert!(
+        at > flag && at <= flag + LAST_LAPS_MAX + ms(1_500),
+        "{at:?}"
+    );
 }
 
 #[test]
