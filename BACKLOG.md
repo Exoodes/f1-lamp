@@ -16,10 +16,11 @@ Ideas for after the course, in no particular order of size.
   `PitLaneTimeCollection`). The biggest of these. Test data: add the
   capture's `DriverRaceInfo` to the Singapore race fixture
   (`f1-core/tests/data/2026-singapore/race`, `tests/singapore_race.rs`).
-- **The race log shows everything.** Every event, not only what the lamp
-  shows: pit stops when switched off, drivers not followed, switched-off
-  effects; still in step with the TV. Lines the lamp didn't show dimmed.
-  Today logging is in `controller.rs` `apply_race_event` after `shows()`.
+  The race log then fills up: it has every event now, and all drivers'
+  overtakes are about 300 a race, past its 120 lines. A line costs about
+  100 B of heap (time and text as strings); store the event and the time
+  as a number instead (about 16 B) and write the text when the page asks,
+  and send a page that just opened only the newest lines.
 - **Rework the effects.** Some are too fast (seen again in sprint
   qualifying, Singapore 2026-10-09), and some look too much alike.
 - **A new chequered flag.** The current one (one lit pixel in four, swapping

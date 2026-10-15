@@ -178,6 +178,7 @@
   }
   .racelog .swatch { order: -1; width: 4px; height: auto; align-self: stretch; border: 0; border-radius: 0; }
   .racelog .swatch.none { visibility: hidden; }
+  .racelog li.dim { opacity: 0.45; }
 
   /* ---- This weekend ---- */
   .weekend-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
@@ -381,7 +382,7 @@
     <section>
       <h2>Race log</h2>
       <ol class="racelog" id="racelog"></ol>
-      <p class="hint" id="racelog-empty">What the lamp shows, as it shows it (in step with your TV). Newest first.</p>
+      <p class="hint" id="racelog-empty">Every race event, in step with your TV. Newest first; dimmed when the lamp doesn't show it (switched off, a driver not followed).</p>
     </section>
 
     <section>
@@ -889,6 +890,8 @@ async function refreshRaceLog() {
 
 function addRaceLogLine(line) {
   const li = document.createElement("li");
+  // An event the lamp didn't show (switched off, a driver not followed).
+  if (line.shown === false) li.className = "dim";
   const time = document.createElement("span");
   time.className = "time";
   time.textContent = line.time;

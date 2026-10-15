@@ -1,6 +1,7 @@
-//! The race log on the web page: what the lamp showed, in words, in step
-//! with the TV. The controller hands over a [`LogItem`] when something shows
-//! (after the TV delay); [`text`] says it with the drivers' short names, and
+//! The race log on the web page: every race event in words, in step with
+//! the TV, marked when the lamp didn't show it (switched off, a driver not
+//! followed). The controller hands over a [`LogItem`] when an event's TV
+//! time comes; [`text`] says it with the drivers' short names, and
 //! [`RaceLog`] keeps the latest lines for the page.
 
 use std::collections::VecDeque;
@@ -22,8 +23,16 @@ pub const LINES: usize = 120;
 pub enum LogItem {
     /// A race event the lamp shows.
     Event(RaceEvent),
+    /// A race event the lamp doesn't show: switched off, a driver nobody
+    /// follows, or no room left for its effect. Dimmed on the page.
+    NotShown(RaceEvent),
     SessionStarted,
     SessionEnded,
+}
+
+/// Whether the lamp showed it.
+pub fn shown(item: LogItem) -> bool {
+    !matches!(item, LogItem::NotShown(_))
 }
 
 /// The line for `item`, with `name` giving a driver's short name; `None`
@@ -32,7 +41,7 @@ pub fn text(item: LogItem, name: &dyn Fn(u8) -> String) -> Option<String> {
     let event = match item {
         LogItem::SessionStarted => return Some("Session started".to_owned()),
         LogItem::SessionEnded => return Some("Session ended".to_owned()),
-        LogItem::Event(event) => event,
+        LogItem::Event(event) | LogItem::NotShown(event) => event,
     };
     Some(match event {
         RaceEvent::TrackFlag(flag) => match flag {
@@ -60,7 +69,7 @@ pub fn text(item: LogItem, name: &dyn Fn(u8) -> String) -> Option<String> {
 
 /// The colour of the dot next to a line: the flag's, or the team's.
 pub fn color(item: LogItem) -> Option<Rgb> {
-    let LogItem::Event(event) = item else {
+    let (LogItem::Event(event) | LogItem::NotShown(event)) = item else {
         return None;
     };
     match event {
@@ -84,6 +93,8 @@ pub struct LogLine {
     pub time: String,
     pub text: String,
     pub color: Option<Rgb>,
+    /// False for an event the lamp didn't show.
+    pub shown: bool,
 }
 
 /// One answer to the page.
@@ -108,7 +119,7 @@ impl RaceLog {
         }
     }
 
-    pub fn push(&mut self, time: String, text: String, color: Option<Rgb>) {
+    pub fn push(&mut self, time: String, text: String, color: Option<Rgb>, shown: bool) {
         if self.lines.len() == LINES {
             self.lines.pop_front();
         }
@@ -117,6 +128,7 @@ impl RaceLog {
             time,
             text,
             color,
+            shown,
         });
         self.next += 1;
     }
@@ -161,6 +173,19 @@ mod tests {
 
     fn say(event: RaceEvent) -> Option<String> {
         text(LogItem::Event(event), &names)
+    }
+
+    #[test]
+    fn an_event_not_shown_reads_and_colours_the_same() {
+        let stop = RaceEvent::PitStop {
+            driver: 44,
+            team_color: Rgb::new(0, 210, 190),
+        };
+        let name = |_: u8| "HAM".to_owned();
+        let (played, skipped) = (LogItem::Event(stop), LogItem::NotShown(stop));
+        assert_eq!(text(skipped, &name), text(played, &name));
+        assert_eq!(color(skipped), color(played));
+        assert!(shown(played) && !shown(skipped));
     }
 
     #[test]
@@ -222,7 +247,7 @@ mod tests {
     fn log_with(n: u64) -> RaceLog {
         let mut log = RaceLog::new();
         for i in 0..n {
-            log.push(format!("14:00:{i:02}"), format!("line {i}"), None);
+            log.push(format!("14:00:{i:02}"), format!("line {i}"), None, true);
         }
         log
     }
@@ -254,7 +279,7 @@ mod tests {
     fn the_next_line_is_not_skipped() {
         let mut log = log_with(1);
         let next = log.since(None).next;
-        log.push("14:01:00".to_owned(), "Green flag".to_owned(), None);
+        log.push("14:01:00".to_owned(), "Green flag".to_owned(), None, true);
         let page = log.since(Some(next));
         assert_eq!(page.lines.len(), 1);
         assert_eq!(page.lines[0].text, "Green flag");

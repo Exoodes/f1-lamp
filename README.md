@@ -166,8 +166,9 @@ only the lines the lamp uses, so a whole race fits in the firmware.
 `http://f1-lightbox.local` (same network only):
 
 - what the lamp shows, the session phase and the network state;
-- the race log: what the lamp showed, in words ("Yellow flag", "VER in the
-  pits", "Fastest lap: NOR"), with the time it showed, in step with your TV;
+- the race log: every race event in words ("Yellow flag", "VER in the
+  pits", "Fastest lap: NOR"), with its time, in step with your TV; events the
+  lamp didn't show (switched off, a driver not followed) are dimmed;
 - TV sync: the session clock and the lap as your TV should show them with
   the delay set, and buttons to move the delay by 0.1, 0.5 or 1 second,
   until they change together with the TV's;

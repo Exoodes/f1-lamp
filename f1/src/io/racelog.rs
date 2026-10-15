@@ -36,7 +36,12 @@ pub fn record(items: Vec<LogItem>) {
     let mut log = LOG.lock().unwrap_or_else(|e| e.into_inner());
     for item in items {
         if let Some(text) = racelog::text(item, &name) {
-            log.push(clock::log_stamp(), text, racelog::color(item));
+            log.push(
+                clock::log_stamp(),
+                text,
+                racelog::color(item),
+                racelog::shown(item),
+            );
         }
     }
 }

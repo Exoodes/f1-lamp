@@ -333,18 +333,23 @@ impl Controller {
         }
     }
 
+    /// Plays `event` unless it's switched off or for a driver nobody
+    /// follows, and logs it either way: the race log has every event, the
+    /// ones the lamp didn't show marked.
     fn apply_race_event(&mut self, event: RaceEvent, now: Instant) {
-        // Switched off, or a driver nobody follows: as if it never arrived.
-        if !self.layers.settings.shows(event) {
-            return;
-        }
         // The same flag again changes nothing on the lamp, and in the log.
         let repeated = matches!(event, RaceEvent::TrackFlag(flag)
             if self.layers.flag.is_some_and(|f| f.value == flag));
-        // An overlay that didn't fit the queue never shows: not in the log.
-        if self.play_race_event(event, now) && !repeated {
-            self.note(LogItem::Event(event));
+        // An overlay that didn't fit the queue doesn't show either.
+        let shown = self.layers.settings.shows(event) && self.play_race_event(event, now);
+        if repeated {
+            return;
         }
+        self.note(if shown {
+            LogItem::Event(event)
+        } else {
+            LogItem::NotShown(event)
+        });
     }
 
     fn note(&mut self, item: LogItem) {
@@ -1588,13 +1593,15 @@ mod tests {
     }
 
     #[test]
-    fn an_overlay_the_queue_has_no_room_for_is_not_logged() {
+    fn an_overlay_the_queue_has_no_room_for_is_logged_as_not_shown() {
         let t0 = Instant::now();
         let mut c = following_everyone(t0);
         for driver in 1..=MAX_OVERLAYS as u8 + 1 {
             c.apply(pit_stop(driver, t0), t0);
         }
-        assert_eq!(c.take_log().len(), MAX_OVERLAYS);
+        let log = c.take_log();
+        let shown = log.iter().filter(|&&item| racelog::shown(item)).count();
+        assert_eq!((log.len(), shown), (MAX_OVERLAYS + 1, MAX_OVERLAYS));
     }
 
     #[test]
@@ -1608,7 +1615,7 @@ mod tests {
     }
 
     #[test]
-    fn switched_off_and_tried_events_are_not_logged() {
+    fn switched_off_events_are_logged_as_not_shown() {
         let t0 = Instant::now();
         let mut c = live(t0);
         let mut settings = Settings::default();
@@ -1616,6 +1623,27 @@ mod tests {
         c.apply(Input::Settings(settings), t0);
         c.take_log();
         c.apply(race(RaceEvent::LastLap, t0), t0);
+        assert_eq!(c.take_log(), [LogItem::NotShown(RaceEvent::LastLap)]);
+    }
+
+    #[test]
+    fn a_pit_stop_of_a_driver_nobody_follows_is_logged_as_not_shown() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.apply(settings_with(EffectToggles::default(), &[1]), t0);
+        c.take_log();
+        c.apply(pit_stop(44, t0), t0);
+        assert!(matches!(
+            c.take_log()[..],
+            [LogItem::NotShown(RaceEvent::PitStop { driver: 44, .. })]
+        ));
+    }
+
+    #[test]
+    fn tried_effects_are_not_logged() {
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.take_log();
         c.apply(Input::Preview(RaceEvent::ChequeredFlag), t0);
         assert!(c.take_log().is_empty());
     }
