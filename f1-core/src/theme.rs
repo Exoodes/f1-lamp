@@ -29,6 +29,9 @@ const LAST_LAP_FLASHES: u8 = 2;
 const CHEQUERED_MS: u32 = 10_000;
 const START_HOLD_MS: u32 = 2000;
 const KNOCKED_OUT_FADE_MS: u32 = 3000;
+/// Two slow flashes: unlike a pit stop's two quick ones.
+const PENALTY_PERIOD_MS: u32 = 1000;
+const PENALTY_FLASHES: u8 = 2;
 
 const WINNER_CHASE_SPEED: f32 = 8.0;
 const WINNER_CHASE_TAIL: u8 = 6;
@@ -83,6 +86,11 @@ pub fn event_overlay(event: RaceEvent) -> Option<Effect> {
         RaceEvent::Overtake { team_color, .. } => Some(Effect::flash(team_color, OVERTAKE_FLASHES)),
         RaceEvent::Winner { .. } => None,
         RaceEvent::LastLap => Some(Effect::flash(Rgb::WHITE, LAST_LAP_FLASHES)),
+        RaceEvent::Penalty { team_color, .. } => Some(Effect::Blink {
+            color: team_color,
+            period_ms: PENALTY_PERIOD_MS,
+            times: Some(PENALTY_FLASHES),
+        }),
         RaceEvent::KnockedOut { team_color, .. } => Some(Effect::Fade {
             color: team_color,
             duration_ms: KNOCKED_OUT_FADE_MS,
@@ -231,6 +239,27 @@ mod tests {
             event_overlay(event),
             Some(Effect::flash(TEAM, PIT_STOP_FLASHES))
         );
+    }
+
+    #[test]
+    fn a_penalty_is_two_slow_flashes_unlike_a_pit_stop() {
+        let penalty = event_overlay(RaceEvent::Penalty {
+            driver: 44,
+            team_color: TEAM,
+        });
+        let pit = event_overlay(RaceEvent::PitStop {
+            driver: 44,
+            team_color: TEAM,
+        });
+        assert_eq!(
+            penalty,
+            Some(Effect::Blink {
+                color: TEAM,
+                period_ms: PENALTY_PERIOD_MS,
+                times: Some(PENALTY_FLASHES)
+            })
+        );
+        assert_ne!(penalty, pit);
     }
 
     #[test]

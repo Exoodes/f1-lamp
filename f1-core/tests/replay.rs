@@ -278,6 +278,19 @@ fn race_has_sixteen_fastest_laps_nine_pit_stops_and_327_overtakes() {
 }
 
 #[test]
+fn the_one_penalty_of_the_race_is_perezs() {
+    let (inputs, _) = play_to_end(60);
+    let penalties: Vec<RaceEvent> = driver_events(&inputs)
+        .into_iter()
+        .filter(|e| matches!(e, RaceEvent::Penalty { .. }))
+        .collect();
+    // Lap 30: 5 s for failing to follow the race director's instructions.
+    let [RaceEvent::Penalty { driver: 11, .. }] = penalties[..] else {
+        panic!("{penalties:?}")
+    };
+}
+
+#[test]
 fn first_pit_stop_is_ocon_in_team_colour_and_red_flag_waits_are_not_pit_stops() {
     let (inputs, _) = play_to_end(60);
     let first = driver_events(&inputs)

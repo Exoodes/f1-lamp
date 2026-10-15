@@ -150,6 +150,14 @@ impl Tracker {
                 }
             }
             FeedMessage::PitLane(pit) => self.pit_stops(pit, &mut events),
+            FeedMessage::RaceControl(m) => {
+                if let Some(driver) = m.penalised_car() {
+                    events.push(RaceEvent::Penalty {
+                        driver,
+                        team_color: self.colour(driver),
+                    });
+                }
+            }
             FeedMessage::TimingStats(stats) => self.fastest_laps(stats, &mut events),
             FeedMessage::Overtakes(series) => self.overtakes(series, &mut events),
             FeedMessage::TimingData(timing) => {
@@ -547,6 +555,27 @@ mod tests {
             r#"{"Lines":[{"RacingNumber":"99"}]}"#,
         );
         assert_eq!(finish(&mut t), winner(99, "#ffffff"));
+    }
+
+    #[test]
+    fn a_stewards_penalty_is_a_penalty_in_team_colour() {
+        let mut t = race();
+        feed(
+            &mut t,
+            Stream::DriverList,
+            r#"{"11":{"TeamColour":"6C98FF"}}"#,
+        );
+        assert_eq!(
+            feed(
+                &mut t,
+                Stream::RaceControl,
+                r#"{"Messages":{"114":{"Category":"Other","Message":"FIA STEWARDS: 5 SECOND TIME PENALTY FOR CAR 11 (PER) - FAILING TO FOLLOW RACE DIRECTORS INSTRUCTIONS"}}}"#
+            ),
+            Some(RaceEvent::Penalty {
+                driver: 11,
+                team_color: "#6c98ff".parse().unwrap()
+            })
+        );
     }
 
     #[test]

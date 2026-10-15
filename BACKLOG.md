@@ -72,8 +72,6 @@ with `cargo ota` first) or a video:
 ## Maybe
 
 - **Retirement of a followed driver.** A slow fade in the team colour.
-- **Penalties for followed drivers.** Race control names the car
-  ("10 SECOND TIME PENALTY FOR CAR 5"); a short flash.
 - **Overtakes without an F1TV token**, from position swaps in `DriverList`
   minus pit stops (`PitLaneTimeCollection`). Only if `DriverRaceInfo` (see
   Wanted) isn't enough.

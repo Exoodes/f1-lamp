@@ -52,6 +52,11 @@ pub enum RaceEvent {
         driver: u8,
         team_color: Rgb,
     },
+    /// The stewards gave the driver a penalty (time, drive-through, grid...).
+    Penalty {
+        driver: u8,
+        team_color: Rgb,
+    },
 }
 
 /// The session clock or the lap counter, for showing them as the TV does.

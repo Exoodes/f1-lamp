@@ -48,8 +48,9 @@ pub struct Settings {
     /// by older firmware may hold a single `favourite_driver` instead; like
     /// any unknown key it's ignored, so the list then starts empty.
     pub followed_drivers: DriverSet,
-    /// Pit stops and overtakes of every driver, whatever the list says: to
-    /// see everything (a race has hundreds of overtakes).
+    /// Pit stops, overtakes, knockouts and penalties of every driver,
+    /// whatever the list says: to see everything (a race has hundreds of
+    /// overtakes).
     pub follow_all: bool,
     pub winner_display_ms: u32,
     /// How long a green flag shows before the lamp's own colour returns;
@@ -115,6 +116,8 @@ pub struct EffectToggles {
     pub winner: bool,
     pub knocked_out: bool,
     pub last_lap: bool,
+    /// A followed driver's penalty.
+    pub penalty: bool,
     /// The countdown before each session (not a race event).
     pub countdown: bool,
 }
@@ -130,14 +133,16 @@ impl Default for EffectToggles {
             winner: true,
             knocked_out: true,
             last_lap: true,
+            penalty: true,
             countdown: true,
         }
     }
 }
 
 impl Settings {
-    /// Whether the lamp shows `event`: its switch is on and, for pit stops and
-    /// overtakes, the driver is followed (none are by default).
+    /// Whether the lamp shows `event`: its switch is on and, for pit stops,
+    /// overtakes, knockouts and penalties, the driver is followed (none are by
+    /// default).
     pub fn shows(&self, event: RaceEvent) -> bool {
         let e = &self.effects;
         // No `_` arm: a new kind of event must get a decision here.
@@ -151,6 +156,7 @@ impl Settings {
             RaceEvent::Winner { .. } => e.winner,
             RaceEvent::KnockedOut { driver, .. } => e.knocked_out && self.follows(driver),
             RaceEvent::LastLap => e.last_lap,
+            RaceEvent::Penalty { driver, .. } => e.penalty && self.follows(driver),
         }
     }
 }
@@ -369,6 +375,7 @@ mod tests {
                 winner: false,
                 knocked_out: false,
                 last_lap: false,
+                penalty: false,
                 countdown: false,
             },
             sessions: SessionToggles {
@@ -394,6 +401,7 @@ mod tests {
                 && e.fastest_lap
                 && e.pit_stop
                 && e.overtake
+                && e.penalty
                 && e.winner
                 && e.knocked_out
                 && e.last_lap
@@ -552,6 +560,19 @@ mod tests {
     }
 
     #[test]
+    fn penalties_show_only_for_followed_drivers_and_can_be_switched_off() {
+        let penalty = |driver| RaceEvent::Penalty {
+            driver,
+            team_color: TEAM,
+        };
+        let mut s = following(&[11]);
+        assert!(s.shows(penalty(11)));
+        assert!(!s.shows(penalty(63)));
+        s.effects.penalty = false;
+        assert!(!s.shows(penalty(11)));
+    }
+
+    #[test]
     fn a_switched_off_event_is_not_shown() {
         let off = EffectToggles {
             start_lights: false,
@@ -605,6 +626,7 @@ mod tests {
             winner: false,
             knocked_out: false,
             last_lap: false,
+            penalty: false,
             countdown: false,
         };
         assert!(with_effects(all_off).shows(RaceEvent::TrackFlag(TrackFlag::Red)));

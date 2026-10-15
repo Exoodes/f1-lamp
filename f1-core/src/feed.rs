@@ -185,6 +185,24 @@ pub struct RcMessage {
     pub message: Option<String>,
 }
 
+impl RcMessage {
+    /// The car the stewards penalised, if this is a penalty:
+    /// `FIA STEWARDS: 5 SECOND TIME PENALTY FOR CAR 11 (PER) - ...`.
+    /// Investigations and "no further action" never say `PENALTY FOR CAR`.
+    pub fn penalised_car(&self) -> Option<u8> {
+        let text = self.message.as_deref()?;
+        if !text.starts_with("FIA STEWARDS:")
+            || text.contains("NO PENALTY")
+            || text.contains("SERVED")
+        {
+            return None;
+        }
+        let (_, after) = text.split_once(" PENALTY FOR CAR ")?;
+        let number: String = after.chars().take_while(char::is_ascii_digit).collect();
+        number.parse().ok()
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct SessionInfo {
     #[serde(rename = "Type")]
@@ -577,6 +595,51 @@ impl Stream {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn penalised(text: &str) -> Option<u8> {
+        RcMessage {
+            utc: None,
+            lap: None,
+            category: Some("Other".to_owned()),
+            flag: None,
+            scope: None,
+            sector: None,
+            racing_number: None,
+            status: None,
+            mode: None,
+            message: Some(text.to_owned()),
+        }
+        .penalised_car()
+    }
+
+    #[test]
+    fn a_stewards_penalty_names_the_car() {
+        // Monza 2026, lap 30.
+        assert_eq!(
+            penalised("FIA STEWARDS: 5 SECOND TIME PENALTY FOR CAR 11 (PER) - FAILING TO FOLLOW RACE DIRECTORS INSTRUCTIONS – ESCAPE ROAD INSTRUCTIONS"),
+            Some(11)
+        );
+        assert_eq!(
+            penalised(
+                "FIA STEWARDS: DRIVE THROUGH PENALTY FOR CAR 1 (NOR) - SPEEDING IN THE PIT LANE"
+            ),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn investigations_and_other_messages_are_no_penalty() {
+        for text in [
+            "FIA STEWARDS: TURN 1 INCIDENT INVOLVING CAR 11 (PER) UNDER INVESTIGATION - FAILING TO FOLLOW RACE DIRECTORS INSTRUCTIONS",
+            "FIA STEWARDS: INCIDENT INVOLVING CAR 63 (RUS) NO FURTHER ACTION - YELLOW FLAG INFRINGEMENT (16:17:30)",
+            "FIA STEWARDS: INCIDENT INVOLVING CARS 81 (PIA) AND 27 (HUL) REVIEWED NO PENALTY",
+            "FIA STEWARDS: 5 SECOND TIME PENALTY FOR CAR 11 (PER) SERVED",
+            "BLACK AND WHITE FLAG FOR CAR 87 (BEA) - TRACK LIMITS",
+            "CAR 1 (NOR) TIME 2:06.772 DELETED - TRACK LIMITS AT TURN 12 LAP 4 16:43:25",
+        ] {
+            assert_eq!(penalised(text), None, "{text}");
+        }
+    }
 
     #[test]
     fn session_info_type_race_is_a_race() {
