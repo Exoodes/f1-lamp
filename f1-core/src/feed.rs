@@ -493,8 +493,8 @@ impl Stream {
 
     /// Whether a line can carry anything the lamp uses, checked without
     /// parsing. Most TopThree lines only update gaps and lap times, and most
-    /// DriverList lines only the running order; on the ESP32, parsing them
-    /// all would take seconds when jumping through a race.
+    /// DriverList lines only the running order; the live connection skips
+    /// them unparsed, and test fixtures keep only the relevant lines.
     pub fn is_relevant(self, json: &str) -> bool {
         match self {
             Stream::TopThree => json.contains("\"RacingNumber\""),

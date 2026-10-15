@@ -54,7 +54,7 @@ lamp changes when your TV does, not when the feed does.
 
 ```
 f1-core/    All the logic, no hardware: parsing the feed, the flag state
-            machine, effects, settings, the schedule, the replay. Builds and
+            machine, effects, settings, the schedule. Builds and
             tests on Windows (`#![forbid(unsafe_code)]`).
 f1/         The ESP-IDF firmware: WiFi, the LEDs, the live connection, the web
             page, updates over WiFi. Uses f1-core for every decision.
@@ -66,7 +66,7 @@ BACKLOG.md  Ideas for later.
 The firmware is a set of threads that only send `Input` messages to one
 render loop: the network thread (WiFi, clock, OpenF1 calendar and winner; it
 also starts the web server, which runs on its own task), the live-feed
-thread, and in replay builds the replay. The render loop owns the
+thread. The render loop owns the
 `Controller` (f1-core), which decides what the 23 LEDs show 50 times a
 second. It runs at a higher priority than the network work, so a TLS
 handshake doesn't stall the LEDs, and once a second it checks the threads:
@@ -95,10 +95,6 @@ wifi_psk = "your password"
 # `cargo ota` reads it from here; nothing else is accepted by /api/ota.
 # It's never sent: uploads only prove it (see below).
 ota_key = "some long random text"
-
-# Only for --features replay: the session to play.
-[replay]
-dir = "C:/path/to/f1-data/2026-italy/race"
 ```
 
 ## Building and flashing
@@ -152,14 +148,8 @@ Any of these work with both `cargo run --release` and `cargo ota`:
 
 | Feature | What it does |
 |---|---|
-| `replay` | Plays the session in `[replay] dir` (or `$env:F1_REPLAY_DIR`) instead of the live feed. Controlled from the page: play, pause, speed 1x to 200x, jump. |
-| `showcase` | Plays a hand-written 2.5-minute session with every flag, a pit window in all 11 team colours, fastest laps, overtakes and a winner. |
 | `live-now` | Connects to the live feed right away, whatever the schedule says: for testing between sessions. |
 | `crash-test` | A firmware that crashes 10 s after every boot, to test the update fallback. Only send it with `cargo ota`. |
-
-Replay data comes from F1's public archive
-(`https://livetiming.formula1.com/static/<year>/Index.json`). The build keeps
-only the lines the lamp uses, so a whole race fits in the firmware.
 
 ## The web page
 
@@ -184,7 +174,6 @@ only the lines the lamp uses, so a whole race fits in the firmware.
   followed drivers (or all of them);
 - forcing a flag or a colour by hand, and trying any effect once;
 - the F1TV token (see below);
-- in replay builds, the replay controls;
 - a live log of the lamp's own messages, with times.
 
 Settings save on their own as you change them.
@@ -213,7 +202,6 @@ The page uses these, and scripts can too:
 | `GET /api/log?after=<n>` | The log lines after number `n` |
 | `POST /api/ota/nonce` | A one-time nonce (hex) for the next upload, valid for 2 minutes |
 | `POST /api/ota` | A firmware image, with `X-F1-Nonce` and its tags in `X-F1-Start` and `X-F1-Auth` (see `cargo ota`) |
-| `GET /api/replay`, `POST /api/replay` | Replay builds only: the position, and `{"action":"play"}`, `pause`, `{"action":"speed","speed":60}`, `lights_out`, `{"action":"seek","position_ms":4000000}` |
 
 ## F1TV (optional)
 
@@ -247,7 +235,6 @@ the lamp:
 - the live feed's answer to `Subscribe` after the 2026 Bahrain GP race, from
   the probe (live data differs from the archive), with SessionData, LapCount
   and ExtrapolatedClock as they stood at the end of the Singapore race;
-- the hand-written showcase (`--features showcase`);
 - OpenF1's 2026 calendar and the Italian GP race result.
 
 `f1-core` must be tested from its own folder: `f1/.cargo/config.toml` builds
@@ -261,8 +248,8 @@ powershell -ExecutionPolicy Bypass -File check.ps1 -Part core
 
 It runs a syntax check of the web page's script (`node --check`; needs
 Node.js, e.g. `winget install OpenJS.NodeJS.LTS`), formatting, clippy with
-warnings as errors, the f1-core tests, the probe, and the release builds (plain, showcase, replay of the archived race)
-with a check that each image stays under 95 % of an app slot. Any warning in
+warnings as errors, the f1-core tests, the probe, and the firmware's release build
+with a check that the image stays under 95 % of an app slot. Any warning in
 their output fails them, also one clippy can't turn into an error (such as an
 unused dependency). The CI also runs `cargo audit` on the three lock files.
 `cargo fmt --all` from `f1/` fixes formatting in f1 and f1-core.
@@ -289,7 +276,7 @@ F1 live feed ──WebSocket──▶ WebSocket client task ──channel──�
 OpenF1 ──HTTPS──▶ net thread (WiFi, clock, calendar, phase,          │
                   results, winner fallback) ───────────────────────┐ │
                                                                    ▼ ▼
-replay thread (replay builds) ───────────────────────────▶   Input queue
+                                                             Input queue
                                                                    │
 web page ──POST──▶ web handlers (settings, overrides) ────────────▶│
     ▲                                                              ▼
@@ -377,19 +364,17 @@ places, in this order:
 
 1. `f1-core/src/feed.rs`: the stream's JSON as a struct, a `FeedMessage`
    variant, and a `Stream` variant with its F1 name, `is_relevant` (which
-   lines a replay keeps) and `parse`.
-2. `f1/build.rs` `REPLAY_FILES` and `f1/src/replay.rs` `FILES`, so replay
-   builds embed it.
-3. `f1-core/src/live.rs`: the stream lists the lamp subscribes to (an
+   lines matter) and `parse`.
+2. `f1-core/src/live.rs`: the stream lists the lamp subscribes to (an
    account-only stream goes in `ACCOUNT_STREAMS`, which needs the F1TV
    token).
-4. `track_state.rs` (flags and the session) or `tracker.rs` (driver events)
+3. `track_state.rs` (flags and the session) or `tracker.rs` (driver events)
    turns its messages into a `RaceEvent` (`input.rs`).
-5. `settings.rs`: an `EffectToggles` switch and a line in `Settings::shows`.
-6. `theme.rs` `event_overlay`: what the lamp shows.
-7. `racelog.rs`: its line in the race log (`text`, `color`).
-8. `command.rs` `PreviewEvent`, so "Try an effect" can play it.
-9. `f1/web/index.html`: the switch (`EFFECTS`) and the try button.
+4. `settings.rs`: an `EffectToggles` switch and a line in `Settings::shows`.
+5. `theme.rs` `event_overlay`: what the lamp shows.
+6. `racelog.rs`: its line in the race log (`text`, `color`).
+7. `command.rs` `PreviewEvent`, so "Try an effect" can play it.
+8. `f1/web/index.html`: the switch (`EFFECTS`) and the try button.
 
 ### Threads, priorities and locks
 
@@ -400,7 +385,6 @@ places, in this order:
 | live | 12 KB | 5 | negotiate, the WebSocket, parsing the feed |
 | web handlers | 10 KB | 5 | every request, OTA uploads included |
 | WebSocket client | 6 KB | 5 | copies the feed's bytes into a channel |
-| replay (replay builds) | 8 KB | 5 | plays the embedded session |
 
 The stacks are in `f1/src/config.rs`; the minute `heap:` log line shows how
 much stack the main, net and live threads and the WebSocket client's task
@@ -441,16 +425,13 @@ espflash erase-parts --partition-table partitions.csv nvs
 The probe saves everything the feed sends to `f1-probe/captures/<date_time>/`.
 To make a test of it (as `f1-core/tests/practice.rs`):
 
-1. Copy the streams the lamp uses (those in `f1/build.rs` `REPLAY_FILES`, and
-   `ExtrapolatedClock`) to `f1-core/tests/data/<year>-<place>/<session>/`,
-   each trimmed to the lines `Stream::is_relevant` keeps, as `build.rs` does
-   for a replay build. `CarData.z` and `Position.z` aren't needed.
+1. Copy the streams the lamp subscribes to (the lists in
+   `f1-core/src/live.rs`) to `f1-core/tests/data/<year>-<place>/<session>/`,
+   each trimmed to the lines `Stream::is_relevant` keeps. `CarData.z` and
+   `Position.z` aren't needed.
 2. In the test, embed them with `include_str!` and play them through
    `Replayer` with a fake clock (see `practice.rs`). Print the inputs once to
    see what the session gives, then assert what matters.
-
-A capture also plays on the lamp as it is: point `$env:F1_REPLAY_DIR` at its
-folder and build with `--features replay`.
 
 ### The NVS budget
 

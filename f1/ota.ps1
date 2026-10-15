@@ -3,7 +3,7 @@
 # uploads it to the lamp over WiFi and waits for the lamp to come back.
 #
 #   cargo ota                       the normal firmware
-#   cargo ota --features showcase   any build works the same way
+#   cargo ota --features live-now   any build works the same way
 #
 # The lamp is f1-lightbox.local; set $env:F1_LAMP to use another address.
 

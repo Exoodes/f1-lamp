@@ -26,9 +26,6 @@ pub mod stack {
     /// The WebSocket client's own task: it only copies bytes into a channel.
     /// An `i32` because that's what `esp_websocket_client_config_t` takes.
     pub const WS_TASK: i32 = 6 * 1024;
-    /// Replay builds: reading and stepping through the embedded session.
-    #[cfg(feature = "player")]
-    pub const REPLAY: usize = 8 * 1024;
 }
 
 /// The LED ring: 23 WS2812s (`f1_core::frame::NUM_LEDS`) with their data line

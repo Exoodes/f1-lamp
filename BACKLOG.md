@@ -167,7 +167,8 @@ with `cargo ota` first) or a video:
   each qualifying part's fastest driver (decided 2026-10-15).
 - The BOOT button: it's inside the lamp.
 - Updating firmware from the web page: `cargo ota` covers it.
-- The lamp downloading races itself: replays stay embedded at build time.
+- Replays on the lamp: removed 2026-10-15 (never used, and they held the
+  image size back). The tests still play recorded sessions in f1-core.
 - Clippy's pedantic lints in f1-core (237 warnings, mostly `must_use`, doc
   backticks, `# Errors`): noise for this project. Its 18 cast warnings were
   read on 2026-10-15 and are all safe (clamped, small or constant values).

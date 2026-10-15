@@ -94,8 +94,6 @@ pub fn start(state: WebState) -> anyhow::Result<EspHttpServer<'static>> {
     command_routes(&mut server, tx)?;
     token_routes(&mut server, tokens)?;
     ota_route(&mut server)?;
-    #[cfg(feature = "player")]
-    replay_routes(&mut server)?;
 
     log::info!("web server started");
     Ok(server)
@@ -198,9 +196,8 @@ fn command_routes(
 }
 
 /// `POST /api/ota/nonce` (a one-time nonce) and `POST /api/ota` (a firmware
-/// image, with the nonce and its tag). In every build, replay and showcase
-/// included: whatever runs must be able to receive the next firmware, or the
-/// way back needs the cable.
+/// image, with the nonce and its tag). In every build: whatever runs must be
+/// able to receive the next firmware, or the way back needs the cable.
 fn ota_route(server: &mut EspHttpServer<'static>) -> anyhow::Result<()> {
     server.fn_handler::<anyhow::Error, _>("/api/ota/nonce", Method::Post, |req| {
         if let Some(why) = refusal(&req) {
@@ -251,42 +248,6 @@ fn ota_route(server: &mut EspHttpServer<'static>) -> anyhow::Result<()> {
                 reply(req, 400, TEXT, format!("update failed: {e:#}").as_bytes())
             }
         }
-    })?;
-    Ok(())
-}
-
-/// `GET /api/replay` (status) and `POST /api/replay` (a command). Without a
-/// replay these don't exist, so the page sees a 404 and hides its panel.
-#[cfg(feature = "player")]
-fn replay_routes(server: &mut EspHttpServer<'static>) -> anyhow::Result<()> {
-    use f1_core::replay::ReplayCommand;
-
-    server.fn_handler::<anyhow::Error, _>("/api/replay", Method::Get, |req| {
-        if let Some(why) = get_refusal(&req) {
-            return refuse(req, why);
-        }
-        let Some(replay) = crate::replay::handle() else {
-            return reply(req, 404, TEXT, b"no replay");
-        };
-        // Not 404: the page keeps asking until the session has been read.
-        let Some(status) = replay.status() else {
-            return reply(req, 503, TEXT, b"reading the session");
-        };
-        let body = serde_json::json!({
-            "name": replay.name(),
-            "status": status,
-        });
-        reply(req, 200, JSON, &serde_json::to_vec(&body)?)
-    })?;
-
-    server.fn_handler::<anyhow::Error, _>("/api/replay", Method::Post, |req| {
-        post_json(req, "replay command", |req, command: ReplayCommand| {
-            let Some(replay) = crate::replay::handle() else {
-                return reply(req, 404, TEXT, b"no replay");
-            };
-            replay.send(command)?;
-            reply(req, 204, TEXT, b"")
-        })
     })?;
     Ok(())
 }

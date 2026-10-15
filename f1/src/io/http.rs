@@ -45,7 +45,6 @@ pub static TLS: Mutex<()> = Mutex::new(());
 pub struct Reply {
     pub status: u16,
     /// The `Set-Cookie` header. With several, the client keeps the last one.
-    #[cfg_attr(feature = "player", allow(dead_code))]
     pub set_cookie: Option<String>,
     pub body: Vec<u8>,
 }

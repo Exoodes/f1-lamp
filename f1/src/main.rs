@@ -23,8 +23,6 @@ use io::{led::LedOutput, storage::SettingsStore, system::restart};
 mod config;
 mod io;
 mod net;
-#[cfg(feature = "player")]
-mod replay;
 mod web;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(20);
@@ -158,7 +156,7 @@ fn render_loop(
     }
 }
 
-/// Starts the net thread and the live-feed (or replay) thread, with what
+/// Starts the net thread and the live-feed thread, with what
 /// they share, each watched by `supervise` through its heartbeat.
 fn spawn_threads(
     modem: Modem<'static>,
@@ -190,17 +188,9 @@ fn spawn_threads(
             )?,
             heartbeat: net_beat,
         },
-        // A replay plays its own events; the live feed would mix in real ones.
-        #[cfg(not(feature = "player"))]
         Watched {
             name: "live",
             handle: io::live::spawn(tx.clone(), live, tokens, Arc::clone(&feed_beat))?,
-            heartbeat: feed_beat,
-        },
-        #[cfg(feature = "player")]
-        Watched {
-            name: "replay",
-            handle: replay::spawn(tx.clone(), Arc::clone(&feed_beat))?,
             heartbeat: feed_beat,
         },
     ])

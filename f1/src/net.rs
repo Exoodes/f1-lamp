@@ -167,8 +167,7 @@ impl Schedule {
         tx: &SyncSender<Input>,
     ) -> anyhow::Result<PhaseUpdate> {
         let update = self.calendar.phase(now_unix, feed_running);
-        // A replay owns the phase; two producers would fight over it.
-        if update.changed && !cfg!(feature = "player") {
+        if update.changed {
             tx.send(Input::Phase(update.phase))
                 .context("render loop is gone")?;
             log_phase(self.calendar.followed(), now_unix, feed_running);
@@ -461,10 +460,7 @@ impl<'a> Net<'a> {
             self.due.calendar = now;
             self.calendar_retry.reset();
         }
-        // A replay owns the phase, and the countdown goes with it.
-        if !cfg!(feature = "player") {
-            self.send_next_start(now, unix)?;
-        }
+        self.send_next_start(now, unix)?;
         Ok(now + schedule::phase_wait(self.schedule.calendar.sessions(), unix))
     }
 

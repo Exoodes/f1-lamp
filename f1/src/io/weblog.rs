@@ -13,7 +13,7 @@ use log::{Log, Metadata, Record};
 use crate::io::clock;
 
 /// Enough to bridge the page's one-second polls, even when a burst of lines
-/// (a reconnect, a replay jump) comes in between.
+/// (a reconnect) comes in between.
 const LINES: usize = 40;
 /// Longer lines (snapshots) are cut; the serial port still has them whole.
 const MAX_LINE: usize = 240;

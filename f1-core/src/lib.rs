@@ -6,8 +6,9 @@
 //!   [`live_timers`] (pings, silence, the TLS lock) and [`feed_health`].
 //! - What the feed says: [`feed`] (the streams' JSON), [`track_state`] (which
 //!   flag is out) and [`tracker`] (winner, pit stops, fastest laps, overtakes).
-//! - Archived sessions: [`stream`] (one line), [`timeline`] (the streams merged
-//!   by time), [`replay`] and [`playback`] (its clock).
+//! - Recorded sessions: [`stream`] (one line), [`timeline`] (the streams
+//!   merged by time), [`replay`] and [`playback`] (its clock). The tests play
+//!   recorded sessions through the lamp's logic with them; the lamp doesn't.
 //! - The lamp: [`input`] (what the threads send), [`controller`] (what to
 //!   show), [`effect`], [`theme`], [`overlays`], [`delay`] (the TV delay),
 //!   [`post`] (brightness), [`frame`], [`color`], [`snapshot`], [`command`],

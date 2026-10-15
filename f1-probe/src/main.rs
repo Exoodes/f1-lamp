@@ -1,7 +1,7 @@
 //! Talks to F1's live timing feed from the PC: negotiate, WebSocket, SignalR
 //! handshake, subscribe. Prints every message and saves it, in the archive's
 //! `.jsonStream` format, under `captures/<date>_<time>/`, so a capture can
-//! become a test fixture or a replay as it is.
+//! become a test fixture.
 //!
 //! ```text
 //! cargo run                 until Ctrl+C

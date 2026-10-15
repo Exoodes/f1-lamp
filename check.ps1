@@ -1,7 +1,7 @@
 # Every check the CI runs (.github/workflows/ci.yml), the same way on this
 # PC: the web page's script syntax (needs Node.js), formatting, clippy with
-# warnings as errors, the f1-core tests, the probe, and release builds of the
-# firmware with the image-size check. Any
+# warnings as errors, the f1-core tests, the probe, and the firmware's release
+# build with the image-size check. Any
 # warning in a check's output fails it. Only the security audit of the lock
 # files runs in CI alone.
 #
@@ -17,11 +17,8 @@ $ErrorActionPreference = 'Continue'
 $root = $PSScriptRoot
 $failed = New-Object System.Collections.Generic.List[string]
 
-# The replay build plays the archived race from the tests, so it needs no
-# [replay] dir in cfg.toml.
-$replayDir = Join-Path $root 'f1-core/tests/data/2026-italy/race'
 # An image above this share of an app slot fails: an update over WiFi needs
-# the image to fit, and replays embed whole sessions.
+# the image to fit.
 $maxSlotPercent = 95
 
 # One line of a native command's output: a stderr line arrives as an error
@@ -33,25 +30,16 @@ function Get-Text($line) {
     return "$line"
 }
 
-# Runs `cargo <CargoArgs>` in `Dir` with the variables in `Vars` set for it.
-# Shows the output only when it fails.
+# Runs `cargo <CargoArgs>` in `Dir`. Shows the output only when it fails.
 function Invoke-Cargo {
-    param([string]$Name, [string]$Dir, [string[]]$CargoArgs, [hashtable]$Vars = @{})
+    param([string]$Name, [string]$Dir, [string[]]$CargoArgs)
     Write-Host "== $Name" -ForegroundColor Cyan
-    $saved = @{}
-    foreach ($key in $Vars.Keys) {
-        $saved[$key] = [Environment]::GetEnvironmentVariable($key)
-        [Environment]::SetEnvironmentVariable($key, $Vars[$key])
-    }
     Push-Location (Join-Path $root $Dir)
     # Each line as plain text: Windows PowerShell wraps a native command's
     # stderr lines in error records, which print with noise around them.
     $output = & cargo @CargoArgs 2>&1 | ForEach-Object { Get-Text $_ } | Out-String
     $code = $LASTEXITCODE
     Pop-Location
-    foreach ($key in $saved.Keys) {
-        [Environment]::SetEnvironmentVariable($key, $saved[$key])
-    }
     # Warnings that clippy's -D warnings doesn't reach (e.g. an unused
     # dependency in Cargo.toml) fail the check too.
     if ($code -eq 0 -and $output -match '(?m)^warning:') {
@@ -147,13 +135,6 @@ if ($Part -ne 'core') {
         Invoke-Cargo 'f1: clippy' 'f1' @('clippy', '--release', '--', '-D', 'warnings') | Out-Null
         if (Invoke-Cargo 'f1: build' 'f1' @('build', '--release')) {
             Test-ImageSize 'f1'
-        }
-        if (Invoke-Cargo 'f1: build showcase' 'f1' @('build', '--release', '--features', 'showcase')) {
-            Test-ImageSize 'f1 showcase'
-        }
-        $vars = @{ F1_REPLAY_DIR = $replayDir }
-        if (Invoke-Cargo 'f1: build replay' 'f1' @('build', '--release', '--features', 'replay') $vars) {
-            Test-ImageSize 'f1 replay'
         }
     }
 }

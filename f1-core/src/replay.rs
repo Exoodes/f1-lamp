@@ -1,6 +1,7 @@
 //! Plays archived streams back as lamp inputs: the timeline gives messages in
 //! order, the track state and the tracker turn them into race events, and the
-//! playback clock says when each one is due.
+//! playback clock says when each one is due. The tests use it to play
+//! recorded sessions through the lamp's logic.
 //!
 //! The replay owns the phase: before lights out it's PreSession, from lights
 //! out to the last message Live, then PostSession. That works for races and

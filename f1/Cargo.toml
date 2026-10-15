@@ -12,8 +12,7 @@ harness = false # do not use the built-in cargo test harness -> resolve rust-ana
 
 [profile.release]
 opt-level = "s"
-# Optimised across crates as one unit: a smaller image (replays fill most of
-# an app slot), for a slower build.
+# Optimised across crates as one unit: a smaller image, for a slower build.
 lto = true
 codegen-units = 1
 
@@ -36,22 +35,14 @@ serde = "1.0.229"
 [build-dependencies]
 embuild = "0.33.5"
 toml = "0.8"
-# build.rs trims replay files with the same filter the replay uses.
-f1-core = { path = "../f1-core" }
 
 [features]
-# Plays the session in `[replay] dir` of cfg.toml (or $F1_REPLAY_DIR) on the lamp.
-replay = ["player"]
-# Plays the hand-written showcase race in f1-core/tests/data/showcase.
-showcase = ["player"]
 # Connects to F1's live feed at once, whatever the schedule says: to test
 # between sessions (the feed then holds the last session's state).
 live-now = []
 # A firmware that crashes 10 s after every boot: to test the update fallback.
 # Only ever send it with `cargo ota --features crash-test`.
 crash-test = []
-# Internal: what every kind of replay needs. Not meant to be enabled by hand.
-player = []
 
 [[package.metadata.esp-idf-sys.extra_components]]
 remote_component = { name = "espressif/mdns", version = "1.2" }

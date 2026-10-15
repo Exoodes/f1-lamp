@@ -48,8 +48,8 @@ pub struct Settings {
     /// by older firmware may hold a single `favourite_driver` instead; like
     /// any unknown key it's ignored, so the list then starts empty.
     pub followed_drivers: DriverSet,
-    /// Pit stops and overtakes of every driver, whatever the list says: for
-    /// the showcase, or to see everything (a race has hundreds of overtakes).
+    /// Pit stops and overtakes of every driver, whatever the list says: to
+    /// see everything (a race has hundreds of overtakes).
     pub follow_all: bool,
     pub winner_display_ms: u32,
     /// How long a green flag shows before the lamp's own colour returns;
