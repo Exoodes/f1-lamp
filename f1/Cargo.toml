@@ -60,4 +60,6 @@ remote_component = { name = "espressif/mdns", version = "1.2" }
 # component. After changing these, touch sdkconfig.defaults so
 # ESP-IDF is rebuilt.
 [[package.metadata.esp-idf-sys.extra_components]]
-remote_component = { name = "espressif/esp_websocket_client", version = "1.2" }
+# 1.8 or later: 1.2.3's destroy could free the client while its task still
+# used it after the server closed.
+remote_component = { name = "espressif/esp_websocket_client", version = "^1.8.0" }
