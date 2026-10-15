@@ -77,8 +77,7 @@ with `cargo ota` first) or a video:
 Maybe: the length checks in `ota_route`, `check_trial` (the FallBack arm
 in its own function), `Net::round` (`log_heap`); the `wifi_up && unix_now`
 check repeated 3 times in `net.rs`; a shared body reader for `post_json`
-and the token POST. Also `started` in `TrackState` means "start lights
-sent"; rename it.
+and the token POST.
 
 ## Later
 

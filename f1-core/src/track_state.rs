@@ -15,7 +15,9 @@ pub struct TrackState {
     track: Option<TrackCode>,
     double_yellow: HashSet<u8>,
     shown: Option<TrackFlag>,
-    started: bool,
+    /// The first `Started` came while connected: the start, with or without
+    /// start lights. Later ones (a restart after a red flag) aren't starts.
+    first_start_seen: bool,
     /// The feed says the session began, maybe before the lamp connected
     /// (`SessionStatus.Started`).
     begun: bool,
@@ -76,10 +78,10 @@ impl TrackState {
             SessionState::Inactive => {}
             _ => self.suspended = false,
         }
-        if state != SessionState::Started || self.started {
+        if state != SessionState::Started || self.first_start_seen {
             return None;
         }
-        self.started = true;
+        self.first_start_seen = true;
         self.may_be_race().then_some(RaceEvent::StartLights)
     }
 
@@ -164,7 +166,7 @@ impl TrackState {
             Some(Started | Aborted) => true,
             // Between qualifying's parts, or before a restart after a red
             // flag; also when the lamp connected only then.
-            Some(Inactive) => self.started || self.begun,
+            Some(Inactive) => self.first_start_seen || self.begun,
             Some(Finished) => !self.may_be_race(),
             _ => false,
         }
