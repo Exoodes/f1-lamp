@@ -172,8 +172,9 @@ only the lines the lamp uses, so a whole race fits in the firmware.
   the delay set, and buttons to move the delay by 0.1, 0.5 or 1 second,
   until they change together with the TV's;
 - this race weekend: its sessions in your time zone, a countdown to the next
-  one, which are live, which moved (and from when) or were cancelled, and
-  who was fastest, on pole or won (until a day after the race);
+  one (in TV time: it reaches zero when your TV shows the start, with the
+  lamp's), which are live, which moved (and from when) or were cancelled,
+  and who was fastest, on pole or won (until a day after the race);
 - lamp colour and brightness, night mode (in Central European time), TV
   delay, how long green and the winner show;
 - which events show, which kinds of session the lamp follows, and the

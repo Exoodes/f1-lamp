@@ -45,11 +45,6 @@ Ideas for after the course, in no particular order of size.
   missed; to show those too, either ask a small dedicated endpoint every
   ~250 ms, or have the lamp keep the effects started in the last few seconds
   for the page to play a little late (about half a day with this part).
-- **The page's countdown in TV time.** "This weekend" counts to the
-  scheduled start and says "live" then; the lamp's countdown effect runs
-  until the start plus the TV delay. Adding the delay on the page (it's in
-  the settings the page already has) would make both reach zero together.
-  Small, page only.
 
 ## From the review, 2026-10-14
 

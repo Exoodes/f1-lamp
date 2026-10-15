@@ -750,6 +750,7 @@ function showTv(state) {
   $("tv-lap").textContent = tv.lap === null ? "–"
     : tv.total_laps ? tv.lap + " / " + tv.total_laps : String(tv.lap);
   $("tv-delay").textContent = (state.settings.tv_delay_ms / 1000).toFixed(1) + " s";
+  tvDelayS = state.settings.tv_delay_ms / 1000;
   showTvClock();
 }
 
@@ -906,6 +907,9 @@ function addRaceLogLine(line) {
 
 // The lamp's clock minus this device's, so the countdown follows the lamp.
 let lampOffsetMs = 0;
+// The TV delay setting, from the last status: the weekend is shown in TV
+// time, so the countdown reaches zero with the TV (and the lamp's).
+let tvDelayS = 0;
 let weekend = null;
 
 // Asked again soon while a finished session waits for its result (the lamp
@@ -962,6 +966,8 @@ function countdown(s) {
 function showWeekend() {
   const now = (Date.now() + lampOffsetMs) / 1000;
   $("w-now").textContent = "now " + clockNow(now);
+  // What the TV shows now happened this long ago.
+  const tvNow = now - tvDelayS;
   const list = $("w-sessions");
   list.replaceChildren();
   $("w-empty").hidden = weekend !== null;
@@ -976,7 +982,7 @@ function showWeekend() {
   let nextShown = false;
   for (const s of weekend.sessions) {
     // Worked out again here: the reply can be up to a minute old.
-    const state = now >= s.end ? "done" : now >= s.start ? "live" : "coming";
+    const state = tvNow >= s.end ? "done" : tvNow >= s.start ? "live" : "coming";
     const isNext = state === "coming" && s.followed && !s.cancelled && !nextShown;
     nextShown ||= isNext;
     const li = document.createElement("li");
@@ -990,7 +996,7 @@ function showWeekend() {
     if (s.cancelled) status.textContent = "cancelled";
     else if (state === "done" && s.result) status.append(resultBadge(s.kind, s.result));
     else status.textContent = state === "done" ? "done" : !s.followed ? "not followed"
-      : state === "live" ? "live" : isNext ? "in " + countdown(Math.floor(s.start - now)) : "";
+      : state === "live" ? "live" : isNext ? "in " + countdown(Math.floor(s.start - tvNow)) : "";
     const time = document.createElement("span");
     time.className = "when";
     time.textContent = when(s.start);
