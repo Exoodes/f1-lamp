@@ -27,7 +27,7 @@ use f1_core::{
     settings::Settings,
     snapshot::{Snapshot, StateReply},
     token::TokenStatus,
-    web_api::{host_refusal, post_refusal, query_number},
+    web_api::{host_refusal, post_refusal, query_number, upload_len},
     weekend::{weekend, Moved, Results, ScheduleReply},
 };
 use serde::de::DeserializeOwned;
@@ -213,6 +213,14 @@ fn ota_route(server: &mut EspHttpServer<'static>) -> anyhow::Result<()> {
         if let Some(why) = refusal(&req) {
             return refuse(req, why);
         }
+        // Before the nonce: a wrong size doesn't use it up.
+        let len = match upload_len(req.header("Content-Length"), ota::MAX_IMAGE) {
+            Ok(len) => len,
+            Err((status, why)) => {
+                log::warn!("ota: refused an upload: {why}");
+                return reply(req, status, TEXT, why.as_bytes());
+            }
+        };
         let nonce = req.header(NONCE_HEADER).and_then(ota::redeem_nonce);
         let start = req.header(START_HEADER).map(str::to_owned);
         let tag = req.header(AUTH_HEADER).map(str::to_owned);
@@ -224,12 +232,6 @@ fn ota_route(server: &mut EspHttpServer<'static>) -> anyhow::Result<()> {
                 TEXT,
                 b"needs a fresh nonce from /api/ota/nonce and its tags",
             );
-        };
-        let Some(len) = req
-            .header("Content-Length")
-            .and_then(|l| l.parse::<usize>().ok())
-        else {
-            return reply(req, 411, TEXT, b"Content-Length needed");
         };
         let tags = ota::Tags {
             start: &start,

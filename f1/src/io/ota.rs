@@ -274,16 +274,14 @@ pub struct Tags<'a> {
 
 /// Writes the request body (`len` bytes, a `.bin` from `espflash
 /// save-image`) to the free slot and, if `tags` prove the update key, makes
-/// it the one to boot. The caller restarts the chip afterwards.
+/// it the one to boot. The caller has checked that `len` fits a slot
+/// (`web_api::upload_len`) and restarts the chip afterwards.
 pub fn receive(
     req: &mut Request<&mut EspHttpConnection<'_>>,
     len: usize,
     mut check: UploadCheck,
     tags: Tags<'_>,
 ) -> anyhow::Result<()> {
-    if len == 0 || len > MAX_IMAGE {
-        bail!("{len} bytes: a firmware image must be 1 to {MAX_IMAGE} bytes");
-    }
     // Starting erases the free slot, which holds the previous firmware
     // during a trial: only for someone with the key.
     if !check.may_start(OTA_KEY, len, tags.start) {

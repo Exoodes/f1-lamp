@@ -46,6 +46,25 @@ pub fn post_refusal(
     host_refusal(host, hostname)
 }
 
+/// A firmware upload's length from its `Content-Length`, or why it's
+/// refused, with the status to answer: 411 without one, 400 for one that
+/// isn't a number or is 0, 413 above `max` (an app slot).
+pub fn upload_len(content_length: Option<&str>, max: usize) -> Result<usize, (u16, String)> {
+    let header = content_length.ok_or((411, "Content-Length needed".to_owned()))?;
+    let len: usize = header
+        .trim()
+        .parse()
+        .map_err(|_| (400, format!("bad Content-Length: {header}")))?;
+    match len {
+        0 => Err((400, "an empty firmware image".to_owned())),
+        len if len > max => Err((
+            413,
+            format!("{len} bytes: a firmware image must be at most {max} bytes"),
+        )),
+        len => Ok(len),
+    }
+}
+
 /// `name`'s value in the query string, if it's a number: `/x?after=12` -> 12.
 pub fn query_number(uri: &str, name: &str) -> Option<u64> {
     let (_, query) = uri.split_once('?')?;
@@ -90,6 +109,22 @@ mod tests {
             let why = host_refusal(host, NAME).unwrap();
             assert!(why.starts_with("unknown Host"), "{host:?}: {why}");
         }
+    }
+
+    #[test]
+    fn an_upload_length_up_to_the_slot_is_taken() {
+        assert_eq!(upload_len(Some("1753136"), 0x1F_0000), Ok(1_753_136));
+        assert_eq!(upload_len(Some("2031616"), 0x1F_0000), Ok(0x1F_0000));
+    }
+
+    #[test]
+    fn a_missing_empty_broken_or_too_long_upload_length_is_refused() {
+        let status = |header| upload_len(header, 0x1F_0000).unwrap_err().0;
+        assert_eq!(status(None), 411);
+        assert_eq!(status(Some("abc")), 400);
+        assert_eq!(status(Some("-1")), 400);
+        assert_eq!(status(Some("0")), 400);
+        assert_eq!(status(Some("2031617")), 413);
     }
 
     #[test]
