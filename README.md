@@ -24,13 +24,13 @@ Rust: the course*, with some extras of its own.
 | Red flag | red, also through the whole stoppage |
 | Start lights | five red lights going out with the TV (needs a TV delay of at least 6 s) |
 | Last lap | two white flashes when the leader starts a race's last lap |
-| Chequered flag | a white pattern (one lit LED, three dark) that jumps back and forth, for 10 s; in qualifying after Q1, Q2 and Q3 |
+| Chequered flag | a white pattern (one lit LED, three dark) that jumps back and forth, for 10 s, at the end of every session; in qualifying after Q1 and Q2 too |
 | Winner | a chase in the winner's team colour, after the chequered flag; after qualifying, pole's (once every car has finished its last lap, at most 2 minutes after the flag) |
 | Fastest lap | three purple flashes, for every new session best |
 | Knocked out | the team colour fading out over 3 s (followed drivers, after Q1 and Q2; the feed says so about 6 minutes after the part's chequered flag) |
 | Pit stop | two flashes in the team colour (followed drivers) |
 | Overtake | one flash in the team colour (followed drivers, needs F1TV) |
-| No network | breathing blue (WiFi connecting) or blinking red (the live feed failed 3 times in a row), only around a session |
+| No network | breathing blue (WiFi connecting) or blinking red (the live feed failed 3 times in a row): after a boot until the lamp is first online, then only around a session |
 
 Practice, qualifying, sprint and race are all followed; each kind can be
 switched off on the page. A TV delay setting holds everything back so the
@@ -225,8 +225,21 @@ logged or returned by the API. Keep the lamp on your home network.
 
 ```
 cd f1-core
-cargo test        # unit tests plus the archived 2026 Italian GP and the showcase
+cargo test        # unit tests plus the recorded sessions below
 ```
+
+The sessions in `f1-core/tests/data/`, each played through the same code as
+the lamp:
+
+- the 2026 Italian GP race and qualifying, from F1's archive;
+- the 2026 Singapore GP sprint qualifying, from the archive (pole timing,
+  a red flag);
+- the last half hour of the 2026 Singapore GP FP1, captured live by the
+  probe (VSC ending, chequered flag in practice);
+- the live feed's answer to `Subscribe` after the 2026 Bahrain GP race, from
+  the probe (live data differs from the archive);
+- the hand-written showcase (`--features showcase`);
+- OpenF1's 2026 calendar and the Italian GP race result.
 
 `f1-core` must be tested from its own folder: `f1/.cargo/config.toml` builds
 for the ESP32. Before calling a change done, run every check at once (the
@@ -259,8 +272,9 @@ With `$env:F1TV_TOKEN` set, the probe sends the token as well.
 
 - **F1 live timing** (`livetiming.formula1.com`, SignalR over a WebSocket):
   flags, session status, race control, driver list, top three, pit lane,
-  timing stats, overtakes, qualifying parts (session data) and knockouts
-  (timing data). Unofficial and undocumented; it changes without
+  timing stats, overtakes, qualifying parts (session data), knockouts
+  (timing data), the race's laps (lap count: the last lap and the page's TV
+  lap) and the session clock (extrapolated clock: the page's TV clock). Unofficial and undocumented; it changes without
   notice. When the lamp stops reacting on a race weekend, run the probe on
   the PC first.
 - **OpenF1** (`api.openf1.org`): the session calendar, each session's P1
