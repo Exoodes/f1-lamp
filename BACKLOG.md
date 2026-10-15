@@ -22,6 +22,11 @@ Ideas for after the course, in no particular order of size.
   `f1-probe/captures/2026-10-11_13-40-12`, trimmed to the streams the lamp
   uses (TimingStats 236 KB; only the needed lines). Covers the fastest-lap
   fix; with `DriverRaceInfo`, the overtakes.
+- **No fastest lap from the snapshot on connecting.** Joining a session
+  flashes the current holder's fastest lap as if new: the TimingStats
+  snapshot carries `Position: 1` with a `Value` (seen in the FP1 fixture,
+  `tests/practice.rs`: #12 twice in the first 0.2 s). Remember the holder
+  from the snapshot without an event.
 - **A "winner" for practice.** E.g. the team colour of the driver with the
   fastest lap when the session ends, like pole after qualifying.
 - **Rework the effects.** Some are too fast (seen again in sprint
@@ -50,6 +55,23 @@ Ideas for after the course, in no particular order of size.
   until the start plus the TV delay. Adding the delay on the page (it's in
   the settings the page already has) would make both reach zero together.
   Small, page only.
+
+## From the review, 2026-10-14
+
+In this order; `check.ps1` after each. The bugs and the small items are
+done (2026-10-14).
+
+Structure:
+
+- **Maybe `TWDTDriver`** instead of the raw watchdog calls (`system.rs`,
+  4 `esp_task_wdt` calls). Optional; the rest of Structure is done
+  (2026-10-15).
+
+Tests and docs:
+
+- **A sprint race fixture** when one is captured (the practice one is done:
+  `tests/practice.rs`).
+
 ## Later
 
 - **Home Assistant over MQTT.** Written by me: the lamp's state out,
@@ -154,3 +176,7 @@ Ideas for after the course, in no particular order of size.
 - The BOOT button: it's inside the lamp.
 - Updating firmware from the web page: `cargo ota` covers it.
 - The lamp downloading races itself: replays stay embedded at build time.
+- Clippy's pedantic lints in f1-core (232 warnings, mostly `must_use`, doc
+  backticks, `# Errors`): noise for this project. Its 18 cast warnings were
+  read on 2026-10-15 and are all safe (clamped, small or constant values).
+  `cargo audit` stays in CI only.
