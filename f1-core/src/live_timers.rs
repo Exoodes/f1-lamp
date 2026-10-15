@@ -12,6 +12,8 @@ pub const PING_EVERY: Duration = Duration::from_secs(15);
 /// Heartbeat and pings arrive every few seconds; this long without anything
 /// means the connection is dead even if nobody said so.
 pub const SILENCE_LIMIT: Duration = Duration::from_secs(60);
+// `LiveTimers::wake_at` leaves the silence check to the next ping.
+const _: () = assert!(PING_EVERY.as_millis() < SILENCE_LIMIT.as_millis());
 /// The longest the TLS lock is kept after the WebSocket opens, waiting for
 /// the answer to `Subscribe`. It normally comes within a second; if it never
 /// does (refused, or too large and skipped), holding on would block every

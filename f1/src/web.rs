@@ -59,8 +59,6 @@ const HTML: &str = "text/html; charset=utf-8";
 const JSON: &str = "application/json";
 const TEXT: &str = "text/plain; charset=utf-8";
 
-/// Starts the web server. Handlers read the snapshot and hand inputs to the
-/// render loop; they never block on it. Dropping the server stops it.
 /// What the web server's handlers share with the rest of the firmware.
 pub struct WebState {
     /// Written by the render loop.
@@ -75,6 +73,8 @@ pub struct WebState {
     pub tokens: Arc<TokenKeeper>,
 }
 
+/// Starts the web server. Handlers read the snapshot and hand inputs to the
+/// render loop; they never block on it. Dropping the server stops it.
 pub fn start(state: WebState) -> anyhow::Result<EspHttpServer<'static>> {
     let WebState {
         snapshot,
