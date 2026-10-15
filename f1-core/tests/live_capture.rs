@@ -100,8 +100,26 @@ fn top_three_leader_is_verstappen() {
     assert_eq!(leader.as_deref(), Some("3"));
 }
 
-/// The streams of the capture by name, Heartbeat included. `None` for one
-/// the lamp has asked for only since the capture was made (SessionData).
+/// Streams the lamp has asked for only since the Bahrain capture was made:
+/// their state at the end of the 2026 Singapore GP race, merged from the
+/// probe's capture of it. SessionData then holds every lap's start, its
+/// largest size.
+const ADDED: [(Stream, &str); 3] = [
+    (
+        Stream::SessionData,
+        include_str!("data/live/2026-singapore-race-end/SessionData.jsonStream"),
+    ),
+    (
+        Stream::LapCount,
+        include_str!("data/live/2026-singapore-race-end/LapCount.jsonStream"),
+    ),
+    (
+        Stream::Clock,
+        include_str!("data/live/2026-singapore-race-end/ExtrapolatedClock.jsonStream"),
+    ),
+];
+
+/// The streams of the captures by name, Heartbeat included.
 fn captured(name: &str) -> Option<&'static str> {
     match name {
         "Heartbeat" => Some(include_str!(
@@ -109,6 +127,7 @@ fn captured(name: &str) -> Option<&'static str> {
         )),
         _ => FILES
             .iter()
+            .chain(&ADDED)
             .find(|(stream, _)| stream.name() == name)
             .map(|(_, text)| *text),
     }
@@ -131,19 +150,25 @@ fn answer(id: &str, names: &[&str]) -> String {
     )
 }
 
+/// A `Subscribe` call's invocation id and the streams it asks for.
+fn asks_for(frame: &str) -> (String, Vec<String>) {
+    let call: serde_json::Value = serde_json::from_str(frame.trim_end_matches('\u{1e}')).unwrap();
+    let names = call["arguments"][0]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|name| name.as_str().unwrap().to_owned())
+        .collect();
+    (call["invocationId"].as_str().unwrap().to_owned(), names)
+}
+
 /// The answers to the lamp's own first two `Subscribe` calls, built from what
 /// they ask for: the state it uses, and the race control history.
 fn the_lamps_answers() -> (String, String) {
-    let call = |frame: &String| {
-        let call: serde_json::Value =
-            serde_json::from_str(frame.trim_end_matches('\u{1e}')).unwrap();
-        let names: Vec<&str> = call["arguments"][0]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|name| name.as_str().unwrap())
-            .collect();
-        answer(call["invocationId"].as_str().unwrap(), &names)
+    let call = |frame: &str| {
+        let (id, names) = asks_for(frame);
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        answer(&id, &names)
     };
     let frames = LiveSession::opening_frames(false);
     let race_control = frames
@@ -171,6 +196,12 @@ fn receive_as_on_the_device(live: &mut LiveSession, answer: &str) -> (Vec<String
 #[test]
 fn the_state_the_lamp_asks_for_fits_one_frame_on_the_device() {
     let (state, _) = the_lamps_answers();
+    // Every stream the call asks for has captured data, so the answer is as
+    // large as after a real race.
+    let (_, names) = asks_for(&LiveSession::opening_frames(false)[1]);
+    for name in names {
+        assert!(captured(&name).is_some(), "no captured {name}");
+    }
     assert!(state.len() < MAX_FRAME, "{} bytes", state.len());
     let mut live = LiveSession::new(MAX_FRAME);
     let (problems, subscribed) = receive_as_on_the_device(&mut live, &state);

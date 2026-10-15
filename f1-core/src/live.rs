@@ -38,7 +38,7 @@ const INITIAL_ORDER: [Stream; 8] = [
 ];
 
 /// One SignalR message at most, for [`LiveSession::new`] on the device. The
-/// state the lamp uses arrives as about 12 KB after a race. The race control
+/// state the lamp uses arrives as about 16 KB after a race. The race control
 /// history (about 45 KB) is meant to exceed it: the splitter skips it without
 /// buffering, which logs one "frame larger than" warning per connection.
 /// Buffering it would need a single 45 KB block, which the heap often doesn't

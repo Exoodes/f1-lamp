@@ -241,7 +241,8 @@ the lamp:
 - the whole 2026 Singapore GP race, captured live by the probe (start
   lights, two VSCs, fastest laps, pit stops, last lap, winner);
 - the live feed's answer to `Subscribe` after the 2026 Bahrain GP race, from
-  the probe (live data differs from the archive);
+  the probe (live data differs from the archive), with SessionData, LapCount
+  and ExtrapolatedClock as they stood at the end of the Singapore race;
 - the hand-written showcase (`--features showcase`);
 - OpenF1's 2026 calendar and the Italian GP race result.
 
