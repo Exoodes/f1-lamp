@@ -74,9 +74,6 @@ with `cargo ota` first) or a video:
    01:01:07, `Started` 01:32:24. First check the video for whether it was
    a standing start.
 
-Maybe: a shared body reader for `post_json`
-and the token POST.
-
 ## Later
 
 - **Home Assistant over MQTT.** Written by me: the lamp's state out,

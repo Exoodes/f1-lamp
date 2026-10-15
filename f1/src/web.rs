@@ -311,10 +311,9 @@ fn token_routes(
         if let Some(why) = refusal(&req) {
             return refuse(req, why);
         }
-        let body = match read_capped(|buf| req.read(buf), MAX_TOKEN_BODY, None, BODY_DEADLINE)? {
-            Body::Whole(body) => body,
-            Body::TooLarge => return reply(req, 413, TEXT, b"too long for a token"),
-            Body::TooSlow => return reply(req, 408, TEXT, b"body too slow"),
+        let body = match read_body(&mut req, MAX_TOKEN_BODY, "too long for a token")? {
+            Ok(body) => body,
+            Err((status, why)) => return reply(req, status, TEXT, why.as_bytes()),
         };
         let pasted = String::from_utf8_lossy(&body);
         let status = tokens.set(&pasted, clock::unix_now())?;
@@ -340,10 +339,9 @@ fn post_json<'r, 'c, T: DeserializeOwned>(
     if let Some(why) = refusal(&req) {
         return refuse(req, why);
     }
-    let body = match read_capped(|buf| req.read(buf), MAX_JSON_BODY, None, BODY_DEADLINE)? {
-        Body::Whole(body) => body,
-        Body::TooLarge => return reply(req, 413, TEXT, b"body too large"),
-        Body::TooSlow => return reply(req, 408, TEXT, b"body too slow"),
+    let body = match read_body(&mut req, MAX_JSON_BODY, "body too large")? {
+        Ok(body) => body,
+        Err((status, why)) => return reply(req, status, TEXT, why.as_bytes()),
     };
     match serde_json::from_slice::<T>(&body) {
         Ok(value) => act(req, value),
@@ -352,6 +350,25 @@ fn post_json<'r, 'c, T: DeserializeOwned>(
             reply(req, 400, TEXT, format!("bad {what}: {e}").as_bytes())
         }
     }
+}
+
+/// A POST's body: at most `max` bytes, within `BODY_DEADLINE`, read into a
+/// buffer sized by its Content-Length. Otherwise the status and text to
+/// answer with: 413 and `too_large`, or 408.
+fn read_body(
+    req: &mut Request<&mut EspHttpConnection<'_>>,
+    max: usize,
+    too_large: &'static str,
+) -> anyhow::Result<Result<Vec<u8>, (u16, &'static str)>> {
+    let expected = req
+        .header("Content-Length")
+        .and_then(|len| len.parse().ok());
+    let read = read_capped(|buf| req.read(buf), max, expected, BODY_DEADLINE)?;
+    Ok(match read {
+        Body::Whole(body) => Ok(body),
+        Body::TooLarge => Err((413, too_large)),
+        Body::TooSlow => Err((408, "body too slow")),
+    })
 }
 
 /// Why a POST is refused, if it is (`web_api::post_refusal`).
