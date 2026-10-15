@@ -15,11 +15,12 @@
 //! - Around it: [`schedule`], [`openf1`] (when sessions are) and
 //!   [`net_schedule`] (the network thread's jobs), [`token`] (F1TV),
 //!   [`ota_auth`], [`ota_trial`], [`heartbeat`], [`backoff`],
-//!   [`frame_stats`], [`logbuf`] and [`web_api`].
+//!   [`frame_stats`], [`logbuf`], [`web_api`] and [`body`] (HTTP bodies).
 
 #![forbid(unsafe_code)]
 
 pub mod backoff;
+pub mod body;
 pub mod color;
 pub mod command;
 pub mod controller;

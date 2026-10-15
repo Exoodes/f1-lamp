@@ -12,9 +12,8 @@ use esp_idf_svc::http::{
     client::{Configuration, EspHttpConnection},
     Method,
 };
+use f1_core::body::{read_capped, Body};
 use serde::de::DeserializeOwned;
-
-use super::body::{read_capped, Body};
 
 /// Larger responses are refused, so a surprise can't exhaust the heap.
 const MAX_RESPONSE: usize = 32 * 1024;
@@ -77,8 +76,13 @@ pub fn request(method: Method, url: &str, headers: &[(&str, &str)]) -> anyhow::R
         let announced = connection
             .header("Content-Length")
             .and_then(|len| len.parse().ok());
-        let read = read_capped(&mut connection, MAX_RESPONSE, announced, BODY_DEADLINE)
-            .with_context(|| format!("read body of {url}"))?;
+        let read = read_capped(
+            |buf| connection.read(buf),
+            MAX_RESPONSE,
+            announced,
+            BODY_DEADLINE,
+        )
+        .with_context(|| format!("read body of {url}"))?;
         match read {
             Body::Whole(body) => body,
             Body::TooLarge => bail!("{url}: body larger than {MAX_RESPONSE} bytes"),

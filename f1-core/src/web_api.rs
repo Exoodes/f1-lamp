@@ -21,11 +21,75 @@ pub fn is_lamp_host(host: &str, hostname: &str) -> bool {
         || bracketed_v6
 }
 
+/// Why a POST is refused, if it is: it must carry the page's own header
+/// (`X-F1-Lamp`), as the lamp's page and ota.ps1 do, and name the lamp in
+/// `Host` (see [`is_lamp_host`]).
+pub fn post_refusal(
+    has_page_header: bool,
+    host: Option<&str>,
+    hostname: &str,
+) -> Option<&'static str> {
+    if !has_page_header {
+        return Some("missing X-F1-Lamp header");
+    }
+    if !host.is_some_and(|host| is_lamp_host(host, hostname)) {
+        return Some("unknown Host: use f1-lightbox.local or the lamp's IP address");
+    }
+    None
+}
+
+/// `name`'s value in the query string, if it's a number: `/x?after=12` -> 12.
+pub fn query_number(uri: &str, name: &str) -> Option<u64> {
+    let (_, query) = uri.split_once('?')?;
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(key, _)| *key == name)
+        .and_then(|(_, value)| value.parse().ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const NAME: &str = "f1-lightbox";
+
+    #[test]
+    fn a_post_from_the_page_to_the_lamp_is_taken() {
+        assert_eq!(post_refusal(true, Some("f1-lightbox.local"), NAME), None);
+    }
+
+    #[test]
+    fn a_post_without_the_page_header_is_refused() {
+        assert_eq!(
+            post_refusal(false, Some("f1-lightbox.local"), NAME),
+            Some("missing X-F1-Lamp header")
+        );
+    }
+
+    #[test]
+    fn a_post_to_another_host_or_without_one_is_refused() {
+        for host in [Some("evil.example"), None] {
+            let why = post_refusal(true, host, NAME).unwrap();
+            assert!(why.starts_with("unknown Host"), "{host:?}: {why}");
+        }
+    }
+
+    #[test]
+    fn query_number_reads_the_named_number() {
+        assert_eq!(query_number("/api/log?after=12", "after"), Some(12));
+        assert_eq!(query_number("/api/log?x=1&after=7", "after"), Some(7));
+    }
+
+    #[test]
+    fn query_number_is_none_when_missing_or_not_a_number() {
+        assert_eq!(query_number("/api/log", "after"), None);
+        assert_eq!(query_number("/api/log?before=3", "after"), None);
+        assert_eq!(query_number("/api/log?after=", "after"), None);
+        assert_eq!(query_number("/api/log?after=-1", "after"), None);
+        assert_eq!(query_number("/api/log?after=abc", "after"), None);
+        assert_eq!(query_number("/api/log?after", "after"), None);
+    }
 
     #[test]
     fn the_mdns_name_and_the_bare_name_are_the_lamp() {

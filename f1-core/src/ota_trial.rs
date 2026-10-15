@@ -29,6 +29,28 @@ pub struct Trial {
     pub image: Option<u64>,
 }
 
+/// One write to the device's storage, from [`trial_writes`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrialWrite {
+    SetImage(u64),
+    SetBoots(u8),
+    RemoveBoots,
+    RemoveImage,
+}
+
+/// The writes that store `trial`, in the order to make them: the image is
+/// written before the count and removed after it. A count without an image
+/// counts as the running firmware's ([`on_boot`]), so a store cut in half
+/// never puts the wrong firmware on trial.
+pub fn trial_writes(trial: Trial) -> impl Iterator<Item = TrialWrite> {
+    let set_image = trial.image.map(TrialWrite::SetImage);
+    let boots = trial
+        .boots
+        .map_or(TrialWrite::RemoveBoots, TrialWrite::SetBoots);
+    let remove_image = trial.image.is_none().then_some(TrialWrite::RemoveImage);
+    [set_image, Some(boots), remove_image].into_iter().flatten()
+}
+
 /// Where the device keeps the [`Trial`].
 pub trait TrialStore {
     type Error;
@@ -155,6 +177,46 @@ mod tests {
             self.trial.set(trial);
             Ok(())
         }
+    }
+
+    fn writes(trial: Trial) -> Vec<TrialWrite> {
+        trial_writes(trial).collect()
+    }
+
+    #[test]
+    fn a_new_trial_writes_the_image_before_the_count() {
+        assert_eq!(
+            writes(on_trial(0, Some(NEW))),
+            [TrialWrite::SetImage(NEW), TrialWrite::SetBoots(0)]
+        );
+    }
+
+    #[test]
+    fn an_ended_trial_removes_the_count_before_the_image() {
+        assert_eq!(
+            writes(Trial::default()),
+            [TrialWrite::RemoveBoots, TrialWrite::RemoveImage]
+        );
+    }
+
+    #[test]
+    fn a_trial_without_an_image_removes_any_stored_image_last() {
+        assert_eq!(
+            writes(on_trial(1, None)),
+            [TrialWrite::SetBoots(1), TrialWrite::RemoveImage]
+        );
+    }
+
+    #[test]
+    fn a_new_trial_cut_after_its_first_write_is_no_trial() {
+        let first = writes(on_trial(0, Some(NEW)))[0];
+        assert_eq!(first, TrialWrite::SetImage(NEW));
+        // Only the image got stored: no count, so nothing is on trial.
+        let stored = Trial {
+            boots: None,
+            image: Some(NEW),
+        };
+        assert_eq!(on_boot(stored, RUNNING), BootDecision::Normal);
     }
 
     #[test]

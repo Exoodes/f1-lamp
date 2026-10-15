@@ -19,6 +19,7 @@ use esp_idf_svc::{
     io::Write,
 };
 use f1_core::{
+    body::{read_capped, Body},
     command::OverrideRequest,
     input::Input,
     ota_auth::UploadCheck,
@@ -26,17 +27,12 @@ use f1_core::{
     settings::Settings,
     snapshot::{Snapshot, StateReply},
     token::TokenStatus,
-    web_api::is_lamp_host,
+    web_api::{post_refusal, query_number},
     weekend::{weekend, Moved, Results, ScheduleReply},
 };
 use serde::de::DeserializeOwned;
 
-use crate::io::{
-    body::{read_capped, Body},
-    clock, mdns, ota, racelog, system,
-    token_store::TokenKeeper,
-    weblog,
-};
+use crate::io::{clock, mdns, ota, racelog, system, token_store::TokenKeeper, weblog};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 /// Larger request bodies are refused, so a client can't exhaust the heap.
@@ -280,7 +276,7 @@ fn token_routes(
         if let Some(why) = refusal(&req) {
             return refuse(req, why);
         }
-        let body = match read_capped(&mut req, MAX_TOKEN_BODY, None, BODY_DEADLINE)? {
+        let body = match read_capped(|buf| req.read(buf), MAX_TOKEN_BODY, None, BODY_DEADLINE)? {
             Body::Whole(body) => body,
             Body::TooLarge => return reply(req, 413, TEXT, b"too long for a token"),
             Body::TooSlow => return reply(req, 408, TEXT, b"body too slow"),
@@ -297,16 +293,6 @@ fn token_routes(
     Ok(())
 }
 
-/// `name`'s value in the query string, if it's a number: `/x?after=12` -> 12.
-fn query_number(uri: &str, name: &str) -> Option<u64> {
-    let (_, query) = uri.split_once('?')?;
-    query
-        .split('&')
-        .filter_map(|pair| pair.split_once('='))
-        .find(|(key, _)| *key == name)
-        .and_then(|(_, value)| value.parse().ok())
-}
-
 /// What every JSON POST checks first: the page header (else 403), a body of
 /// at most `MAX_JSON_BODY` bytes (else 413), within `BODY_DEADLINE` (else 408), and JSON that reads as `T` (else a
 /// log line and 400, both naming `what`). Then `act` gets the request and the
@@ -319,7 +305,7 @@ fn post_json<'r, 'c, T: DeserializeOwned>(
     if let Some(why) = refusal(&req) {
         return refuse(req, why);
     }
-    let body = match read_capped(&mut req, MAX_JSON_BODY, None, BODY_DEADLINE)? {
+    let body = match read_capped(|buf| req.read(buf), MAX_JSON_BODY, None, BODY_DEADLINE)? {
         Body::Whole(body) => body,
         Body::TooLarge => return reply(req, 413, TEXT, b"body too large"),
         Body::TooSlow => return reply(req, 408, TEXT, b"body too slow"),
@@ -333,19 +319,13 @@ fn post_json<'r, 'c, T: DeserializeOwned>(
     }
 }
 
-/// Why a POST is refused, if it is: it must carry `PAGE_HEADER`, as the
-/// lamp's own page and ota.ps1 do, and name the lamp in `Host`.
+/// Why a POST is refused, if it is (`web_api::post_refusal`).
 fn refusal(req: &Request<&mut EspHttpConnection<'_>>) -> Option<&'static str> {
-    if req.header(PAGE_HEADER).is_none() {
-        return Some("missing X-F1-Lamp header");
-    }
-    if !req
-        .header("Host")
-        .is_some_and(|host| is_lamp_host(host, mdns::HOSTNAME))
-    {
-        return Some("unknown Host: use f1-lightbox.local or the lamp's IP address");
-    }
-    None
+    post_refusal(
+        req.header(PAGE_HEADER).is_some(),
+        req.header("Host"),
+        mdns::HOSTNAME,
+    )
 }
 
 fn refuse(req: Request<&mut EspHttpConnection<'_>>, why: &str) -> anyhow::Result<()> {

@@ -31,7 +31,9 @@ use esp_idf_svc::{
 };
 use f1_core::{
     ota_auth::{Nonces, UploadCheck, NONCE_LEN},
-    ota_trial::{self, on_boot, ArmError, BootDecision, Trial, TrialStore, HEALTHY_WITHIN},
+    ota_trial::{
+        self, on_boot, ArmError, BootDecision, Trial, TrialStore, TrialWrite, HEALTHY_WITHIN,
+    },
 };
 
 use super::{storage::open_nvs, system};
@@ -168,21 +170,19 @@ impl TrialStore for NvsTrial<'_> {
         }
     }
 
-    /// The image is written before the count and removed after it: a count
-    /// without an image counts as the running firmware's (`on_boot`), so a
-    /// write cut in half never puts the wrong firmware on trial.
+    /// In `trial_writes`'s order, which keeps a store cut in half safe.
     fn store(&mut self, trial: Trial) -> Result<(), EspError> {
-        if let Some(image) = trial.image {
-            self.0.set_u64(OTA_TRIAL_IMAGE, image)?;
-        }
-        match trial.boots {
-            Some(boots) => self.0.set_u8(OTA_TRIAL, boots)?,
-            None => {
-                self.0.remove(OTA_TRIAL)?;
+        for write in ota_trial::trial_writes(trial) {
+            match write {
+                TrialWrite::SetImage(image) => self.0.set_u64(OTA_TRIAL_IMAGE, image)?,
+                TrialWrite::SetBoots(boots) => self.0.set_u8(OTA_TRIAL, boots)?,
+                TrialWrite::RemoveBoots => {
+                    self.0.remove(OTA_TRIAL)?;
+                }
+                TrialWrite::RemoveImage => {
+                    self.0.remove(OTA_TRIAL_IMAGE)?;
+                }
             }
-        }
-        if trial.image.is_none() {
-            self.0.remove(OTA_TRIAL_IMAGE)?;
         }
         Ok(())
     }
