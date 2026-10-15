@@ -6,6 +6,8 @@
 use std::f32::consts::TAU;
 use std::time::Duration;
 
+use serde::Serialize;
+
 use crate::{
     color::Rgb,
     frame::{Frame, NUM_LEDS},
@@ -97,6 +99,47 @@ impl Effect {
         }
     }
 
+    /// How the effect moves, for the web page's panel to play it.
+    pub fn motion(&self) -> Motion {
+        match *self {
+            Effect::Solid(_) => Motion::Solid,
+            Effect::Blink {
+                period_ms, times, ..
+            } => Motion::Blink { period_ms, times },
+            Effect::Chase {
+                leds_per_sec, tail, ..
+            } => Motion::Chase {
+                lap_ms: (NUM_LEDS as f32 / leds_per_sec.max(0.01) * 1000.0) as u32,
+                tail: (usize::from(tail).min(NUM_LEDS - 1) + 1) as f32 / NUM_LEDS as f32,
+            },
+            Effect::Breathe { period_ms, .. } => Motion::Breathe {
+                period_ms,
+                floor: BREATHE_FLOOR,
+            },
+            Effect::Chequered { duration_ms } => Motion::Chequered {
+                duration_ms,
+                swap_ms: CHEQUERED_SWAP_MS,
+            },
+            Effect::StartLights { hold_ms } => Motion::StartLights {
+                lights: START_LIGHTS as u8,
+                interval_ms: START_LIGHT_INTERVAL_MS as u32,
+                out_ms: lights_out_ms(hold_ms) as u32,
+            },
+            Effect::Fade { duration_ms, .. } => Motion::Fade { duration_ms },
+            Effect::Quickening {
+                duration_ms,
+                slow_ms,
+                fast_ms,
+                ..
+            } => Motion::Quickening {
+                duration_ms,
+                slow_ms,
+                fast_ms,
+                floor: BREATHE_FLOOR,
+            },
+        }
+    }
+
     /// The one colour the effect shows, for the web page; `None` for the
     /// chequered flag, which is a pattern rather than a colour.
     pub fn main_color(&self) -> Option<Rgb> {
@@ -148,6 +191,53 @@ impl Effect {
             times: Some(times),
         }
     }
+}
+
+/// An effect's movement without its colour, for the web page: the panel
+/// plays it in the snapshot's colour, from the time since it started.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Motion {
+    Solid,
+    /// On for the first half of each period; `times` periods, or for ever.
+    Blink {
+        period_ms: u32,
+        times: Option<u8>,
+    },
+    /// A head going round once every `lap_ms`, its tail (this share of the
+    /// ring) fading behind it.
+    Chase {
+        lap_ms: u32,
+        tail: f32,
+    },
+    /// Brightness from `floor` to full and back, once every `period_ms`.
+    Breathe {
+        period_ms: u32,
+        floor: f32,
+    },
+    /// Breathing whose breaths shorten from `slow_ms` to `fast_ms` over
+    /// `duration_ms`.
+    Quickening {
+        duration_ms: u32,
+        slow_ms: u32,
+        fast_ms: u32,
+        floor: f32,
+    },
+    /// Two white patterns swapping every `swap_ms`, for `duration_ms`.
+    Chequered {
+        duration_ms: u32,
+        swap_ms: u32,
+    },
+    /// One more of `lights` lights every `interval_ms`, all out at `out_ms`.
+    StartLights {
+        lights: u8,
+        interval_ms: u32,
+        out_ms: u32,
+    },
+    /// Full, dimming to dark over `duration_ms`.
+    Fade {
+        duration_ms: u32,
+    },
 }
 
 fn handle_solid(frame: &mut Frame, color: Rgb) {
@@ -296,6 +386,30 @@ mod tests {
 
     fn all_pixels_are(frame: &Frame, color: Rgb) -> bool {
         frame.pixels().iter().all(|&c| c == color)
+    }
+
+    #[test]
+    fn a_chase_tells_the_panel_its_lap_and_tail() {
+        let chase = Effect::Chase {
+            color: Rgb::YELLOW,
+            leds_per_sec: 11.5,
+            tail: 4,
+        };
+        let json = serde_json::to_value(chase.motion()).unwrap();
+        assert_eq!(json["kind"], "chase");
+        assert_eq!(json["lap_ms"], 2000);
+        assert_eq!(json["tail"], 5.0 / 23.0_f32);
+    }
+
+    #[test]
+    fn a_flash_tells_the_panel_how_often() {
+        assert_eq!(
+            Effect::flash(Rgb::RED, 3).motion(),
+            Motion::Blink {
+                period_ms: FLASH_PERIOD_MS,
+                times: Some(3)
+            }
+        );
     }
 
     #[test]

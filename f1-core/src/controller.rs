@@ -475,6 +475,8 @@ impl Controller {
         Snapshot {
             layer,
             color,
+            motion: scene.effect.motion(),
+            shown_since: scene.started,
             phase: self.layers.phase,
             net: self.net_status().value,
             override_active: self.layers.override_effect.is_some(),

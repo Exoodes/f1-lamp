@@ -6,6 +6,7 @@ use serde::Serialize;
 
 use crate::{
     color::Rgb,
+    effect::Motion,
     input::{NetStatus, SessionPhase},
     settings::Settings,
     tv_timing::TvView,
@@ -18,6 +19,11 @@ pub struct Snapshot {
     /// for the chequered flag, a pattern. The lamp's own colour unscaled, so
     /// a dim lamp still lights the panel.
     pub color: Option<Rgb>,
+    /// How what shows moves, for the panel.
+    pub motion: Motion,
+    /// When it started; sent as `age_ms` (see [`StateReply`]).
+    #[serde(skip)]
+    pub shown_since: Instant,
     pub phase: SessionPhase,
     pub net: NetStatus,
     pub override_active: bool,
@@ -27,12 +33,13 @@ pub struct Snapshot {
     pub tv: TvView,
 }
 
-/// What `GET /api/state` answers: the snapshot, and the TV's clock and lap
-/// at the moment of answering.
+/// What `GET /api/state` answers: the snapshot, how long ago what shows
+/// started, and the TV's clock and lap, all at the moment of answering.
 #[derive(Debug, Serialize)]
 pub struct StateReply {
     #[serde(flatten)]
     pub snapshot: Snapshot,
+    pub age_ms: u32,
     pub tv: TvState,
 }
 
@@ -48,8 +55,10 @@ pub struct TvState {
 impl StateReply {
     pub fn new(snapshot: Snapshot, now: Instant) -> Self {
         let tv = snapshot.tv;
+        let age = now.saturating_duration_since(snapshot.shown_since);
         StateReply {
             snapshot,
+            age_ms: u32::try_from(age.as_millis()).unwrap_or(u32::MAX),
             tv: TvState {
                 clock_ms: tv.clock.map(|c| c.remaining_at(now)),
                 clock_running: tv.clock.is_some_and(|c| c.running),
@@ -139,12 +148,31 @@ mod tests {
             [
                 "color",
                 "layer",
+                "motion",
                 "net",
                 "override_active",
                 "phase",
                 "settings"
             ]
         );
+    }
+
+    #[test]
+    fn the_lamp_colour_is_still_on_the_panel() {
+        let json = serde_json::to_value(snapshot_after(&[Input::Net(NetStatus::Online)])).unwrap();
+        assert_eq!(json["motion"], serde_json::json!({"kind": "solid"}));
+    }
+
+    #[test]
+    fn the_reply_says_how_long_ago_what_shows_started() {
+        let t0 = Instant::now();
+        let snap = Controller::new(t0).snapshot();
+        let reply = StateReply::new(snap, t0 + std::time::Duration::from_millis(1500));
+        assert_eq!(reply.age_ms, 1500);
+        // Breathing blue while connecting, from boot.
+        let json = serde_json::to_value(&reply).unwrap();
+        assert_eq!(json["age_ms"], 1500);
+        assert_eq!(json["motion"]["kind"], "breathe");
     }
 
     #[test]

@@ -165,7 +165,9 @@ only the lines the lamp uses, so a whole race fits in the firmware.
 
 `http://f1-lightbox.local` (same network only):
 
-- what the lamp shows, the session phase and the network state;
+- what the lamp shows, moving like the lamp (breathing, blinking, the
+  safety car's chase; flashes under a second are often missed, the page
+  asks every 2 s), the session phase and the network state;
 - the race log: every race event in words ("Yellow flag", "VER in the
   pits", "Fastest lap: NOR"), with its time, in step with your TV; events the
   lamp didn't show (switched off, a driver not followed) are dimmed;
@@ -202,7 +204,7 @@ The page uses these, and scripts can too:
 
 | Request | What it does |
 |---|---|
-| `GET /api/state` | What the lamp shows: layer and its colour, phase, network, override, settings, and the session clock and lap as the TV shows them (JSON) |
+| `GET /api/state` | What the lamp shows: layer, its colour and how it moves (`motion`, started `age_ms` ago), phase, network, override, settings, and the session clock and lap as the TV shows them (JSON) |
 | `GET /api/schedule` | This race weekend: the lamp's time, the country, the circuit and the sessions with their state (`done`, `live`, `coming`), whether they're followed, where a moved one was, whether it's cancelled, and P1 of each finished one |
 | `POST /api/settings` | All the settings as JSON: get them from `/api/state`, change, send back |
 | `POST /api/override` | `{"kind":"flag","flag":"red"}`, `{"kind":"color","color":"#ff8800"}` or `{"kind":"release"}`; or plays one effect at once: `{"kind":"event","event":"pit_stop","team":"mclaren"}` (`start_lights`, `chequered_flag`, `last_lap`, `fastest_lap`, `pit_stop`, `overtake`, `winner`, `knocked_out`; teams `alpine`, `aston_martin`, `audi`, `cadillac`, `ferrari`, `haas`, `mclaren`, `mercedes`, `racing_bulls`, `red_bull`, `williams`) |

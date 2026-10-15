@@ -104,7 +104,9 @@
 
   /* ---- The lamp is showing: a marshal light panel, the one loud thing.
      A black housing; the word is lit in the lamp colour and a fixed grid of
-     dots lies over it, so it reads as LEDs. Nothing moves: cheap to redraw. ---- */
+     dots lies over it, so it reads as LEDs. The word moves like the lamp
+     (`panelFrame`): its brightness, and a band running across it for a
+     chase; the dots stay put. ---- */
   .hero {
     background: var(--housing); border-radius: 12px; padding: 14px 14px 0;
     margin-bottom: 28px;
@@ -123,7 +125,8 @@
     content: ""; position: absolute; inset: 0; pointer-events: none;
     background: radial-gradient(circle, transparent 1.5px, var(--housing) 1.9px) 0 0 / 4px 4px;
   }
-  .hero-layer::first-letter { text-transform: uppercase; }
+  #s-word { display: inline-block; max-width: 100%; }
+  #s-word::first-letter { text-transform: uppercase; }
   /* The status strip sits on the panel's lower edge. */
   .status { display: grid; grid-template-columns: repeat(3, 1fr); margin: 0; }
   .status dt { color: var(--muted); font-size: .75rem; }
@@ -347,7 +350,7 @@
   <div class="panel" id="tab-race" data-tab="race" role="tabpanel">
     <section class="hero">
       <p class="hero-label">The lamp is showing</p>
-      <p class="hero-layer" id="s-layer">–</p>
+      <p class="hero-layer" id="s-layer"><span id="s-word">–</span></p>
       <dl class="status">
         <div><dt>Session</dt><dd id="s-phase">–</dd></div>
         <div><dt>Network</dt><dd id="s-net">–</dd></div>
@@ -647,6 +650,90 @@ function showPanelColor(color) {
   $("s-layer").style.setProperty("--shown", color ? lifted(color).css : "var(--text)");
 }
 
+// ---- The panel moving like the lamp ----
+
+// What shows (`motion` from /api/state, see effect.rs `Motion`) and when it
+// started, in page time. Polled every 2 s, so a flash under a second is
+// often missed; what lasts (flags, the safety car, the winner) plays.
+let motion = { kind: "solid" };
+let motionStart = 0;
+// The word never goes quite dark, so it stays readable.
+const PANEL_FLOOR = 0.15;
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
+
+// Takes the effect from a status answer. The same effect is only re-timed
+// when the page drifted, so the polls don't make it jump.
+function showMotion(state) {
+  const next = state.motion || { kind: "solid" };
+  const start = performance.now() - (state.age_ms || 0);
+  if (JSON.stringify(next) !== JSON.stringify(motion) || Math.abs(start - motionStart) > 250) {
+    motion = next;
+    motionStart = start;
+  }
+}
+
+// Breathing brightness at `breaths` breaths in, as the lamp does it.
+const breath = (breaths, floor) => floor + (1 - floor) * (1 - Math.cos(2 * Math.PI * (breaths % 1))) / 2;
+
+// The word's brightness (0-1) and mask (or "") `t` ms into `m`.
+function motionLook(m, t) {
+  switch (m.kind) {
+    case "blink": {
+      const done = m.times != null && t >= m.period_ms * m.times;
+      return { level: !done && t % m.period_ms < m.period_ms / 2 ? 1 : 0, mask: "" };
+    }
+    case "breathe":
+      return { level: breath(t / m.period_ms, m.floor), mask: "" };
+    case "quickening": {
+      // Breaths so far, with the period going from slow to fast: as effect.rs.
+      const ramp = Math.min(t, m.duration_ms);
+      const change = m.duration_ms > 0 ? (m.fast_ms - m.slow_ms) / m.duration_ms : 0;
+      const rampBreaths = Math.abs(change) < 1e-6
+        ? ramp / m.slow_ms
+        : Math.log((m.slow_ms + change * ramp) / m.slow_ms) / change;
+      return { level: breath(rampBreaths + (t - ramp) / m.fast_ms, m.floor), mask: "" };
+    }
+    case "fade":
+      return { level: Math.max(0, 1 - t / m.duration_ms), mask: "" };
+    case "chase": {
+      // The head runs left to right, its tail fading behind it.
+      const head = (t % m.lap_ms) / m.lap_ms * 100;
+      const tail = m.tail * 100;
+      const dim = `rgba(0,0,0,${PANEL_FLOOR})`;
+      return {
+        level: 1,
+        mask: `linear-gradient(90deg, ${dim} ${head - tail}%, #000 ${head}%, ${dim} ${head}%)`,
+      };
+    }
+    case "chequered": {
+      if (t >= m.duration_ms) return { level: 0, mask: "" };
+      // One dot column in four lit, the pattern moving half a gap at each swap.
+      const off = Math.floor(t / m.swap_ms) % 2 ? 8 : 0;
+      return {
+        level: 1,
+        mask: `repeating-linear-gradient(90deg, #000 ${off}px ${off + 4}px, transparent ${off + 4}px ${off + 16}px)`,
+      };
+    }
+    case "start_lights": {
+      // The lights come on from the left, then all go out.
+      const lit = t >= m.out_ms ? 0 : Math.min(m.lights, Math.floor(t / m.interval_ms) + 1);
+      const edge = lit / m.lights * 100;
+      return { level: lit ? 1 : 0, mask: `linear-gradient(90deg, #000 ${edge}%, transparent ${edge}%)` };
+    }
+    default:
+      return { level: 1, mask: "" };
+  }
+}
+
+function panelFrame(now) {
+  const still = reduceMotion.matches || document.body.classList.contains("offline");
+  const { level, mask } = still ? { level: 1, mask: "" } : motionLook(motion, now - motionStart);
+  const word = $("s-word").style;
+  word.opacity = Math.max(PANEL_FLOOR, level);
+  word.maskImage = word.webkitMaskImage = mask;
+  requestAnimationFrame(panelFrame);
+}
+
 // Device settings (JSON from /api/state) -> form fields.
 function fillForm(s) {
   $("lamp_color").value = s.lamp_color;
@@ -730,8 +817,9 @@ function showStatus(state) {
   document.body.classList.remove("offline");
   $("dot").className = "dot on";
   $("link").textContent = "connected";
-  $("s-layer").textContent = state.layer;
+  $("s-word").textContent = state.layer;
   showPanelColor(state.color);
+  showMotion(state);
   $("s-phase").textContent = words(state.phase);
   $("s-net").textContent = words(state.net);
   $("s-override").textContent = state.override_active ? "active" : "none";
@@ -1317,6 +1405,7 @@ async function start() {
   }
 
   setInterval(refreshStatus, 2000);
+  requestAnimationFrame(panelFrame);
   startSchedule();
   refreshRaceLog();
   setInterval(refreshRaceLog, 2000);

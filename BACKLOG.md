@@ -21,21 +21,11 @@ Ideas for after the course, in no particular order of size.
   100 B of heap (time and text as strings); store the event and the time
   as a number instead (about 16 B) and write the text when the page asks,
   and send a page that just opened only the newest lines.
-- **Rework the effects.** Some are too fast (seen again in sprint
-  qualifying, Singapore 2026-10-09), and some look too much alike.
-- **A new chequered flag.** The current one (one lit pixel in four, swapping
-  every 500 ms) doesn't look good and is too short (10 s).
-- **A look (or a switch) of its own for each qualifying part's fastest
-  driver?** Today it's the same chase as pole, under the winner switch.
-- **The panel animated like the lamp.** Today it only takes the shown
-  colour. `GET /api/state` could also send which effect shows, its settings
-  and how long ago it started (e.g. breathe, yellow, 3 s a breath, started
-  1.2 s ago), and the page play it with CSS/JS: the safety car's chase could
-  run across the panel's dot grid. About 1-2 h. The page asks every 2 s, so
-  short flashes (pit stop, fastest lap: under a second) would often be
-  missed; to show those too, either ask a small dedicated endpoint every
-  ~250 ms, or have the lamp keep the effects started in the last few seconds
-  for the page to play a little late (about half a day with this part).
+- **Short flashes on the panel too.** The panel moves like the lamp (done
+  2026-10-15), but the page asks every 2 s, so flashes under a second (pit
+  stop, fastest lap) are often missed. Either ask a small endpoint every
+  ~250 ms, or have the lamp keep the effects started in the last few
+  seconds for the page to play a little late (about half a day).
 
 ## From the review, 2026-10-14
 
@@ -175,6 +165,8 @@ with `cargo ota` first) or a video:
 
 ## Not planned
 
+- Reworking the effects, a new chequered flag, and a look of its own for
+  each qualifying part's fastest driver (decided 2026-10-15).
 - The BOOT button: it's inside the lamp.
 - Updating firmware from the web page: `cargo ota` covers it.
 - The lamp downloading races itself: replays stay embedded at build time.
