@@ -268,6 +268,105 @@ cargo run -- 30 --extra   # 30 minutes, extra streams too
 
 With `$env:F1TV_TOKEN` set, the probe sends the token as well.
 
+## Developing
+
+### Adding a stream or an event
+
+A new stream from the feed, and an event the lamp shows from it, touch these
+places, in this order:
+
+1. `f1-core/src/feed.rs`: the stream's JSON as a struct, a `FeedMessage`
+   variant, and a `Stream` variant with its F1 name, `is_relevant` (which
+   lines a replay keeps) and `parse`.
+2. `f1/build.rs` `REPLAY_FILES` and `f1/src/replay.rs` `FILES`, so replay
+   builds embed it.
+3. `f1-core/src/live.rs`: the stream lists the lamp subscribes to (an
+   account-only stream goes in `ACCOUNT_STREAMS`, which needs the F1TV
+   token).
+4. `track_state.rs` (flags and the session) or `tracker.rs` (driver events)
+   turns its messages into a `RaceEvent` (`input.rs`).
+5. `settings.rs`: an `EffectToggles` switch and a line in `Settings::shows`.
+6. `theme.rs` `event_overlay`: what the lamp shows.
+7. `racelog.rs`: its line in the race log (`text`, `color`).
+8. `command.rs` `PreviewEvent`, so "Try an effect" can play it.
+9. `f1/web/index.html`: the switch (`EFFECTS`) and the try button.
+
+### Threads, priorities and locks
+
+| Task | Stack | Priority | Does |
+|---|---|---|---|
+| main (render loop) | 8 KB (`sdkconfig.defaults`) | 6 | the `Controller`, the LEDs, saving settings; checks the threads |
+| net | 16 KB | 5 | WiFi, the clock, OpenF1, starts the web server |
+| live | 12 KB | 5 | negotiate, the WebSocket, parsing the feed |
+| web handlers | 10 KB | 5 | every request, OTA uploads included |
+| WebSocket client | 6 KB | 5 | copies the feed's bytes into a channel |
+| replay (replay builds) | 8 KB | 5 | plays the embedded session |
+
+The stacks are in `f1/src/config.rs`; the minute `heap:` log line shows how
+much stack the main, net and live threads have had left at least. The
+threads only talk to the render loop through the `Input` queue, and the
+render loop never waits for the network.
+
+Locks: `http::TLS` lets one TLS handshake run at a time (tens of KB of heap
+each); the live thread holds it from connecting until `Subscribe` is
+answered, at most `LONGEST_TLS_HOLD`. The rest guard shared state for a
+moment each: the snapshot (render loop writes, web reads), the calendar,
+moved sessions and results (net writes, web reads), the F1TV token, the race
+log and web log buffers, and the OTA nonces and trial. None is held across
+network work.
+
+### Recovery over USB
+
+When the lamp can't be reached over WiFi any more (a firmware that doesn't
+work, a wrong WiFi password in `cfg.toml`):
+
+1. Unplug the power adapter and connect the XIAO's own USB cable.
+2. `cd f1; cargo run --release`. It writes the first app slot and boots it,
+   whatever ran before, and opens the serial log. A trial left over from an
+   update ends as it boots ("flashed over USB?" in the log).
+3. To only watch the log: `espflash monitor`.
+
+If saved data itself is the problem, erasing NVS brings back the default
+settings; the F1TV token and the cached calendar are gone too:
+
+```
+cd f1
+espflash erase-parts --partition-table partitions.csv nvs
+```
+
+### A capture into a test fixture
+
+The probe saves everything the feed sends to `f1-probe/captures/<date_time>/`.
+To make a test of it (as `f1-core/tests/practice.rs`):
+
+1. Copy the streams the lamp uses (those in `f1/build.rs` `REPLAY_FILES`, and
+   `ExtrapolatedClock`) to `f1-core/tests/data/<year>-<place>/<session>/`,
+   each trimmed to the lines `Stream::is_relevant` keeps, as `build.rs` does
+   for a replay build. `CarData.z` and `Position.z` aren't needed.
+2. In the test, embed them with `include_str!` and play them through
+   `Replayer` with a fake clock (see `practice.rs`). Print the inputs once to
+   see what the session gives, then assert what matters.
+
+A capture also plays on the lamp as it is: point `$env:F1_REPLAY_DIR` at its
+folder and build with `--features replay`.
+
+### The NVS budget
+
+NVS is 24 KB: six pages of 126 entries of 32 bytes, one page always kept
+free, so about 630 entries. A string or blob takes one entry per 32 bytes plus
+one, and a rewrite needs room for the new copy before the old one goes.
+
+| Key (`config::nvs`) | Size |
+|---|---|
+| `settings` | JSON, at most 1 KB (`settings::MAX_JSON`) |
+| `schedule` | JSON, at most 3 KB (`schedule::MAX_JSON`) |
+| `f1tv_token` | at most 3 KB (`token::MAX_LEN`) |
+| `ota_trial`, `ota_trial_img`, `ota_fell_back` | a few bytes |
+
+So the lamp's own data takes at most about 240 entries, plus what the WiFi
+driver keeps in its own namespace. The `heap:` log line shows the entries in
+use.
+
 ## Data sources
 
 - **F1 live timing** (`livetiming.formula1.com`, SignalR over a WebSocket):
