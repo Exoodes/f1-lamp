@@ -1,21 +1,5 @@
 # F1 Lightbox backlog
 
-- **Overtakes from `DriverRaceInfo`.** The live feed never sends
-  `OvertakeSeries` (not even with the F1TV token), so overtakes as built
-  can't work live. `DriverRaceInfo` (token only) arrives all race and marks
-  each pass:
-  `{"87":{"Position":"11","OvertakeState":2},"31":{"Position":"12","OvertakeState":0}}`
-  (2 = gained the place, 0 = lost it, 1 = reset a few seconds later). A car
-  that pits is "passed" by several cars in a row (#5 at 00:35:29 dropped from
-  17 to 20 in a second), so stops must be filtered out (in pit lane, or
-  `PitLaneTimeCollection`). Test data: add the capture's `DriverRaceInfo`
-  (`f1-probe/captures/2026-10-11_13-40-12`) to the Singapore race fixture
-  (`f1-core/tests/data/2026-singapore/race`, `tests/singapore_race.rs`).
-  The race log then fills up: all drivers' overtakes are about 300 a race,
-  past its 120 lines. A line costs about 100 B of heap (time and text as
-  strings); store the event and the time as a number instead (about 16 B),
-  write the text when the page asks, and send a page that just opened only
-  the newest lines.
 - **WiFi's first association is rejected on every boot.** Since the USB
   flash of 2026-10-15 the router answers the lamp's first association within
   about 10 ms (`wifi:state: assoc -> init (6c0)`, once `2c0`); the retry

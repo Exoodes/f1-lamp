@@ -29,7 +29,7 @@ Rust: the course*, with some extras of its own.
 | Fastest lap | three purple flashes, for every new session best |
 | Knocked out | the team colour fading out over 3 s (followed drivers, after Q1 and Q2; the feed says so about 6 minutes after the part's chequered flag) |
 | Pit stop | two flashes in the team colour (followed drivers) |
-| Overtake | one flash in the team colour (followed drivers, needs F1TV) |
+| Overtake | one flash in the team colour (followed drivers, races, needs F1TV) |
 | Retirement | the team colour fading out over 6 s when a followed driver retires during the session (TimingData `Retired`; cars classified as retired after the flag don't show) |
 | Penalty | two slow flashes in the team colour when the stewards give a followed driver a penalty (time, drive-through, grid…; race control's "PENALTY FOR CAR n") |
 | No network | breathing blue (WiFi connecting) or blinking red (the live feed failed 3 times in a row): after a boot until the lamp is first online, then only around a session |
@@ -163,7 +163,9 @@ Any of these work with both `cargo run --release` and `cargo ota`:
   switches it off in that browser), the session phase and the network state;
 - the race log: every race event in words ("Yellow flag", "VER in the
   pits", "Fastest lap: NOR"), with its time, in step with your TV; events the
-  lamp didn't show (switched off, a driver not followed) are dimmed;
+  lamp didn't show (switched off, a driver not followed) are dimmed; the
+  lamp keeps a whole race (512 lines), a page that just opened gets the
+  newest 50;
 - TV sync: the session clock and the lap as your TV should show them with
   the delay set, and buttons to move the delay by 0.1, 0.5 or 1 second,
   until they change together with the TV's;
@@ -201,7 +203,7 @@ The page uses these, and scripts can too:
 | `POST /api/settings` | All the settings as JSON: get them from `/api/state`, change, send back |
 | `POST /api/override` | `{"kind":"flag","flag":"red"}`, `{"kind":"color","color":"#ff8800"}` or `{"kind":"release"}`; or plays one effect at once: `{"kind":"event","event":"pit_stop","team":"mclaren"}` (`start_lights`, `chequered_flag`, `last_lap`, `fastest_lap`, `pit_stop`, `overtake`, `winner`, `knocked_out`, `penalty`, `retired`; teams `alpine`, `aston_martin`, `audi`, `cadillac`, `ferrari`, `haas`, `mclaren`, `mercedes`, `racing_bulls`, `red_bull`, `williams`) |
 | `GET /api/token`, `POST /api/token` | The F1TV token's state; post a token (plain text) to set it, an empty one to remove it |
-| `GET /api/racelog?after=<n>` | The race log's lines from number `n` on, where `n` is the last answer's `next` (all kept lines without it): time, text, colour |
+| `GET /api/racelog?after=<n>` | The race log's lines from number `n` on, where `n` is the last answer's `next` (the newest without it), 50 at most; `more` says to ask again: time, text, colour, shown |
 | `GET /api/log?after=<n>` | The log lines after number `n` |
 | `POST /api/ota/nonce` | A one-time nonce (hex) for the next upload, valid for 2 minutes |
 | `POST /api/ota` | A firmware image, with `X-F1-Nonce` and its tags in `X-F1-Start` and `X-F1-Auth` (see `cargo ota`) |
@@ -228,13 +230,15 @@ cargo test        # unit tests plus the recorded sessions below
 The sessions in `f1-core/tests/data/`, each played through the same code as
 the lamp:
 
-- the 2026 Italian GP race and qualifying, from F1's archive;
+- the 2026 Italian GP race and qualifying, from F1's archive; the race's
+  overtakes are checked against F1's own count (`OvertakeSeries`, kept
+  there but not played);
 - the 2026 Singapore GP sprint qualifying, from the archive (pole timing,
   a red flag);
 - the last half hour of the 2026 Singapore GP FP1, captured live by the
   probe (VSC ending, the chequered flag and P1 in practice);
 - the whole 2026 Singapore GP race, captured live by the probe (start
-  lights, two VSCs, fastest laps, pit stops, last lap, winner);
+  lights, two VSCs, fastest laps, pit stops, overtakes, last lap, winner);
 - the live feed's answer to `Subscribe` after the 2026 Bahrain GP race, from
   the probe (live data differs from the archive), with SessionData, LapCount
   and ExtrapolatedClock as they stood at the end of the Singapore race;
@@ -342,8 +346,15 @@ All seen in real sessions; the code around each has the details.
 - Pit stops in practice mostly have an empty `Duration` (a stop to change
   the setup); during a red flag every car waits in the pit lane, so a pit
   lane time over 2 minutes isn't a stop.
-- `OvertakeSeries` is never sent live, even with the F1TV token;
-  `DriverRaceInfo` is (not used yet).
+- `OvertakeSeries` is never sent live, even with the F1TV token, so
+  overtakes come from `DriverRaceInfo` (token only): a car gaining places
+  (`Position`, a string) from a car on track, while the race is `Started`.
+  A car in the pit lane (TimingData `InPit`, then `PitOut` until the end of
+  the first sector) loses places to everyone passing and gets them back
+  when the others stop; those don't count, nor passing a stopped car.
+  `OvertakeState` (2 gained, 0 lost, 1 about 5 s later) adds nothing to the
+  positions. Monza 2026: 296 overtakes, each in F1's `OvertakeSeries` too,
+  which also counts the 19 passes of a car in the pit lane.
 - OpenF1's free tier answers 401 during live sessions.
 
 ### Reading the log
@@ -434,7 +445,9 @@ To make a test of it (as `f1-core/tests/practice.rs`):
 1. Copy the streams the lamp subscribes to (the lists in
    `f1-core/src/live.rs`) to `f1-core/tests/data/<year>-<place>/<session>/`,
    each trimmed to the lines `Stream::is_relevant` keeps. `CarData.z` and
-   `Position.z` aren't needed.
+   `Position.z` aren't needed. TimingData's relevant lines include every
+   car's laps; the race fixtures keep only those about the pit lane,
+   stopped and retired cars, without the 29 KB state lines at the start.
 2. In the test, embed them with `include_str!` and play them through
    `Replayer` with a fake clock (see `practice.rs`). Print the inputs once to
    see what the session gives, then assert what matters.
@@ -460,7 +473,8 @@ use.
 
 - **F1 live timing** (`livetiming.formula1.com`, SignalR over a WebSocket):
   flags, session status, race control, driver list, top three, pit lane,
-  timing stats, overtakes, qualifying parts (session data), knockouts
+  timing stats, the running order (driver race info: overtakes),
+  qualifying parts (session data), knockouts
   (timing data), the race's laps (lap count: the last lap and the page's TV
   lap) and the session clock (extrapolated clock: the page's TV clock). Unofficial and undocumented; it changes without
   notice. When the lamp stops reacting on a race weekend, run the probe on

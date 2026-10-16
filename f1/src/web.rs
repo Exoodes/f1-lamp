@@ -147,7 +147,7 @@ fn page_routes(
     })?;
 
     // `?after=<n>`: the race log's lines from number n on (n is the last
-    // answer's `next`); without it, all.
+    // answer's `next`), 50 at most; without it, the newest 50.
     server.fn_handler::<anyhow::Error, _>("/api/racelog", Method::Get, |req| {
         if let Some(why) = get_refusal(&req) {
             return refuse(req, why);

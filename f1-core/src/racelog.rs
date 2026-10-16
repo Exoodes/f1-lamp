@@ -1,8 +1,9 @@
 //! The race log on the web page: every race event in words, in step with
 //! the TV, marked when the lamp didn't show it (switched off, a driver not
 //! followed). The controller hands over a [`LogItem`] when an event's TV
-//! time comes; [`text`] says it with the drivers' short names, and
-//! [`RaceLog`] keeps the latest lines for the page.
+//! time comes; [`RaceLog`] keeps the latest with their time of day, and
+//! writes the lines when the page asks, with the drivers' short names
+//! ([`text`]).
 
 use std::collections::VecDeque;
 
@@ -14,9 +15,14 @@ use crate::{
     theme::PURPLE,
 };
 
-/// Lines kept: a race with every pit stop and flag fits; with every
-/// driver's overtakes followed, only the latest.
-pub const LINES: usize = 120;
+/// Lines kept: a whole race, every driver's overtakes too (Monza 2026: 296
+/// overtakes, about 370 lines). An event and its time take 16 bytes, so
+/// the log takes 8 KB at most.
+pub const LINES: usize = 512;
+
+/// The most lines in one answer to the page, about 5 KB of JSON: a page that
+/// just opened gets the newest, one that fell behind asks again.
+pub const PAGE_LINES: usize = 50;
 
 /// What the controller logs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,6 +39,14 @@ pub enum LogItem {
 /// Whether the lamp showed it.
 pub fn shown(item: LogItem) -> bool {
     !matches!(item, LogItem::NotShown(_))
+}
+
+/// Whether `item` gets a line: a flag being cleared doesn't.
+pub fn has_line(item: LogItem) -> bool {
+    !matches!(
+        item,
+        LogItem::Event(RaceEvent::FlagCleared) | LogItem::NotShown(RaceEvent::FlagCleared)
+    )
 }
 
 /// The line for `item`, with `name` giving a driver's short name; `None`
@@ -90,6 +104,14 @@ pub fn color(item: LogItem) -> Option<Rgb> {
     }
 }
 
+/// A second of the day as `14:03:21`; `--:--:--` when the clock wasn't set.
+pub fn time_of_day(second: Option<u32>) -> String {
+    match second {
+        Some(s) => format!("{:02}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60),
+        None => "--:--:--".to_owned(),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct LogLine {
     pub seq: u64,
@@ -105,52 +127,79 @@ pub struct LogLine {
 #[derive(Debug, PartialEq, Eq, Serialize)]
 pub struct RaceLogPage {
     pub lines: Vec<LogLine>,
-    /// The number the next line will get: ask from it next time.
+    /// The number to ask from next time.
     pub next: u64,
+    /// More lines are waiting after these: ask again at once.
+    pub more: bool,
+}
+
+/// What a line is made from when the page asks.
+#[derive(Clone, Copy, Debug)]
+struct Entry {
+    item: LogItem,
+    /// Local seconds since midnight.
+    at: Option<u32>,
 }
 
 #[derive(Debug)]
 pub struct RaceLog {
-    lines: VecDeque<LogLine>,
+    entries: VecDeque<Entry>,
+    /// The number the next line will get; the first kept is `next - len`.
     next: u64,
 }
 
 impl RaceLog {
     pub const fn new() -> Self {
         RaceLog {
-            lines: VecDeque::new(),
+            entries: VecDeque::new(),
             next: 0,
         }
     }
 
-    pub fn push(&mut self, time: String, text: String, color: Option<Rgb>, shown: bool) {
-        if self.lines.len() == LINES {
-            self.lines.pop_front();
+    /// Logs `item`, shown at `at` (local seconds since midnight).
+    pub fn push(&mut self, item: LogItem, at: Option<u32>) {
+        if !has_line(item) {
+            return;
         }
-        self.lines.push_back(LogLine {
-            seq: self.next,
-            time,
-            text,
-            color,
-            shown,
-        });
+        if self.entries.capacity() == 0 {
+            // All at once while the heap is fresh, not doubling later.
+            self.entries.reserve_exact(LINES);
+        }
+        if self.entries.len() == LINES {
+            self.entries.pop_front();
+        }
+        self.entries.push_back(Entry { item, at });
         self.next += 1;
     }
 
-    /// The lines numbered `from` on, where `from` is the `next` of the
-    /// page's last answer: none when nothing is new. Every line kept for a
-    /// page that just opened (`None`), or one whose number is from before a
-    /// restart (beyond `next`).
-    pub fn since(&self, from: Option<u64>) -> RaceLogPage {
-        let from = from.filter(|&f| f <= self.next);
+    /// At most [`PAGE_LINES`] lines numbered `from` on, where `from` is the
+    /// `next` of the page's last answer: none when nothing is new. The
+    /// newest lines for a page that just opened (`None`), or one whose
+    /// number is from before a restart (beyond `next`). `name` gives a
+    /// driver's short name.
+    pub fn since(&self, from: Option<u64>, name: &dyn Fn(u8) -> String) -> RaceLogPage {
+        let first = self.next - self.entries.len() as u64;
+        let start = match from.filter(|&f| f <= self.next) {
+            Some(f) => f.max(first),
+            None => self.next.saturating_sub(PAGE_LINES as u64).max(first),
+        };
+        let end = self.next.min(start + PAGE_LINES as u64);
+        let lines = (start..end)
+            .filter_map(|seq| {
+                let entry = self.entries[usize::try_from(seq - first).ok()?];
+                Some(LogLine {
+                    seq,
+                    time: time_of_day(entry.at),
+                    text: text(entry.item, name)?,
+                    color: color(entry.item),
+                    shown: shown(entry.item),
+                })
+            })
+            .collect();
         RaceLogPage {
-            lines: self
-                .lines
-                .iter()
-                .filter(|l| from.is_none_or(|f| l.seq >= f))
-                .cloned()
-                .collect(),
-            next: self.next,
+            lines,
+            next: end,
+            more: end < self.next,
         }
     }
 }
@@ -234,6 +283,7 @@ mod tests {
         assert_eq!(say(RaceEvent::ChequeredFlag).unwrap(), "Chequered flag");
         assert_eq!(say(RaceEvent::LastLap).unwrap(), "Last lap");
         assert_eq!(say(RaceEvent::FlagCleared), None);
+        assert!(!has_line(LogItem::Event(RaceEvent::FlagCleared)));
         assert_eq!(
             text(LogItem::SessionStarted, &names).unwrap(),
             "Session started"
@@ -259,53 +309,120 @@ mod tests {
     fn log_with(n: u64) -> RaceLog {
         let mut log = RaceLog::new();
         for i in 0..n {
-            log.push(format!("14:00:{i:02}"), format!("line {i}"), None, true);
+            log.push(LogItem::Event(RaceEvent::LastLap), Some(50_400 + i as u32));
         }
         log
     }
 
+    fn page(log: &RaceLog, from: Option<u64>) -> RaceLogPage {
+        log.since(from, &names)
+    }
+
+    fn seqs(page: &RaceLogPage) -> Vec<u64> {
+        page.lines.iter().map(|l| l.seq).collect()
+    }
+
     #[test]
-    fn a_page_that_just_opened_gets_every_line() {
-        let page = log_with(3).since(None);
-        assert_eq!(page.lines.len(), 3);
-        assert_eq!(page.next, 3);
+    fn a_line_is_written_when_the_page_asks() {
+        let mut log = RaceLog::new();
+        let overtake = RaceEvent::Overtake {
+            driver: 1,
+            team_color: TEAM,
+        };
+        log.push(LogItem::NotShown(overtake), Some(14 * 3600 + 3 * 60 + 21));
+        assert_eq!(
+            page(&log, None).lines,
+            [LogLine {
+                seq: 0,
+                time: "14:03:21".to_owned(),
+                text: "VER overtakes".to_owned(),
+                color: Some(TEAM),
+                shown: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_line_logged_before_the_clock_was_set_has_no_time() {
+        assert_eq!(time_of_day(None), "--:--:--");
+        assert_eq!(time_of_day(Some(9)), "00:00:09");
+    }
+
+    #[test]
+    fn a_cleared_flag_gets_no_line_or_number() {
+        let mut log = log_with(1);
+        log.push(LogItem::Event(RaceEvent::FlagCleared), Some(0));
+        assert_eq!(page(&log, None).next, 1);
+    }
+
+    #[test]
+    fn an_entry_takes_sixteen_bytes() {
+        assert!(std::mem::size_of::<Entry>() <= 16);
+    }
+
+    #[test]
+    fn a_page_that_just_opened_gets_every_line_of_a_short_log() {
+        let page = page(&log_with(3), None);
+        assert_eq!(seqs(&page), [0, 1, 2]);
+        assert_eq!((page.next, page.more), (3, false));
+    }
+
+    #[test]
+    fn a_page_that_just_opened_gets_only_the_newest_lines() {
+        let n = PAGE_LINES as u64 + 30;
+        let page = page(&log_with(n), None);
+        assert_eq!(page.lines.len(), PAGE_LINES);
+        assert_eq!(page.lines[0].seq, 30);
+        assert_eq!((page.next, page.more), (n, false));
     }
 
     #[test]
     fn later_asks_get_only_new_lines() {
-        let page = log_with(5).since(Some(3));
-        let seqs: Vec<u64> = page.lines.iter().map(|l| l.seq).collect();
-        assert_eq!(seqs, [3, 4]);
+        let page = page(&log_with(5), Some(3));
+        assert_eq!(seqs(&page), [3, 4]);
     }
 
     #[test]
     fn nothing_new_gets_no_lines() {
         // Race day 2026-10-11: this sent every line again, every 2 s.
         let log = log_with(1);
-        let first = log.since(None);
+        let first = page(&log, None);
         assert_eq!(first.lines.len(), 1);
-        assert!(log.since(Some(first.next)).lines.is_empty());
+        assert!(page(&log, Some(first.next)).lines.is_empty());
     }
 
     #[test]
     fn the_next_line_is_not_skipped() {
         let mut log = log_with(1);
-        let next = log.since(None).next;
-        log.push("14:01:00".to_owned(), "Green flag".to_owned(), None, true);
-        let page = log.since(Some(next));
+        let next = page(&log, None).next;
+        log.push(LogItem::Event(RaceEvent::TrackFlag(TrackFlag::Green)), None);
+        let page = page(&log, Some(next));
         assert_eq!(page.lines.len(), 1);
         assert_eq!(page.lines[0].text, "Green flag");
     }
 
     #[test]
-    fn a_number_from_before_a_restart_gets_every_line() {
-        assert_eq!(log_with(2).since(Some(500)).lines.len(), 2);
+    fn a_page_that_fell_behind_catches_up_in_steps() {
+        let log = log_with(PAGE_LINES as u64 + 10);
+        let first = page(&log, Some(0));
+        assert_eq!(first.lines.len(), PAGE_LINES);
+        assert!(first.more);
+        let rest = page(&log, Some(first.next));
+        assert_eq!(rest.lines.len(), 10);
+        assert!(!rest.more);
+    }
+
+    #[test]
+    fn a_number_from_before_a_restart_gets_the_newest_lines() {
+        assert_eq!(page(&log_with(2), Some(500)).lines.len(), 2);
     }
 
     #[test]
     fn only_the_latest_lines_are_kept() {
-        let page = log_with(LINES as u64 + 10).since(None);
-        assert_eq!(page.lines.len(), LINES);
-        assert_eq!(page.lines[0].seq, 10);
+        let log = log_with(LINES as u64 + 10);
+        // Asking from a line no longer kept starts at the oldest kept.
+        assert_eq!(page(&log, Some(0)).lines[0].seq, 10);
+        assert_eq!(log.entries.len(), LINES);
+        assert_eq!(log.entries.capacity(), LINES);
     }
 }

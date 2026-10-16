@@ -45,6 +45,13 @@ pub fn minute_of_day() -> Option<u16> {
     u16::try_from(tm.tm_hour * 60 + tm.tm_min).ok()
 }
 
+/// Seconds since local midnight once SNTP has set the clock, for the race
+/// log.
+pub fn second_of_day() -> Option<u32> {
+    let tm = local_time()?;
+    u32::try_from(tm.tm_hour * 3600 + tm.tm_min * 60 + tm.tm_sec).ok()
+}
+
 /// The time of day for log lines on the web page: local `07:31:02` once
 /// SNTP has set the clock, before that the time since boot (`+3.2s`).
 pub fn log_stamp() -> String {

@@ -58,7 +58,7 @@ impl TrackState {
             | FeedMessage::TopThree(_)
             | FeedMessage::PitLane(_)
             | FeedMessage::TimingStats(_)
-            | FeedMessage::Overtakes(_)
+            | FeedMessage::RaceInfo(_)
             | FeedMessage::SessionData(_)
             | FeedMessage::TimingData(_) => None,
         };

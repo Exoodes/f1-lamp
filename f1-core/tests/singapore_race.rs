@@ -11,7 +11,7 @@ use f1_core::{
     replay::{Replayer, Step},
 };
 
-const FILES: [(Stream, &str); 11] = [
+const FILES: [(Stream, &str); 12] = [
     (
         Stream::SessionInfo,
         include_str!("data/2026-singapore/race/SessionInfo.jsonStream"),
@@ -52,10 +52,16 @@ const FILES: [(Stream, &str); 11] = [
         Stream::Clock,
         include_str!("data/2026-singapore/race/ExtrapolatedClock.jsonStream"),
     ),
-    // Only its one `"Retired":true` line, for #23 after the flag.
+    // Only its lines about the pit lane and stopped or retired cars (#23
+    // is marked retired after the flag).
     (
         Stream::TimingData,
         include_str!("data/2026-singapore/race/TimingData.jsonStream"),
+    ),
+    // Only its lines with positions.
+    (
+        Stream::DriverRaceInfo,
+        include_str!("data/2026-singapore/race/DriverRaceInfo.jsonStream"),
     ),
 ];
 
@@ -211,4 +217,46 @@ fn the_race_ends_with_the_last_lap_the_chequered_flag_and_the_winner() {
         })
         .collect();
     assert_eq!(phases.last(), Some(&SessionPhase::PostSession));
+}
+
+fn overtakes(events: &[(Duration, RaceEvent)]) -> Vec<(Duration, u8)> {
+    events
+        .iter()
+        .filter_map(|(at, e)| match e {
+            RaceEvent::Overtake { driver, .. } => Some((*at, *driver)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_race_has_seventy_nine_overtakes_on_track() {
+    let overtakes = overtakes(&events());
+    assert_eq!(overtakes.len(), 79);
+    // The first at the start: #55 from P13 to P8 at 00:23:37.393.
+    assert_eq!(overtakes[0], (ms(1_417_393), 55));
+}
+
+#[test]
+fn a_pit_stop_is_no_overtake() {
+    // HAM in the pit lane from 00:53:24 to 00:54:16 (end of the first
+    // sector): #12, #1 and #81 pass the pit entry, four cars the pit exit,
+    // and HAM's stop counted puts him ahead of three: 7 changes of places.
+    let during = overtakes(&events())
+        .into_iter()
+        .filter(|(at, _)| *at >= ms(3_204_000) && *at <= ms(3_257_000))
+        .count();
+    assert_eq!(during, 0);
+}
+
+#[test]
+fn a_slow_car_on_track_is_overtaken() {
+    // #5 slowed with a problem at 00:35:29 without pitting, and stopped at
+    // 00:42:36: passing it counts, as in F1's own count.
+    let passed: Vec<u8> = overtakes(&events())
+        .into_iter()
+        .filter(|(at, _)| *at >= ms(2_129_700) && *at <= ms(2_130_200))
+        .map(|(_, driver)| driver)
+        .collect();
+    assert_eq!(passed, [11, 14, 6]);
 }

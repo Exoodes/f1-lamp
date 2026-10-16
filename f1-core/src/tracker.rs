@@ -11,8 +11,8 @@
 //! - pit stop: a car leaving the pit lane (PitLaneTimeCollection, public);
 //! - fastest lap: a new personal best that is the session's best
 //!   (TimingStats, public);
-//! - overtake: a new entry under a driver in OvertakeSeries (needs an F1TV
-//!   token live).
+//! - overtake: a car gaining places on track in DriverRaceInfo's running
+//!   order (needs an F1TV token live).
 //!
 //! The colours come from DriverList: TopThree patches leave `TeamColour` out
 //! when it didn't change, e.g. when one Mercedes passes the other.
@@ -25,7 +25,7 @@ use std::{
 use crate::{
     color::Rgb,
     feed::{
-        update_team_colours, FeedMessage, OvertakeSeries, PitLaneTimes, SessionState, SessionType,
+        update_team_colours, DriverRaceInfo, FeedMessage, PitLaneTimes, SessionState, SessionType,
         TimingData, TimingLine, TimingStats, TopThree,
     },
     input::RaceEvent,
@@ -46,6 +46,7 @@ pub const LAST_LAPS_MAX: Duration = Duration::from_secs(120);
 struct Car {
     laps: Option<u32>,
     in_pit: bool,
+    pit_out: bool,
     knocked_out: bool,
     retired: bool,
     stopped: bool,
@@ -62,6 +63,7 @@ impl Car {
             self.laps = line.number_of_laps;
         }
         set(&mut self.in_pit, line.in_pit);
+        set(&mut self.pit_out, line.pit_out);
         set(&mut self.knocked_out, line.knocked_out);
         set(&mut self.retired, line.retired);
         set(&mut self.stopped, line.stopped);
@@ -70,6 +72,13 @@ impl Car {
     /// Won't set a time any more: in the pits or out of the session.
     fn off_track(&self) -> bool {
         self.in_pit || self.knocked_out || self.retired || self.stopped
+    }
+
+    /// Not racing anyone: in the pit lane, on the way out of it (until the
+    /// end of the first sector), or stopped. Places such a car loses or
+    /// gains are no overtakes.
+    fn not_racing(&self) -> bool {
+        self.in_pit || self.pit_out || self.retired || self.stopped
     }
 }
 
@@ -101,6 +110,11 @@ pub struct Tracker {
     /// that didn't finish as retired after the flag (Singapore 2026: #23,
     /// 83 s later): not news then, and the winner is showing.
     session_over: bool,
+    /// The session is `Started`: places also change before the start, and
+    /// while a red flag holds the cars in the pit lane.
+    running: bool,
+    /// Each car's place in DriverRaceInfo's running order.
+    positions: HashMap<u8, u8>,
     /// From TimingData updates; the snapshot on connecting is too large to
     /// read, so a car can be missing.
     cars: HashMap<u8, Car>,
@@ -154,6 +168,7 @@ impl Tracker {
             FeedMessage::TopThree(top) => self.read_top_three(top),
             FeedMessage::Session(s) => {
                 if let Some(state) = s.status {
+                    self.running = state == SessionState::Started;
                     match state {
                         SessionState::Started => self.session_over = false,
                         SessionState::Finished | SessionState::Finalised | SessionState::Ends => {
@@ -174,7 +189,7 @@ impl Tracker {
                 }
             }
             FeedMessage::TimingStats(stats) => self.fastest_laps(stats, &mut events),
-            FeedMessage::Overtakes(series) => self.overtakes(series, &mut events),
+            FeedMessage::RaceInfo(info) => self.overtakes(info, &mut events),
             FeedMessage::TimingData(timing) => {
                 self.timing(timing, &mut events);
                 events.extend(self.pole_after_last_laps());
@@ -330,18 +345,38 @@ impl Tracker {
         }
     }
 
-    fn overtakes(&self, series: &OvertakeSeries, events: &mut Vec<RaceEvent>) {
-        let Some(drivers) = &series.overtakes else {
-            return;
-        };
-        for (&driver, entries) in drivers.iter() {
-            // Each entry is one overtake by `driver`.
-            for _ in 0..entries.len() {
-                events.push(RaceEvent::Overtake {
-                    driver,
-                    team_color: self.colour(driver),
-                });
+    /// A car gaining places from a car on track, once per update, however
+    /// many places. A car entering the pit lane is passed by everyone going
+    /// by, and takes its places back from those stopping later: none of that
+    /// counts, nor passing a car that stopped. Monza 2026: 296 overtakes, each
+    /// one F1 counted too (in OvertakeSeries, which the live feed never
+    /// sends); F1 also counts the 19 passes of a car in the pit lane.
+    fn overtakes(&mut self, info: &DriverRaceInfo, events: &mut Vec<RaceEvent>) {
+        let mut gained = Vec::new();
+        let mut passed_on_track = false;
+        for (&driver, line) in info.iter() {
+            let Some(now) = line.position() else { continue };
+            // A car's first place, as on connecting, is no change.
+            let Some(before) = self.positions.insert(driver, now) else {
+                continue;
+            };
+            if self.cars.get(&driver).is_some_and(Car::not_racing) {
+                continue;
             }
+            if now < before {
+                gained.push(driver);
+            } else if now > before {
+                passed_on_track = true;
+            }
+        }
+        if !self.running || !passed_on_track {
+            return;
+        }
+        for driver in gained {
+            events.push(RaceEvent::Overtake {
+                driver,
+                team_color: self.colour(driver),
+            });
         }
     }
 
@@ -775,26 +810,108 @@ mod tests {
         );
     }
 
-    #[test]
-    fn each_overtake_entry_is_an_overtake() {
+    /// The Singapore 2026 race on lap 4, cars 87 (P11), 31 (P12) and 55
+    /// (P13) in the order; the race runs.
+    fn order() -> Tracker {
         let mut t = race();
-        assert_eq!(
-            feed(
-                &mut t,
-                Stream::Overtakes,
-                r#"{"Overtakes":{"81":{"5":{"Timestamp":"2026-09-06T13:45:52.666Z","count":3}}}}"#
-            ),
-            Some(RaceEvent::Overtake {
-                driver: 81,
-                team_color: "#f47600".parse().unwrap()
-            })
-        );
-        let first = feed_all(
+        feed(
             &mut t,
-            Stream::Overtakes,
-            r#"{"Overtakes":{"12":[{"Timestamp":"a","count":1}],"63":[{"Timestamp":"b","count":1}]}}"#,
+            Stream::DriverList,
+            r#"{"87":{"TeamColour":"DEE1E2"},"31":{"TeamColour":"DEE1E2"},"55":{"TeamColour":"1868DB"}}"#,
         );
-        assert_eq!(first.len(), 2);
+        feed(&mut t, Stream::SessionStatus, r#"{"Status":"Started"}"#);
+        assert!(places(
+            &mut t,
+            r#"{"87":{"Position":"11"},"31":{"Position":"12"},"55":{"Position":"13"}}"#
+        )
+        .is_empty());
+        t
+    }
+
+    fn places(t: &mut Tracker, json: &str) -> Vec<RaceEvent> {
+        feed_all(t, Stream::DriverRaceInfo, json)
+    }
+
+    #[test]
+    fn a_car_gaining_a_place_on_track_overtakes_in_team_colour() {
+        let mut t = order();
+        assert_eq!(
+            places(
+                &mut t,
+                r#"{"87":{"Position":"12","Interval":"","OvertakeState":0},"31":{"Position":"11","Interval":"","OvertakeState":2}}"#
+            ),
+            [RaceEvent::Overtake {
+                driver: 31,
+                team_color: "#dee1e2".parse().unwrap()
+            }]
+        );
+    }
+
+    #[test]
+    fn gaps_and_unchanged_places_are_no_overtake() {
+        let mut t = order();
+        assert!(places(&mut t, r#"{"87":{"Gap":"+1.549","Interval":"+0.059"}}"#).is_empty());
+        assert!(places(&mut t, r#"{"87":{"Position":"11"}}"#).is_empty());
+    }
+
+    #[test]
+    fn gaining_two_places_at_once_is_one_overtake() {
+        let mut t = order();
+        let events = places(
+            &mut t,
+            r#"{"87":{"Position":"12"},"31":{"Position":"13"},"55":{"Position":"11"}}"#,
+        );
+        assert!(matches!(
+            events[..],
+            [RaceEvent::Overtake { driver: 55, .. }]
+        ));
+    }
+
+    #[test]
+    fn passing_a_car_in_the_pit_lane_is_no_overtake() {
+        let mut t = order();
+        timing(
+            &mut t,
+            r#"{"Lines":{"87":{"InPit":true,"NumberOfPitStops":1}}}"#,
+        );
+        assert!(places(&mut t, r#"{"87":{"Position":"12"},"31":{"Position":"11"}}"#).is_empty());
+        // Out of the pit lane, still in the first sector.
+        timing(&mut t, r#"{"Lines":{"87":{"InPit":false,"PitOut":true}}}"#);
+        assert!(places(&mut t, r#"{"87":{"Position":"13"},"55":{"Position":"12"}}"#).is_empty());
+        timing(&mut t, r#"{"Lines":{"87":{"PitOut":false}}}"#);
+        assert!(!places(&mut t, r#"{"87":{"Position":"12"},"55":{"Position":"13"}}"#).is_empty());
+    }
+
+    #[test]
+    fn coming_out_of_the_pits_ahead_is_no_overtake() {
+        // Singapore 2026, 00:53:55: HAM's stop counted, ahead of three cars.
+        let mut t = order();
+        timing(&mut t, r#"{"Lines":{"55":{"InPit":false,"PitOut":true}}}"#);
+        assert!(places(
+            &mut t,
+            r#"{"55":{"Position":"11","PitStops":1,"OvertakeState":2},"87":{"Position":"12"},"31":{"Position":"13"}}"#
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn passing_a_stopped_car_is_no_overtake() {
+        let mut t = order();
+        timing(&mut t, r#"{"Lines":{"87":{"Stopped":true}}}"#);
+        assert!(places(&mut t, r#"{"87":{"Position":"12"},"31":{"Position":"11"}}"#).is_empty());
+    }
+
+    #[test]
+    fn places_changing_while_the_race_doesnt_run_are_no_overtakes() {
+        let mut t = order();
+        feed(&mut t, Stream::SessionStatus, r#"{"Status":"Aborted"}"#);
+        assert!(places(&mut t, r#"{"87":{"Position":"12"},"31":{"Position":"11"}}"#).is_empty());
+        feed(&mut t, Stream::SessionStatus, r#"{"Status":"Started"}"#);
+        // The order from the red flag is the one that counts.
+        assert!(matches!(
+            places(&mut t, r#"{"31":{"Position":"12"},"87":{"Position":"11"}}"#)[..],
+            [RaceEvent::Overtake { driver: 87, .. }]
+        ));
     }
 
     fn qualifying() -> Tracker {

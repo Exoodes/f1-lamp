@@ -402,14 +402,16 @@ fn describe(msg: &FeedMessage) -> String {
                 format!("fastest lap: {}", fastest.join(", "))
             }
         }
-        FeedMessage::Overtakes(o) => {
-            let drivers: Vec<String> = o
-                .overtakes
+        FeedMessage::RaceInfo(info) => {
+            let places: Vec<String> = info
                 .iter()
-                .flat_map(|m| m.iter())
-                .map(|(d, e)| format!("#{d} x{}", e.len()))
+                .filter_map(|(d, line)| Some(format!("#{d} P{}", line.position()?)))
                 .collect();
-            format!("overtakes: {}", drivers.join(", "))
+            if places.is_empty() {
+                "update".to_owned()
+            } else {
+                format!("order: {}", places.join(", "))
+            }
         }
         FeedMessage::SessionData(s) => match s.qualifying_part() {
             Some(part) => format!("qualifying part {part}"),

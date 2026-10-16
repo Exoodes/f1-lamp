@@ -52,9 +52,9 @@ pub const MAX_OPENING_FRAMES: usize = 6;
 /// Also subscribed to, so a quiet session still shows the connection is alive.
 const HEARTBEAT: &str = "Heartbeat";
 
-/// Invocation ids of the `Subscribe` calls. The state's answer is applied
-/// and the timing stats' answer read for the fastest lap's holder; the
-/// others answer with history.
+/// Invocation ids of the `Subscribe` calls. The state's answer is applied,
+/// the timing stats' answer read for the fastest lap's holder and the
+/// account call's for the running order; the others answer with history.
 const STATE_CALL: u32 = 1;
 const RACE_CONTROL_CALL: u32 = 2;
 const DRIVER_EVENTS_CALL: u32 = 3;
@@ -78,8 +78,9 @@ const STATE_STREAMS: [Stream; 8] = [
 /// laps) has a call of its own: its answer (about 8 KB mid-session) says who
 /// holds the fastest lap, and next to TimingData's it would be skipped too.
 const DRIVER_EVENT_STREAMS: [Stream; 2] = [Stream::PitLane, Stream::TimingData];
-/// Streams that only answer with an F1TV token: overtakes.
-const ACCOUNT_STREAMS: [Stream; 1] = [Stream::Overtakes];
+/// Streams that only answer with an F1TV token: the running order, for
+/// overtakes. Its answer is about 4 KB.
+const ACCOUNT_STREAMS: [Stream; 1] = [Stream::DriverRaceInfo];
 
 /// What one batch of received bytes produced.
 #[derive(Debug, Default, PartialEq)]
@@ -132,7 +133,7 @@ impl LiveSession {
     ///
     /// Only the first `Subscribe` answer is used. Every stream whose answer
     /// is just history gets a call of its own: race control's is 44 KB after
-    /// a race, overtakes' 30 KB. As separate frames, those larger than
+    /// a race. As separate frames, those larger than
     /// `max_frame` are skipped by the splitter without buffering, so the
     /// device never needs one block that big, and the first answer stays
     /// small.
@@ -205,7 +206,14 @@ impl LiveSession {
                 result: Some(result),
                 ..
             } if invocation_id.as_deref() == Some(&TIMING_STATS_CALL.to_string()) => {
-                self.fastest_lap_holder(result, out);
+                self.read_silently(Stream::TimingStats, result, out);
+            }
+            Message::Completion {
+                invocation_id,
+                result: Some(result),
+                ..
+            } if invocation_id.as_deref() == Some(&ACCOUNT_CALL.to_string()) => {
+                self.read_silently(Stream::DriverRaceInfo, result, out);
             }
             Message::Invocation { .. } => {
                 if let Some(update) = msg.feed_update() {
@@ -223,7 +231,7 @@ impl LiveSession {
                 out.closed = Some(error.clone().unwrap_or_else(|| "no reason".to_owned()));
             }
             // Among these: the answers to the other `Subscribe` calls, which
-            // are only history (race control, pit stops, overtakes so far).
+            // are only history (race control, pit stops so far).
             Message::Handshake { error: None }
             | Message::Completion { .. }
             | Message::Ping
@@ -264,26 +272,27 @@ impl LiveSession {
         }
     }
 
-    /// TimingStats' current state: the tracker learns who holds the fastest
-    /// lap, so the holder beating their own time counts after a reconnect
-    /// too. Silently: that lap was set before the lamp connected.
-    fn fastest_lap_holder(&mut self, result: &RawValue, out: &mut Received) {
-        let stats = signalr::initial_state(result).map(|state| {
-            state
-                .into_iter()
-                .find(|(name, _)| name == Stream::TimingStats.name())
-        });
-        match stats {
-            Ok(Some((_, json))) => match Stream::TimingStats.parse(json.get()) {
+    /// The current state of `stream` from a `Subscribe` answer, for the
+    /// tracker to learn from silently. TimingStats says who holds the
+    /// fastest lap, so the holder beating their own time counts after a
+    /// reconnect too; DriverRaceInfo gives every car's place, so the first
+    /// pass counts. What they hold happened before the lamp connected.
+    fn read_silently(&mut self, stream: Stream, result: &RawValue, out: &mut Received) {
+        let found = signalr::initial_state(result)
+            .map(|state| state.into_iter().find(|(name, _)| name == stream.name()));
+        match found {
+            Ok(Some((_, json))) => match stream.parse(json.get()) {
                 Ok(messages) => {
                     for msg in messages {
                         self.tracker.apply(&msg);
                     }
                 }
-                Err(e) => out.problems.push(format!("TimingStats (initial): {e}")),
+                Err(e) => out
+                    .problems
+                    .push(format!("{} (initial): {e}", stream.name())),
             },
             Ok(None) => {}
-            Err(e) => out.problems.push(format!("timing stats state: {e}")),
+            Err(e) => out.problems.push(format!("{} state: {e}", stream.name())),
         }
     }
 
@@ -401,7 +410,7 @@ mod tests {
             driver_events.contains("PitLaneTimeCollection")
                 && !driver_events.contains("TimingStats")
         );
-        assert!(!frames.iter().any(|f| f.contains("OvertakeSeries")));
+        assert!(!frames.iter().any(|f| f.contains("DriverRaceInfo")));
         assert!(!state.contains("TimingStats"));
         assert_eq!(handshake, signalr::HANDSHAKE);
         assert!(state.contains("\"TrackStatus\"") && state.contains("\"Heartbeat\""));
@@ -647,10 +656,10 @@ mod tests {
     }
 
     #[test]
-    fn with_a_token_overtakes_get_a_fifth_subscribe() {
+    fn with_a_token_the_running_order_gets_a_fifth_subscribe() {
         let frames = LiveSession::opening_frames(true);
         assert_eq!(frames.len(), 6);
-        assert!(frames[5].contains("[[\"OvertakeSeries\"]]"));
+        assert!(frames[5].contains("[[\"DriverRaceInfo\"]]"));
         assert!(frames[5].contains("\"invocationId\":\"4\""));
     }
 
@@ -675,6 +684,37 @@ mod tests {
             matches!(r.events[..], [RaceEvent::FastestLap { driver: 81, .. }]),
             "{:?}",
             r.events
+        );
+    }
+
+    #[test]
+    fn the_running_order_is_read_silently_and_the_first_pass_counts() {
+        let (mut live, _) = racing();
+        live.receive(
+            feed(
+                "DriverList",
+                r#"{"4":{"TeamColour":"F47600"},"16":{"TeamColour":"ED1131"}}"#,
+            )
+            .as_bytes(),
+        );
+        let answer = format!(
+            r#"{{"type":3,"invocationId":"4","result":{{"DriverRaceInfo":{{"81":{{"RacingNumber":"81","Position":"1","Gap":"LAP 12","OvertakeState":1,"IsOut":false}},"4":{{"RacingNumber":"4","Position":"2","OvertakeState":1}},"16":{{"RacingNumber":"16","Position":"3","OvertakeState":1}},"_kf":true}}}}}}{RS}"#
+        );
+        let r = live.receive(answer.as_bytes());
+        assert!(r.events.is_empty() && r.problems.is_empty(), "{r:?}");
+        let r = live.receive(
+            feed(
+                "DriverRaceInfo",
+                r#"{"4":{"Position":"3","Interval":"","OvertakeState":0},"16":{"Position":"2","Interval":"","OvertakeState":2}}"#,
+            )
+            .as_bytes(),
+        );
+        assert_eq!(
+            r.events,
+            [RaceEvent::Overtake {
+                driver: 16,
+                team_color: "#ed1131".parse().unwrap()
+            }]
         );
     }
 

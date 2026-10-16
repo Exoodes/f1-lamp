@@ -306,36 +306,23 @@ pub struct BestLap {
     pub lap: Option<u32>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct OvertakeSeries {
-    pub overtakes: Option<Numbered<u8, Overtakes>>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub enum Overtakes {
-    List(Vec<OvertakeEntry>),
-    Map(Numbered<u32, OvertakeEntry>),
-}
-
-impl Overtakes {
-    pub fn len(&self) -> usize {
-        match self {
-            Overtakes::List(v) => v.len(),
-            Overtakes::Map(m) => m.len(),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
+/// The race's running order, by car: `{"87":{"Position":"11"},"31":{"Position":"12"}}`
+/// when #87 passes #31. Most updates carry only gaps and intervals. It also
+/// has `OvertakeState` (2 = gained a place lately, 0 = lost one, 1 = reset
+/// about five seconds later), `PitStops` and `IsOut`, which say nothing the
+/// positions and TimingData don't. Race only; needs an F1TV token live.
+pub type DriverRaceInfo = Numbered<u8, RaceInfoLine>;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
-pub struct OvertakeEntry {
-    pub timestamp: Option<String>,
+pub struct RaceInfoLine {
+    pub position: Option<String>, // a string in the JSON: "11"
+}
+
+impl RaceInfoLine {
+    pub fn position(&self) -> Option<u8> {
+        self.position.as_deref()?.parse().ok()
+    }
 }
 
 /// A race's laps: the leader's lap and the race's length. An update holds
@@ -408,8 +395,8 @@ impl SessionData {
 /// The timing screen. Read: who is knocked out of qualifying (the feed sets
 /// `KnockedOut` for a part's slowest drivers when the next part is
 /// announced, about six minutes after its chequered flag), and what a car is
-/// doing after the flag: crossing the line (`NumberOfLaps`), in the pits or
-/// out of the session.
+/// doing: crossing the line (`NumberOfLaps`), in the pits or just out of them,
+/// or out of the session.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct TimingData {
@@ -422,6 +409,8 @@ pub struct TimingLine {
     pub knocked_out: Option<bool>,
     pub number_of_laps: Option<u32>,
     pub in_pit: Option<bool>,
+    /// Out of the pit lane, until the end of the first sector.
+    pub pit_out: Option<bool>,
     pub retired: Option<bool>,
     pub stopped: Option<bool>,
 }
@@ -437,7 +426,7 @@ pub enum FeedMessage {
     TopThree(TopThree),
     PitLane(PitLaneTimes),
     TimingStats(TimingStats),
-    Overtakes(OvertakeSeries),
+    RaceInfo(DriverRaceInfo),
     SessionData(SessionData),
     TimingData(TimingData),
     LapCount(LapCount),
@@ -457,8 +446,8 @@ pub enum Stream {
     PitLane,
     /// Public: personal bests; the fastest lap has position 1.
     TimingStats,
-    /// Needs an F1TV token live: one entry per overtake.
-    Overtakes,
+    /// Needs an F1TV token live: the running order, for overtakes.
+    DriverRaceInfo,
     /// Public: which qualifying part runs.
     SessionData,
     /// Public: the timing screen; who is knocked out of qualifying.
@@ -479,7 +468,7 @@ impl Stream {
         Stream::TopThree,
         Stream::PitLane,
         Stream::TimingStats,
-        Stream::Overtakes,
+        Stream::DriverRaceInfo,
         Stream::SessionData,
         Stream::TimingData,
         Stream::LapCount,
@@ -497,7 +486,7 @@ impl Stream {
             Stream::TopThree => "TopThree",
             Stream::PitLane => "PitLaneTimeCollection",
             Stream::TimingStats => "TimingStats",
-            Stream::Overtakes => "OvertakeSeries",
+            Stream::DriverRaceInfo => "DriverRaceInfo",
             Stream::SessionData => "SessionData",
             Stream::TimingData => "TimingData",
             Stream::LapCount => "LapCount",
@@ -523,15 +512,20 @@ impl Stream {
             Stream::TimingStats => {
                 json.contains("\"PersonalBestLapTime\":{") && json.contains("\"Value\":\"")
             }
+            // About 28,000 lines a race, nearly all gaps and intervals; about
+            // 200 change the order.
+            Stream::DriverRaceInfo => json.contains("\"Position\""),
             // Most lines are status changes.
             Stream::SessionData => json.contains("\"QualifyingPart\""),
             // About 9000 lines a qualifying, mostly sector times. Read are
             // knockouts and, for pole, cars crossing the line, entering the
-            // pits or dropping out: about 360 lines.
+            // pits or dropping out: about 360 lines. Leaving the pit lane
+            // (`PitOut`) matters for overtakes.
             Stream::TimingData => [
                 "\"KnockedOut\":true",
                 "\"NumberOfLaps\"",
                 "\"InPit\"",
+                "\"PitOut\"",
                 "\"Retired\"",
                 "\"Stopped\"",
             ]
@@ -573,8 +567,8 @@ impl Stream {
             Stream::TimingStats => vec![FeedMessage::TimingStats(serde_json::from_str::<
                 TimingStats,
             >(json)?)],
-            Stream::Overtakes => vec![FeedMessage::Overtakes(serde_json::from_str::<
-                OvertakeSeries,
+            Stream::DriverRaceInfo => vec![FeedMessage::RaceInfo(serde_json::from_str::<
+                DriverRaceInfo,
             >(json)?)],
             Stream::SessionData => vec![FeedMessage::SessionData(serde_json::from_str::<
                 SessionData,
@@ -924,17 +918,23 @@ mod tests {
     }
 
     #[test]
-    fn overtake_series_reads_both_shapes() {
-        let first: OvertakeSeries = serde_json::from_str(
-            r#"{"Overtakes":{"81":[{"Timestamp":"2026-09-06T13:03:40.488Z","count":1}]}}"#,
+    fn driver_race_info_reads_positions_by_car() {
+        let info: DriverRaceInfo = serde_json::from_str(
+            r#"{"87":{"Position":"11","Interval":"","OvertakeState":2},"31":{"Position":"12"},"16":{"Gap":"+0.048"},"_kf":true}"#,
         )
         .unwrap();
-        assert_eq!(first.overtakes.unwrap()[&81].len(), 1);
-        let update: OvertakeSeries = serde_json::from_str(
-            r#"{"Overtakes":{"44":{"5":{"Timestamp":"2026-09-06T13:45:52.666Z","count":3}}}}"#,
-        )
-        .unwrap();
-        assert_eq!(update.overtakes.unwrap()[&44].len(), 1);
+        assert_eq!(info.len(), 3);
+        assert_eq!(info[&87].position(), Some(11));
+        assert_eq!(info[&31].position(), Some(12));
+        assert_eq!(info[&16].position(), None);
+    }
+
+    #[test]
+    fn only_driver_race_info_lines_with_positions_are_relevant() {
+        let s = Stream::DriverRaceInfo;
+        assert!(s.is_relevant(r#"{"87":{"Position":"11"},"31":{"Position":"12"}}"#));
+        assert!(!s.is_relevant(r#"{"16":{"Gap":"+0.048","Interval":"+0.048"}}"#));
+        assert!(!s.is_relevant(r#"{"87":{"OvertakeState":1}}"#));
     }
 
     #[test]
@@ -972,12 +972,13 @@ mod tests {
     #[test]
     fn timing_data_reads_laps_and_where_a_car_is() {
         let t: TimingData = serde_json::from_str(
-            r#"{"Lines":{"3":{"NumberOfLaps":15,"Sectors":{"2":{"Value":"28.1"}}},"44":{"InPit":true,"NumberOfPitStops":4},"16":{"Retired":true,"Stopped":true}}}"#,
+            r#"{"Lines":{"3":{"NumberOfLaps":15,"Sectors":{"2":{"Value":"28.1"}}},"44":{"InPit":true,"NumberOfPitStops":4},"12":{"InPit":false,"PitOut":true},"16":{"Retired":true,"Stopped":true}}}"#,
         )
         .unwrap();
         let lines = t.lines.unwrap();
         assert_eq!(lines[&3].number_of_laps, Some(15));
         assert_eq!(lines[&44].in_pit, Some(true));
+        assert_eq!(lines[&12].pit_out, Some(true));
         assert_eq!(lines[&16].retired, Some(true));
         assert_eq!(lines[&16].stopped, Some(true));
     }

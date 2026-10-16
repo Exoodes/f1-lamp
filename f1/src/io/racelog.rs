@@ -4,7 +4,7 @@
 
 use std::{collections::HashMap, sync::Mutex};
 
-use f1_core::racelog::{self, LogItem, RaceLog, RaceLogPage};
+use f1_core::racelog::{LogItem, RaceLog, RaceLogPage};
 
 use crate::io::clock;
 
@@ -20,12 +20,21 @@ pub fn set_name(number: u8, name: String) {
         .insert(number, name);
 }
 
-/// Adds the lines for `items`, stamped with the time now: when the lamp
-/// shows them, in step with the TV.
+/// Logs `items`, stamped with the time now: when the lamp shows them, in
+/// step with the TV.
 pub fn record(items: Vec<LogItem>) {
     if items.is_empty() {
         return;
     }
+    let at = clock::second_of_day();
+    let mut log = LOG.lock().unwrap_or_else(|e| e.into_inner());
+    for item in items {
+        log.push(item, at);
+    }
+}
+
+/// The lines from number `after` on, written with the names known now.
+pub fn page(after: Option<u64>) -> RaceLogPage {
     let names = NAMES.lock().unwrap_or_else(|e| e.into_inner());
     let name = |number: u8| {
         names
@@ -33,19 +42,7 @@ pub fn record(items: Vec<LogItem>) {
             .and_then(|n| n.get(&number).cloned())
             .unwrap_or_else(|| format!("#{number}"))
     };
-    let mut log = LOG.lock().unwrap_or_else(|e| e.into_inner());
-    for item in items {
-        if let Some(text) = racelog::text(item, &name) {
-            log.push(
-                clock::log_stamp(),
-                text,
-                racelog::color(item),
-                racelog::shown(item),
-            );
-        }
-    }
-}
-
-pub fn page(after: Option<u64>) -> RaceLogPage {
-    LOG.lock().unwrap_or_else(|e| e.into_inner()).since(after)
+    LOG.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .since(after, &name)
 }

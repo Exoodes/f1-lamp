@@ -996,22 +996,36 @@ async function tryEvent(body, label) {
 
 // ---- Race log ----
 
-// The number of the last line shown; null before the first answer.
+// The number to ask from; null before the first answer, which then holds
+// the newest lines only.
 let raceLogNext = null;
+// A request is on its way: don't send another.
+let raceLogBusy = false;
+// The lamp keeps 512 lines; so does the page.
+const RACE_LOG_LINES = 512;
 
 async function refreshRaceLog() {
+  if (raceLogBusy) return;
+  raceLogBusy = true;
   try {
-    const query = raceLogNext === null ? "" : "?after=" + raceLogNext;
-    const r = await lampFetch("/api/racelog" + query);
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    const page = await r.json();
-    // A lamp that restarted starts its numbers again: show its log afresh.
-    if (raceLogNext !== null && page.next < raceLogNext) $("racelog").replaceChildren();
-    for (const line of page.lines) addRaceLogLine(line);
-    raceLogNext = page.next;
+    // Each answer holds 50 lines at most: a page that fell behind (a tab in
+    // the background) asks until it has caught up.
+    for (let more = true; more; ) {
+      const query = raceLogNext === null ? "" : "?after=" + raceLogNext;
+      const r = await lampFetch("/api/racelog" + query);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const page = await r.json();
+      // A lamp that restarted starts its numbers again: show its log afresh.
+      if (raceLogNext !== null && page.next < raceLogNext) $("racelog").replaceChildren();
+      for (const line of page.lines) addRaceLogLine(line);
+      raceLogNext = page.next;
+      more = page.more === true;
+    }
     $("racelog-empty").hidden = $("racelog").children.length > 0;
   } catch {
     // The next refresh tries again.
+  } finally {
+    raceLogBusy = false;
   }
 }
 
@@ -1029,8 +1043,7 @@ function addRaceLogLine(line) {
   text.textContent = line.text;
   li.append(time, dot, text);
   $("racelog").prepend(li);
-  // The lamp keeps 120 lines; so does the page.
-  while ($("racelog").children.length > 120) $("racelog").lastChild.remove();
+  while ($("racelog").children.length > RACE_LOG_LINES) $("racelog").lastChild.remove();
 }
 
 // ---- This weekend ----

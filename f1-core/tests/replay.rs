@@ -42,15 +42,17 @@ const FILES: [(Stream, &str); 11] = [
         Stream::TimingStats,
         include_str!("data/2026-italy/race/TimingStats.jsonStream"),
     ),
+    // Only its lines with positions.
     (
-        Stream::Overtakes,
-        include_str!("data/2026-italy/race/OvertakeSeries.jsonStream"),
+        Stream::DriverRaceInfo,
+        include_str!("data/2026-italy/race/DriverRaceInfo.jsonStream"),
     ),
     (
         Stream::LapCount,
         include_str!("data/2026-italy/race/LapCount.jsonStream"),
     ),
-    // Only its two `"Retired":true` lines: a race's TimingData is tens of MB.
+    // Only its lines about the pit lane, stopped and retired cars: a race's
+    // TimingData is tens of MB.
     (
         Stream::TimingData,
         include_str!("data/2026-italy/race/TimingData.jsonStream"),
@@ -60,6 +62,11 @@ const FILES: [(Stream, &str); 11] = [
 fn hms(h: u64, m: u64, s: u64) -> Duration {
     Duration::from_secs((h * 60 + m) * 60 + s)
 }
+
+/// F1's own overtake counter, which the live feed never sends: one entry per
+/// overtake, by driver. Not played; the lamp's overtakes are checked
+/// against it.
+const OVERTAKE_SERIES: &str = include_str!("data/2026-italy/race/OvertakeSeries.jsonStream");
 
 /// Plays until finished, moving the clock forward by each wait, like the
 /// replay thread. Returns every input and the real time it took.
@@ -271,7 +278,7 @@ fn driver_events(inputs: &[Input]) -> Vec<RaceEvent> {
 }
 
 #[test]
-fn race_has_sixteen_fastest_laps_nine_pit_stops_and_327_overtakes() {
+fn race_has_sixteen_fastest_laps_nine_pit_stops_and_296_overtakes() {
     let (inputs, _) = play_to_end(60);
     let events = driver_events(&inputs);
     let count = |f: fn(&RaceEvent) -> bool| events.iter().filter(|e| f(e)).count();
@@ -279,7 +286,73 @@ fn race_has_sixteen_fastest_laps_nine_pit_stops_and_327_overtakes() {
     // sends no position then): #63 lap 7, #12 laps 17, 30, 46 and 53.
     assert_eq!(count(|e| matches!(e, RaceEvent::FastestLap { .. })), 16);
     assert_eq!(count(|e| matches!(e, RaceEvent::PitStop { .. })), 9);
-    assert_eq!(count(|e| matches!(e, RaceEvent::Overtake { .. })), 327);
+    assert_eq!(count(|e| matches!(e, RaceEvent::Overtake { .. })), 296);
+}
+
+/// The lamp's overtakes with the feed time they came at.
+fn overtakes() -> Vec<(Duration, u8)> {
+    let mut now = Instant::now();
+    let mut replayer = Replayer::new(&FILES, 60, now);
+    replayer.play(now);
+    let mut found = Vec::new();
+    loop {
+        match replayer.step(now) {
+            Step::Send(inputs) => {
+                let at = Duration::from_millis(replayer.status(now).position_ms);
+                found.extend(inputs.into_iter().filter_map(|i| match i {
+                    Input::Race {
+                        event: RaceEvent::Overtake { driver, .. },
+                        ..
+                    } => Some((at, driver)),
+                    _ => None,
+                }));
+            }
+            Step::Wait(wait) => now += wait,
+            Step::Finished => return found,
+            Step::Paused => panic!("paused while playing"),
+            Step::Skipped(e) => panic!("{e}"),
+        }
+    }
+}
+
+/// F1's overtakes: `00:57:05.313{"Overtakes":{"81":[{...}]}}` the first
+/// time, `{"Overtakes":{"30":{"19":{...}}}}` after that.
+fn f1_overtakes() -> Vec<(Duration, u8)> {
+    let mut found = Vec::new();
+    for line in OVERTAKE_SERIES.trim_start_matches('\u{feff}').lines() {
+        let (stamp, json) = line.split_at(line.find('{').unwrap());
+        let at: f64 = stamp.split(':').fold(0.0, |total, part| {
+            total * 60.0 + part.parse::<f64>().unwrap()
+        });
+        let value: serde_json::Value = serde_json::from_str(json).unwrap();
+        for (driver, entries) in value["Overtakes"].as_object().unwrap() {
+            let entries = match entries {
+                serde_json::Value::Array(list) => list.len(),
+                serde_json::Value::Object(map) => map.len(),
+                other => panic!("{other}"),
+            };
+            for _ in 0..entries {
+                found.push((Duration::from_secs_f64(at), driver.parse().unwrap()));
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn every_overtake_is_one_f1_counted_too() {
+    let mut theirs = f1_overtakes();
+    assert_eq!(theirs.len(), 327);
+    for (at, driver) in overtakes() {
+        let same = theirs
+            .iter()
+            .position(|&(when, d)| d == driver && when.abs_diff(at) < Duration::from_secs(3))
+            .unwrap_or_else(|| panic!("#{driver} at {at:?}: F1 has no such overtake"));
+        theirs.remove(same);
+    }
+    // F1 also counts passing a car in the pit lane (19), and has 12
+    // entries with a `count` of 21 that are no pass.
+    assert_eq!(theirs.len(), 31, "{theirs:?}");
 }
 
 #[test]
