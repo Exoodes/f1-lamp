@@ -358,6 +358,21 @@ pub fn clock_ms(text: &str) -> Option<u32> {
     seconds.checked_mul(1000)
 }
 
+/// `"1:26.651"` (or `"59.123"`) as milliseconds.
+pub fn lap_ms(text: &str) -> Option<u32> {
+    let (minutes, seconds) = text.split_once(':').unwrap_or(("0", text));
+    let (whole, fraction) = seconds.split_once('.')?;
+    if fraction.len() != 3 {
+        return None;
+    }
+    let minutes: u32 = minutes.parse().ok()?;
+    let seconds: u32 = whole.parse().ok()?;
+    let fraction: u32 = fraction.parse().ok()?;
+    (minutes * 60 + seconds)
+        .checked_mul(1000)?
+        .checked_add(fraction)
+}
+
 /// The session's parts and status changes. Only the qualifying part is read:
 /// `Series` gets an entry with `QualifyingPart` 1, 2 and 3 before each part.
 #[derive(Debug, Deserialize)]
@@ -396,7 +411,7 @@ impl SessionData {
 /// `KnockedOut` for a part's slowest drivers when the next part is
 /// announced, about six minutes after its chequered flag), and what a car is
 /// doing: crossing the line (`NumberOfLaps`), in the pits or just out of them,
-/// or out of the session.
+/// or out of the session. The lap just done (`LastLapTime`) is for the page.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct TimingData {
@@ -413,6 +428,20 @@ pub struct TimingLine {
     pub pit_out: Option<bool>,
     pub retired: Option<bool>,
     pub stopped: Option<bool>,
+    pub last_lap_time: Option<LapTime>,
+}
+
+/// A lap time, `"1:26.651"`; `""` when the lap was deleted or not timed.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct LapTime {
+    pub value: Option<String>,
+}
+
+impl LapTime {
+    pub fn ms(&self) -> Option<u32> {
+        lap_ms(self.value.as_deref()?)
+    }
 }
 
 /// One parsed message of any stream the lamp reads.
@@ -520,7 +549,7 @@ impl Stream {
             // About 9000 lines a qualifying, mostly sector times. Read are
             // knockouts and, for pole, cars crossing the line, entering the
             // pits or dropping out: about 360 lines. Leaving the pit lane
-            // (`PitOut`) matters for overtakes.
+            // (`PitOut`) matters for overtakes, lap times for the page.
             Stream::TimingData => [
                 "\"KnockedOut\":true",
                 "\"NumberOfLaps\"",
@@ -528,6 +557,7 @@ impl Stream {
                 "\"PitOut\"",
                 "\"Retired\"",
                 "\"Stopped\"",
+                "\"LastLapTime\":{\"Value\":\"",
             ]
             .iter()
             .any(|key| json.contains(key)),
@@ -981,6 +1011,29 @@ mod tests {
         assert_eq!(lines[&12].pit_out, Some(true));
         assert_eq!(lines[&16].retired, Some(true));
         assert_eq!(lines[&16].stopped, Some(true));
+    }
+
+    #[test]
+    fn timing_data_reads_the_last_lap_time() {
+        let t: TimingData = serde_json::from_str(
+            r#"{"Lines":{"63":{"NumberOfLaps":2,"LastLapTime":{"Value":"1:26.651","OverallFastest":true}},"4":{"LastLapTime":{"Value":"","Status":0}}}}"#,
+        )
+        .unwrap();
+        let lines = t.lines.unwrap();
+        assert_eq!(
+            lines[&63].last_lap_time.as_ref().unwrap().ms(),
+            Some(86_651)
+        );
+        assert_eq!(lines[&4].last_lap_time.as_ref().unwrap().ms(), None);
+    }
+
+    #[test]
+    fn lap_times_read_as_milliseconds() {
+        assert_eq!(lap_ms("1:26.651"), Some(86_651));
+        assert_eq!(lap_ms("59.123"), Some(59_123));
+        assert_eq!(lap_ms("1:26.6"), None);
+        assert_eq!(lap_ms("1:26"), None);
+        assert_eq!(lap_ms(""), None);
     }
 
     #[test]

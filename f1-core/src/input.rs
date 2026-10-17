@@ -64,7 +64,8 @@ pub enum RaceEvent {
     },
 }
 
-/// The session clock or the lap counter, for showing them as the TV does.
+/// The session clock, the lap counter or a lap time, for showing them as the
+/// TV does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TimingInfo {
     /// The time left and whether it's counting down; `utc_ms` is when the
@@ -79,6 +80,8 @@ pub enum TimingInfo {
         current: Option<u32>,
         total: Option<u32>,
     },
+    /// Car `car` finished a lap in `ms`.
+    LapTime { car: u8, ms: u32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

@@ -12,7 +12,7 @@ use chrono::DateTime;
 use serde_json::value::RawValue;
 
 use crate::{
-    feed::{clock_ms, FeedMessage, Stream},
+    feed::{clock_ms, ExtrapolatedClock, FeedMessage, Stream},
     input::{RaceEvent, TimingInfo},
     signalr::{self, Message, Splitter},
     track_state::TrackState,
@@ -333,24 +333,37 @@ fn names(msg: &FeedMessage) -> Vec<(u8, String)> {
         .collect()
 }
 
-/// The clock or lap reading in `msg`, if any.
-fn timing(msg: &FeedMessage) -> Option<TimingInfo> {
+/// The clock, lap or lap time readings in `msg`.
+fn timing(msg: &FeedMessage) -> Vec<TimingInfo> {
     match msg {
-        FeedMessage::Clock(clock) => Some(TimingInfo::Clock {
-            remaining_ms: clock.remaining.as_deref().and_then(clock_ms)?,
-            running: clock.extrapolating.unwrap_or(false),
-            utc_ms: clock
-                .utc
-                .as_deref()
-                .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
-                .map(|t| t.timestamp_millis()),
-        }),
-        FeedMessage::LapCount(laps) => Some(TimingInfo::Lap {
+        FeedMessage::Clock(clock) => Vec::from_iter(clock_reading(clock)),
+        FeedMessage::LapCount(laps) => vec![TimingInfo::Lap {
             current: laps.current_lap,
             total: laps.total_laps,
-        }),
-        _ => None,
+        }],
+        FeedMessage::TimingData(data) => data
+            .lines
+            .iter()
+            .flat_map(|lines| lines.iter())
+            .filter_map(|(&car, line)| {
+                let ms = line.last_lap_time.as_ref()?.ms()?;
+                Some(TimingInfo::LapTime { car, ms })
+            })
+            .collect(),
+        _ => Vec::new(),
     }
+}
+
+fn clock_reading(clock: &ExtrapolatedClock) -> Option<TimingInfo> {
+    Some(TimingInfo::Clock {
+        remaining_ms: clock.remaining.as_deref().and_then(clock_ms)?,
+        running: clock.extrapolating.unwrap_or(false),
+        utc_ms: clock
+            .utc
+            .as_deref()
+            .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.timestamp_millis()),
+    })
 }
 
 /// An update's timestamp, e.g. `2026-10-09T13:36:00.133Z`, as time since
@@ -783,6 +796,25 @@ mod tests {
             [TimingInfo::Lap {
                 current: Some(12),
                 total: None
+            }]
+        );
+    }
+
+    #[test]
+    fn lap_times_are_passed_on() {
+        let (mut live, _) = racing();
+        let received = live.receive(
+            feed(
+                "TimingData",
+                r#"{"Lines":{"63":{"NumberOfLaps":2,"LastLapTime":{"Value":"1:26.651"}},"10":{"LastLapTime":{"Value":""}}}}"#,
+            )
+            .as_bytes(),
+        );
+        assert_eq!(
+            received.timing,
+            [TimingInfo::LapTime {
+                car: 63,
+                ms: 86_651
             }]
         );
     }

@@ -62,7 +62,6 @@ f1/         The ESP-IDF firmware: WiFi, the LEDs, the live connection, the web
             page, updates over WiFi. Uses f1-core for every decision.
 f1-probe/   A PC tool that talks to the live feed and saves what arrives as
             .jsonStream files (for debugging and new test data).
-BACKLOG.md  Ideas for later.
 ```
 
 The firmware is a set of threads that only send `Input` messages to one
@@ -166,8 +165,9 @@ Any of these work with both `cargo run --release` and `cargo ota`:
   lamp didn't show (switched off, a driver not followed) are dimmed; the
   lamp keeps a whole race (512 lines), a page that just opened gets the
   newest 50;
-- TV sync: the session clock and the lap as your TV should show them with
-  the delay set, and buttons to move the delay by 0.1, 0.5 or 1 second,
+- TV sync: the session clock, the lap and the last lap time ("VER 1:32.456",
+  when the TV's graphic pops up) as your TV should show them with the delay
+  set, and buttons to move the delay by 0.1, 0.5 or 1 second,
   until they change together with the TV's;
 - this race weekend: its sessions in your time zone, a countdown to the next
   one (in TV time: it reaches zero when your TV shows the start, with the
@@ -474,7 +474,7 @@ use.
 - **F1 live timing** (`livetiming.formula1.com`, SignalR over a WebSocket):
   flags, session status, race control, driver list, top three, pit lane,
   timing stats, the running order (driver race info: overtakes),
-  qualifying parts (session data), knockouts
+  qualifying parts (session data), knockouts and the page's TV lap times
   (timing data), the race's laps (lap count: the last lap and the page's TV
   lap) and the session clock (extrapolated clock: the page's TV clock). Unofficial and undocumented; it changes without
   notice. When the lamp stops reacting on a race weekend, run the probe on

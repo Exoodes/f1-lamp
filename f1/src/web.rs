@@ -119,7 +119,8 @@ fn page_routes(
             return refuse(req, why);
         }
         // Copied out, so the lock is released before serialising.
-        let state = StateReply::new(*snapshot.lock().unwrap(), Instant::now());
+        let mut state = StateReply::new(*snapshot.lock().unwrap(), Instant::now());
+        state.tv.name_cars(racelog::name);
         reply(req, 200, JSON, &serde_json::to_vec(&state)?)
     })?;
 

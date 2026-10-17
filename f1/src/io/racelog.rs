@@ -20,6 +20,15 @@ pub fn set_name(number: u8, name: String) {
         .insert(number, name);
 }
 
+/// Car `number`'s short name, if known.
+pub fn name(number: u8) -> Option<String> {
+    NAMES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|n| n.get(&number).cloned())
+}
+
 /// Logs `items`, stamped with the time now: when the lamp shows them, in
 /// step with the TV.
 pub fn record(items: Vec<LogItem>) {

@@ -1,6 +1,6 @@
-//! [`TvTiming`]: the session clock and the lap counter as the TV shows them,
-//! for setting the TV delay by eye: the page shows them, and with the right
-//! delay they change together with the TV's.
+//! [`TvTiming`]: the session clock, the lap counter and the lap times as the
+//! TV shows them, for setting the TV delay by eye: the page shows them, and
+//! with the right delay they change together with the TV's.
 //!
 //! Readings are kept with the moment they were valid, and the TV's view is
 //! picked at the time asked, with the delay set then: a changed delay shows
@@ -17,6 +17,18 @@ use crate::input::TimingInfo;
 /// Readings kept of each kind: laps take a minute or more, the clock only
 /// starts and stops, and the TV is at most `MAX_TV_DELAY_MS` behind.
 const KEPT: usize = 8;
+
+/// Lap times kept: every car's lap within the longest TV delay, twice over
+/// (22 cars, 2 min, laps longer than a minute).
+const LAP_TIMES_KEPT: usize = 48;
+
+/// Lap times due on the TV this soon are sent ahead, so the page can show
+/// each at its moment: it asks only every 2 s.
+pub const LAP_TIME_LOOKAHEAD: Duration = Duration::from_secs(3);
+
+/// The lap time on the TV now and the next ones due within
+/// [`LAP_TIME_LOOKAHEAD`].
+pub const LAP_TIMES_SENT: usize = 4;
 
 /// A clock reading whose own time is further than this from its arrival
 /// came with the state on connecting (it can be minutes old) and is placed
@@ -56,10 +68,18 @@ struct LapReading {
     total: Option<u32>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LapTimeReading {
+    at: Instant,
+    car: u8,
+    ms: u32,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct TvTiming {
     clocks: VecDeque<ClockReading>,
     laps: VecDeque<LapReading>,
+    lap_times: VecDeque<LapTimeReading>,
 }
 
 /// The clock as the TV shows it: `remaining_ms` at `anchor`, counting down
@@ -81,12 +101,22 @@ impl TvClock {
     }
 }
 
+/// Car `car`'s lap of `ms`, on the TV from `on_tv`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TvLapTime {
+    pub car: u8,
+    pub ms: u32,
+    pub on_tv: Instant,
+}
+
 /// What the TV shows at one moment.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct TvView {
     pub clock: Option<TvClock>,
     pub lap: Option<u32>,
     pub total_laps: Option<u32>,
+    /// The last lap time on the TV, then those due soon, oldest first.
+    pub lap_times: [Option<TvLapTime>; LAP_TIMES_SENT],
 }
 
 impl TvTiming {
@@ -115,6 +145,12 @@ impl TvTiming {
                 };
                 push(&mut self.laps, reading);
             }
+            TimingInfo::LapTime { car, ms } => {
+                if self.lap_times.len() == LAP_TIMES_KEPT {
+                    self.lap_times.pop_front();
+                }
+                self.lap_times.push_back(LapTimeReading { at, car, ms });
+            }
         }
     }
 
@@ -122,6 +158,7 @@ impl TvTiming {
     pub fn clear(&mut self) {
         self.clocks.clear();
         self.laps.clear();
+        self.lap_times.clear();
     }
 
     /// What the TV shows at `now`, `delay` behind the feed.
@@ -140,10 +177,25 @@ impl TvTiming {
                 running: c.running,
             });
         let lap = self.laps.iter().rev().find(|l| l.at <= on_tv);
+        let shown = self.lap_times.iter().rposition(|t| t.at <= on_tv);
+        let due = self
+            .lap_times
+            .iter()
+            .skip(shown.unwrap_or(0))
+            .take_while(|t| t.at <= on_tv + LAP_TIME_LOOKAHEAD);
+        let mut lap_times = [None; LAP_TIMES_SENT];
+        for (slot, t) in lap_times.iter_mut().zip(due) {
+            *slot = Some(TvLapTime {
+                car: t.car,
+                ms: t.ms,
+                on_tv: t.at + delay,
+            });
+        }
         TvView {
             clock,
             lap: lap.and_then(|l| l.current),
             total_laps: lap.and_then(|l| l.total),
+            lap_times,
         }
     }
 }
@@ -173,6 +225,14 @@ mod tests {
 
     fn lap(current: Option<u32>, total: Option<u32>) -> TimingInfo {
         TimingInfo::Lap { current, total }
+    }
+
+    fn lap_time(car: u8, ms: u32) -> TimingInfo {
+        TimingInfo::LapTime { car, ms }
+    }
+
+    fn cars(view: &TvView) -> Vec<u8> {
+        view.lap_times.iter().flatten().map(|t| t.car).collect()
     }
 
     #[test]
@@ -225,6 +285,51 @@ mod tests {
     }
 
     #[test]
+    fn a_lap_time_is_on_the_tv_one_delay_after_the_feed_sent_it() {
+        let t0 = Instant::now();
+        let mut tv = TvTiming::default();
+        tv.add(lap_time(63, 86_651), t0);
+        let delay = s(44);
+        let shown = tv.view(t0 + s(50), delay).lap_times[0].unwrap();
+        assert_eq!(shown.car, 63);
+        assert_eq!(shown.ms, 86_651);
+        assert_eq!(shown.on_tv, t0 + s(44));
+    }
+
+    #[test]
+    fn lap_times_due_soon_are_sent_ahead() {
+        let t0 = Instant::now();
+        let mut tv = TvTiming::default();
+        tv.add(lap_time(1, 90_000), t0);
+        tv.add(lap_time(2, 90_000), t0 + s(10));
+        tv.add(lap_time(3, 90_000), t0 + s(12));
+        tv.add(lap_time(4, 90_000), t0 + s(20));
+        let delay = s(40);
+        // Not yet on the TV, and not due within the lookahead.
+        assert!(cars(&tv.view(t0 + s(30), delay)).is_empty());
+        assert_eq!(cars(&tv.view(t0 + s(38), delay)), [1]);
+        // #1 shows, #2 and #3 come within 3 s, #4 later.
+        assert_eq!(cars(&tv.view(t0 + s(49), delay)), [1, 2, 3]);
+        assert_eq!(cars(&tv.view(t0 + s(51), delay)), [2, 3]);
+        assert_eq!(cars(&tv.view(t0 + s(53), delay)), [3]);
+        assert_eq!(cars(&tv.view(t0 + s(58), delay)), [3, 4]);
+    }
+
+    #[test]
+    fn at_most_a_few_lap_times_are_sent() {
+        let t0 = Instant::now();
+        let mut tv = TvTiming::default();
+        for car in 1..=10 {
+            tv.add(
+                lap_time(car, 90_000),
+                t0 + Duration::from_millis(u64::from(car) * 100),
+            );
+        }
+        assert_eq!(cars(&tv.view(t0 + s(1), Duration::ZERO)), [10]);
+        assert_eq!(cars(&tv.view(t0, Duration::ZERO)), [1, 2, 3, 4]);
+    }
+
+    #[test]
     fn only_the_last_readings_are_kept() {
         let t0 = Instant::now();
         let mut tv = TvTiming::default();
@@ -241,6 +346,7 @@ mod tests {
         let mut tv = TvTiming::default();
         tv.add(clock(600, true), t0);
         tv.add(lap(Some(3), Some(62)), t0);
+        tv.add(lap_time(3, 90_000), t0);
         tv.clear();
         assert_eq!(tv.view(t0 + s(1), Duration::ZERO), TvView::default());
     }

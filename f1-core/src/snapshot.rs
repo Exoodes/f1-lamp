@@ -44,8 +44,8 @@ pub struct Snapshot {
 pub const FLASHES_KEPT: Duration = Duration::from_secs(4);
 
 /// What `GET /api/state` answers: the snapshot, how long ago what shows
-/// started, the overlays that ended lately, and the TV's clock and lap, all
-/// at the moment of answering.
+/// started, the overlays that ended lately, and the TV's clock, lap and lap
+/// times, all at the moment of answering.
 #[derive(Debug, Serialize)]
 pub struct StateReply {
     #[serde(flatten)]
@@ -71,6 +71,27 @@ pub struct TvState {
     pub clock_running: bool,
     pub lap: Option<u32>,
     pub total_laps: Option<u32>,
+    /// The last lap time on the TV and those due soon (see [`TvView`]).
+    pub lap_times: Vec<LapTimeState>,
+}
+
+/// One lap time, on the TV `in_ms` from now (on already if not above 0).
+#[derive(Debug, PartialEq, Serialize)]
+pub struct LapTimeState {
+    pub car: u8,
+    /// The short name, `"VER"`, if known; see [`TvState::name_cars`].
+    pub name: Option<String>,
+    pub ms: u32,
+    pub in_ms: i64,
+}
+
+impl TvState {
+    /// Fills in the cars' short names, which the device keeps elsewhere.
+    pub fn name_cars(&mut self, name: impl Fn(u8) -> Option<String>) {
+        for lap_time in &mut self.lap_times {
+            lap_time.name = name(lap_time.car);
+        }
+    }
 }
 
 impl StateReply {
@@ -95,8 +116,28 @@ impl StateReply {
                 clock_running: tv.clock.is_some_and(|c| c.running),
                 lap: tv.lap,
                 total_laps: tv.total_laps,
+                lap_times: tv
+                    .lap_times
+                    .iter()
+                    .flatten()
+                    .map(|t| LapTimeState {
+                        car: t.car,
+                        name: None,
+                        ms: t.ms,
+                        in_ms: signed_ms(t.on_tv, now),
+                    })
+                    .collect(),
             },
         }
+    }
+}
+
+/// `at - now` in milliseconds, below 0 if `at` has passed.
+fn signed_ms(at: Instant, now: Instant) -> i64 {
+    let ms = |d: Duration| i64::try_from(d.as_millis()).unwrap_or(i64::MAX);
+    match at.checked_duration_since(now) {
+        Some(ahead) => ms(ahead),
+        None => -ms(now.duration_since(at)),
     }
 }
 
@@ -282,16 +323,42 @@ mod tests {
             }),
             lap: Some(3),
             total_laps: Some(62),
+            lap_times: [None; crate::tv_timing::LAP_TIMES_SENT],
         };
         let reply = StateReply::new(snap, t0 + std::time::Duration::from_secs(5));
         let json = serde_json::to_string(&reply).unwrap();
         assert!(
             json.contains(
-                r#""tv":{"clock_ms":595000,"clock_running":true,"lap":3,"total_laps":62}"#
+                r#""tv":{"clock_ms":595000,"clock_running":true,"lap":3,"total_laps":62,"lap_times":[]}"#
             ),
             "{json}"
         );
         assert!(json.contains(r#""layer":"#), "{json}");
+    }
+
+    #[test]
+    fn the_reply_says_when_each_lap_time_is_on_the_tv() {
+        use crate::tv_timing::TvLapTime;
+        let t0 = Instant::now();
+        let mut snap = snapshot_after(&[]);
+        let lap_time = |car, on_tv| {
+            Some(TvLapTime {
+                car,
+                ms: 86_651,
+                on_tv,
+            })
+        };
+        snap.tv.lap_times[0] = lap_time(63, t0);
+        snap.tv.lap_times[1] = lap_time(1, t0 + Duration::from_millis(2500));
+        let mut reply = StateReply::new(snap, t0 + Duration::from_millis(500));
+        reply
+            .tv
+            .name_cars(|car| (car == 63).then(|| "RUS".to_string()));
+        let lap_times = serde_json::to_string(&reply.tv.lap_times).unwrap();
+        assert_eq!(
+            lap_times,
+            r#"[{"car":63,"name":"RUS","ms":86651,"in_ms":-500},{"car":1,"name":null,"ms":86651,"in_ms":2000}]"#
+        );
     }
 
     #[test]
