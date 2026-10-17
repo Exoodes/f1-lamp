@@ -1,17 +1,5 @@
 # F1 Lightbox backlog
 
-- **WiFi's first association is rejected on every boot.** Since the USB
-  flash of 2026-10-15 the router answers the lamp's first association within
-  about 10 ms (`wifi:state: assoc -> init (6c0)`, once `2c0`); the retry
-  connects. Last weekend the lamp was online after one or two blue breaths,
-  now after several (online at ~16 s with the 8 s wait of 460bd7d, ~23 s
-  before it). Not the flash itself (Ctrl+R does it too) and not USB power
-  (the adapter does it too). `io/wifi.rs` didn't change before 460bd7d;
-  lower-level changes since last weekend: 6994a37 (flash size 4 MB, 1 KB
-  request headers), 325660a (`esp_websocket_client` 1.8), 6f7f895 (main
-  stack 12 KB), and the new bootloader that USB flash installed. Next:
-  bisect with `cargo ota` from a build of last weekend, power-cycling and
-  timing `wifi up` in the log at each step.
 - **How to sync the TV delay easily, also before a race?** Ideas, most
   useful first:
   - Lap times as the TV shows them: "VER 1:32.456" on the page at the
